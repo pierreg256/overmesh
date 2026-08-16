@@ -92,22 +92,17 @@ milestone in `roadmap.toml`.
 
 ## Current milestone
 
-Project version `0.7.0` is the active milestone for `DELETE`, signed
-tombstones, retention, and garbage collection. Milestone `0.6.0` completed
-validated `HEAD` and `GET`, including strict two-replica metadata validation,
-O(1) replay protection, block-level integrity checks, byte ranges, logical
-ETag conditions, and primary content reads with availability-only fallback.
-Before enabling DELETE, `0.7.0` also hardens the live Azure authorization gate,
-uses paged integrity metadata, provides a block-manifest-free HEAD fast path,
-and runs a Rust Validation Engine against the public Gateway and both replicas.
-The implemented `0.7.0` path now publishes W=2 signed tombstones, preserves
-physical content during configurable retention, prevents replay below signed
-high-water and compaction checkpoints, and lets the Reconciler incrementally
-collect only fully validated superseded committed generations. Destructive
-collection is planned only after complete two-replica validation, content
-validation streams without whole-blob buffering, RF=2 placement works across
-N-node Rings, trusted keys have signed-time validity windows, and Ring updates
-are cryptographically chained to their trusted predecessor.
+Project version `0.8.0` is the active milestone for listing, block APIs, and
+signed continuation tokens. Milestone `0.7.0` completed signed tombstones,
+retention, validate-plan-execute garbage collection, overwrite collection,
+signed history compaction, streaming reconciliation, RF=2 placement across
+N-node Rings, key-validity windows, Ring lineage, and the hardened live Azure
+authorization gates.
+
+Milestone `0.8.0` begins with Azure-compatible listing that excludes every
+Overmesh internal namespace. It then adds W=2 block staging and block-list
+commit semantics, followed by opaque signed continuation tokens bound to the
+complete listing request and Ring version.
 
 Before V1 stabilization, milestone `0.10.0` will establish signed live
 performance baselines against direct Azure Storage and Overmesh paths.

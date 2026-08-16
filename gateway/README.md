@@ -2,7 +2,7 @@
 
 The gateway is the Azure Blob-compatible HTTP data-plane entry point.
 
-Milestone `0.7.0` provides:
+Milestones through `0.7.0` provide:
 
 - fail-closed signed Ring startup;
 - ES256 Ring signature validation;

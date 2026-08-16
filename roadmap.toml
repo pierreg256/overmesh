@@ -1,5 +1,5 @@
 schema_version = 1
-project_version = "0.7.0"
+project_version = "0.8.0"
 active_generation = "V1"
 
 [[milestones]]
@@ -42,13 +42,20 @@ status = "completed"
 version = "0.7.0"
 generation = "V1"
 name = "DELETE, tombstones, retention, and garbage collection"
-status = "active"
+status = "completed"
 
 [[milestones]]
 version = "0.8.0"
 generation = "V1"
 name = "Listing, block APIs, and continuation tokens"
-status = "planned"
+status = "active"
+deliverables = [
+  "Implement Azure-compatible container and blob listing without exposing Overmesh internal namespaces.",
+  "Implement supported block staging, block-list inspection, and block-list commit operations under W=2.",
+  "Issue signed opaque continuation tokens bound to account, container, prefix, delimiter, Ring version, and listing position.",
+  "Preserve caller/control identity separation and validate every client-visible result against signed Overmesh state.",
+  "Extend deterministic, system, SDK, CLI, AzCopy, and live Azure gates for the new operations."
+]
 
 [[milestones]]
 version = "0.9.0"
