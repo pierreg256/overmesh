@@ -100,6 +100,9 @@ pub const SUPPORTED_FAULTS: &[&str] = &[
     "FAULT-RACE-005",
     "FAULT-RACE-006",
     "FAULT-RACE-007",
+    "FAULT-LIST-001",
+    "FAULT-TOKEN-001",
+    "FAULT-STAGE-001",
 ];
 
 #[cfg(test)]

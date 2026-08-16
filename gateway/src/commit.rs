@@ -15,6 +15,7 @@ use crate::{
     backend::{
         BackendError, BackendLease, ObjectValue, PutCondition, ReplicaBackend, SharedBackend,
     },
+    catalog::{CatalogError, catalog_key, validate_catalog_entry},
     identity::{ControlToken, SharedControlTokenProvider},
     manifest::{
         BLOCK_MANIFEST_PAGE_SIZE, BlockDescriptor, BlockManifest, BlockManifestPage,
@@ -60,6 +61,8 @@ pub enum CommitError {
     Manifest(#[from] ManifestError),
     #[error("manifest serialization failed: {0}")]
     Serialization(#[from] serde_json::Error),
+    #[error("catalog validation failed: {0}")]
+    Catalog(#[from] CatalogError),
     #[error("replica heads do not have one strict committed value")]
     ReplicaDrift,
     #[error("write id already exists with a different payload")]
@@ -80,19 +83,36 @@ pub enum CommitError {
 
 #[derive(Clone)]
 pub struct CommitCoordinator {
-    primary: SharedBackend,
-    secondary: SharedBackend,
-    signer: Arc<dyn ManifestSigner>,
-    control_tokens: SharedControlTokenProvider,
-    ring_version: u64,
+    pub(crate) primary: SharedBackend,
+    pub(crate) secondary: SharedBackend,
+    pub(crate) signer: Arc<dyn ManifestSigner>,
+    pub(crate) control_tokens: SharedControlTokenProvider,
+    pub(crate) ring_version: u64,
 }
 
 #[derive(Clone)]
 pub struct CommitService {
-    ring: Arc<RingDocument>,
-    backends: HashMap<String, SharedBackend>,
-    signer: Arc<dyn ManifestSigner>,
-    control_tokens: SharedControlTokenProvider,
+    pub(crate) ring: Arc<RingDocument>,
+    pub(crate) backends: HashMap<String, SharedBackend>,
+    pub(crate) signer: Arc<dyn ManifestSigner>,
+    pub(crate) control_tokens: SharedControlTokenProvider,
+    listing_token_lifetime: Duration,
+    staging_lifetime: Duration,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct CommitServiceOptions {
+    pub listing_token_lifetime: Duration,
+    pub staging_lifetime: Duration,
+}
+
+impl Default for CommitServiceOptions {
+    fn default() -> Self {
+        Self {
+            listing_token_lifetime: Duration::from_secs(15 * 60),
+            staging_lifetime: Duration::from_secs(7 * 24 * 60 * 60),
+        }
+    }
 }
 
 pub(crate) struct LoadedHead {
@@ -143,6 +163,47 @@ impl CommitCoordinator {
             ring_version,
         }
     }
+
+    pub(crate) async fn authorize_replay(
+        &self,
+        principal: &AuthenticatedPrincipal,
+        committed: &CommitManifest,
+    ) -> Result<(), CommitError> {
+        if committed.caller != principal.identity() {
+            return Err(CommitError::IdempotencyConflict);
+        }
+        let (primary_content, secondary_content) = tokio::try_join!(
+            self.primary.caller_head_data_object(
+                &committed.content_container,
+                &committed.content_object,
+                &principal.access_token
+            ),
+            self.secondary.caller_head_data_object(
+                &committed.content_container,
+                &committed.content_object,
+                &principal.access_token
+            )
+        )?;
+        if [primary_content, secondary_content]
+            .into_iter()
+            .any(|content| content.is_none_or(|value| value.length != committed.content_length))
+        {
+            return Err(CommitError::VerificationFailed);
+        }
+        tokio::try_join!(
+            self.primary.authorize_existing_blob_write(
+                &committed.content_container,
+                &committed.content_object,
+                &principal.access_token
+            ),
+            self.secondary.authorize_existing_blob_write(
+                &committed.content_container,
+                &committed.content_object,
+                &principal.access_token
+            )
+        )?;
+        Ok(())
+    }
 }
 
 impl CommitService {
@@ -152,11 +213,29 @@ impl CommitService {
         signer: Arc<dyn ManifestSigner>,
         control_tokens: SharedControlTokenProvider,
     ) -> Self {
+        Self::new_with_options(
+            ring,
+            backends,
+            signer,
+            control_tokens,
+            CommitServiceOptions::default(),
+        )
+    }
+
+    pub fn new_with_options(
+        ring: Arc<RingDocument>,
+        backends: HashMap<String, SharedBackend>,
+        signer: Arc<dyn ManifestSigner>,
+        control_tokens: SharedControlTokenProvider,
+        options: CommitServiceOptions,
+    ) -> Self {
         Self {
             ring,
             backends,
             signer,
             control_tokens,
+            listing_token_lifetime: options.listing_token_lifetime,
+            staging_lifetime: options.staging_lifetime,
         }
     }
 
@@ -181,14 +260,28 @@ impl CommitService {
         )
     }
 
-    pub async fn put_blob(
+    pub fn listing_service(
+        &self,
+        logical_account: impl Into<String>,
+    ) -> crate::listing::ListingService {
+        crate::listing::ListingService::new(
+            logical_account,
+            self.ring.clone(),
+            self.backends.clone(),
+            self.signer.clone(),
+            self.control_tokens.clone(),
+            self.listing_token_lifetime,
+        )
+    }
+
+    pub fn block_service(self: &Arc<Self>) -> crate::block::BlockService {
+        crate::block::BlockService::new(self.clone(), self.staging_lifetime)
+    }
+
+    pub(crate) fn coordinator(
         &self,
         logical_blob: &LogicalBlobId,
-        principal: &AuthenticatedPrincipal,
-        write_id: &str,
-        content: &SpoolContent,
-        logical_condition: LogicalCondition,
-    ) -> Result<CommitResult, CommitError> {
+    ) -> Result<CommitCoordinator, CommitError> {
         let replicas = self
             .ring
             .replicas_for(logical_blob.canonical())
@@ -203,21 +296,32 @@ impl CommitService {
             .get(&replicas[1].id)
             .cloned()
             .ok_or(CommitError::ReplicaDrift)?;
-        CommitCoordinator::new(
+        Ok(CommitCoordinator::new(
             primary,
             secondary,
             self.signer.clone(),
             self.control_tokens.clone(),
             self.ring.ring_version,
-        )
-        .put_blob(
-            logical_blob,
-            principal,
-            write_id,
-            content,
-            logical_condition,
-        )
-        .await
+        ))
+    }
+
+    pub async fn put_blob(
+        &self,
+        logical_blob: &LogicalBlobId,
+        principal: &AuthenticatedPrincipal,
+        write_id: &str,
+        content: &SpoolContent,
+        logical_condition: LogicalCondition,
+    ) -> Result<CommitResult, CommitError> {
+        self.coordinator(logical_blob)?
+            .put_blob(
+                logical_blob,
+                principal,
+                write_id,
+                content,
+                logical_condition,
+            )
+            .await
     }
 
     pub async fn delete_blob(
@@ -227,29 +331,9 @@ impl CommitService {
         write_id: &str,
         logical_condition: LogicalCondition,
     ) -> Result<DeleteResult, CommitError> {
-        let replicas = self
-            .ring
-            .replicas_for(logical_blob.canonical())
-            .map_err(|_| CommitError::ReplicaDrift)?;
-        let primary = self
-            .backends
-            .get(&replicas[0].id)
-            .cloned()
-            .ok_or(CommitError::ReplicaDrift)?;
-        let secondary = self
-            .backends
-            .get(&replicas[1].id)
-            .cloned()
-            .ok_or(CommitError::ReplicaDrift)?;
-        CommitCoordinator::new(
-            primary,
-            secondary,
-            self.signer.clone(),
-            self.control_tokens.clone(),
-            self.ring.ring_version,
-        )
-        .delete_blob(logical_blob, principal, write_id, logical_condition)
-        .await
+        self.coordinator(logical_blob)?
+            .delete_blob(logical_blob, principal, write_id, logical_condition)
+            .await
     }
 }
 
@@ -345,7 +429,7 @@ fn delete_result(
     })
 }
 
-fn head_condition(head: Option<&LoadedHead>) -> PutCondition {
+pub(crate) fn head_condition(head: Option<&LoadedHead>) -> PutCondition {
     match head.and_then(|value| value.backend_etag.clone()) {
         Some(etag) => PutCondition::IfMatch(etag),
         None => PutCondition::IfAbsent,
@@ -363,7 +447,7 @@ fn head_condition_from_etag(etag: Option<&str>) -> PutCondition {
     }
 }
 
-async fn put_file_idempotent(
+pub(crate) async fn put_file_idempotent(
     backend: &dyn ReplicaBackend,
     container: &str,
     object_key: &str,
@@ -396,7 +480,7 @@ async fn put_file_idempotent(
     }
 }
 
-async fn put_bytes_idempotent(
+pub(crate) async fn put_bytes_idempotent(
     backend: &dyn ReplicaBackend,
     object_key: &str,
     bytes: Vec<u8>,
@@ -428,7 +512,7 @@ async fn put_bytes_idempotent(
     }
 }
 
-async fn verify_identical_objects(
+pub(crate) async fn verify_identical_objects(
     primary: &dyn ReplicaBackend,
     secondary: &dyn ReplicaBackend,
     object_key: &str,
@@ -444,6 +528,140 @@ async fn verify_identical_objects(
     } else {
         Err(CommitError::VerificationFailed)
     }
+}
+
+pub(crate) async fn publish_catalog_current(
+    primary: &dyn ReplicaBackend,
+    secondary: &dyn ReplicaBackend,
+    logical_blob: &LogicalBlobId,
+    committed: &SignedDocument<CommitManifest>,
+    committed_bytes: &[u8],
+    control_token: &ControlToken,
+    signer: &dyn ManifestSigner,
+) -> Result<(), CommitError> {
+    let object_key = catalog_key(logical_blob);
+    let replica_ids = [primary.id(), secondary.id()];
+    let expected = validate_catalog_entry(
+        logical_blob.account(),
+        &object_key,
+        committed_bytes,
+        committed.payload.ring_version,
+        replica_ids,
+        signer,
+    )?;
+    if expected.signed_head.payload != committed.payload {
+        return Err(CommitError::VerificationFailed);
+    }
+    let (primary_current, secondary_current) = tokio::try_join!(
+        primary.control_get_object(&object_key, control_token),
+        secondary.control_get_object(&object_key, control_token)
+    )?;
+    validate_catalog_predecessors(
+        logical_blob,
+        &object_key,
+        primary_current.as_ref(),
+        secondary_current.as_ref(),
+        committed,
+        committed_bytes,
+        replica_ids,
+        signer,
+    )?;
+
+    let (primary_publish, secondary_publish) = tokio::join!(
+        publish_catalog_to_backend(
+            primary,
+            &object_key,
+            committed_bytes,
+            primary_current.as_ref(),
+            control_token
+        ),
+        publish_catalog_to_backend(
+            secondary,
+            &object_key,
+            committed_bytes,
+            secondary_current.as_ref(),
+            control_token
+        )
+    );
+    match (primary_publish, secondary_publish) {
+        (Ok(()), Ok(())) => {}
+        (Err(first), Err(second)) if is_condition_error(&first) && is_condition_error(&second) => {
+            return Err(CommitError::ConditionFailed);
+        }
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => {
+            warn!(error = %error, "only one replica published the current catalog entry");
+            return Err(CommitError::Ambiguous);
+        }
+        (Err(first), Err(_)) => return Err(CommitError::Backend(first)),
+    }
+    verify_identical_objects(
+        primary,
+        secondary,
+        &object_key,
+        committed_bytes,
+        control_token,
+    )
+    .await
+}
+
+async fn publish_catalog_to_backend(
+    backend: &dyn ReplicaBackend,
+    object_key: &str,
+    bytes: &[u8],
+    current: Option<&ObjectValue>,
+    control_token: &ControlToken,
+) -> Result<(), BackendError> {
+    if current.is_some_and(|value| value.bytes == bytes) {
+        return Ok(());
+    }
+    backend
+        .control_put_bytes(
+            object_key,
+            bytes.to_vec(),
+            "application/json",
+            head_condition_from_object(current),
+            control_token,
+        )
+        .await
+        .map(|_| ())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_catalog_predecessors(
+    logical_blob: &LogicalBlobId,
+    object_key: &str,
+    primary: Option<&ObjectValue>,
+    secondary: Option<&ObjectValue>,
+    expected: &SignedDocument<CommitManifest>,
+    expected_bytes: &[u8],
+    replica_ids: [&str; 2],
+    signer: &dyn ManifestSigner,
+) -> Result<(), CommitError> {
+    let mut predecessor: Option<&[u8]> = None;
+    for current in [primary, secondary].into_iter().flatten() {
+        if current.bytes == expected_bytes {
+            continue;
+        }
+        let validated = validate_catalog_entry(
+            logical_blob.account(),
+            object_key,
+            &current.bytes,
+            expected.payload.ring_version,
+            replica_ids,
+            signer,
+        )?;
+        let old = &validated.signed_head.payload;
+        if old.logical_version.saturating_add(1) != expected.payload.logical_version
+            || expected.payload.previous_logical_etag.as_deref() != Some(old.logical_etag.as_str())
+        {
+            return Err(CommitError::VerificationFailed);
+        }
+        if predecessor.is_some_and(|bytes| bytes != current.bytes) {
+            return Err(CommitError::VerificationFailed);
+        }
+        predecessor = Some(&current.bytes);
+    }
+    Ok(())
 }
 
 fn values_match(
@@ -479,7 +697,7 @@ fn now_unix_ms() -> u64 {
     .expect("Unix timestamp milliseconds fit in u64")
 }
 
-async fn maintain_lease(
+pub(crate) async fn maintain_lease(
     backend: &dyn ReplicaBackend,
     lease: &BackendLease,
     control_token: &ControlToken,

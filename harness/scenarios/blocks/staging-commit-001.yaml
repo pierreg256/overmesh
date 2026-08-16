@@ -1,0 +1,46 @@
+apiVersion: harness.overmesh.io/v1
+id: BLOCK-STAGE-001
+suite: blocks
+environment:
+  providers: [model]
+seed: 8002
+initialState:
+  blob: absent
+operations:
+  - action: putBlock
+    blob: /container/blocked
+    dataset: tiny/hello.txt
+    writeId: upload-1
+    uploadId: upload-1
+    blockId: YmxvY2stMDAwMQ==
+  - action: getBlockList
+    blob: /container/blocked
+    uploadId: upload-1
+    blockListType: uncommitted
+  - action: putBlockList
+    blob: /container/blocked
+    writeId: upload-1
+    uploadId: upload-1
+    blocks:
+      - kind: latest
+        blockId: YmxvY2stMDAwMQ==
+expected:
+  clientOutcome:
+    class: success
+  visibleBlob:
+    present: true
+    mustNeverBePrepared: true
+  healthAfterOperations: HEALTHY
+  healthAfterReconciliation: HEALTHY
+  responses:
+    - operation: putBlock
+      status: 201
+    - operation: getBlockList
+      status: 200
+    - operation: putBlockList
+      status: 201
+invariants:
+  - INVARIANT-001
+  - INVARIANT-009
+  - INVARIANT-013
+  - INVARIANT-014

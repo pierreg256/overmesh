@@ -1,0 +1,40 @@
+apiVersion: harness.overmesh.io/v1
+id: LIST-RING-ROLLOVER-001
+suite: listing
+environment:
+  providers: [model]
+seed: 8004
+initialState:
+  blob: absent
+operations:
+  - action: putBlob
+    blob: /container/ring-list
+    dataset: tiny/hello.txt
+    writeId: ring-list-1
+  - action: listBlobs
+    blob: /container/ring-list
+    maxResults: 1
+  - action: rolloverRing
+    blob: /container/ring-list
+  - action: listBlobs
+    blob: /container/ring-list
+    marker: old-ring-token
+    maxResults: 1
+expected:
+  clientOutcome:
+    class: failure
+  visibleBlob:
+    present: true
+    mustNeverBePrepared: true
+  healthAfterOperations: HEALTHY
+  healthAfterReconciliation: HEALTHY
+  responses:
+    - operation: putBlob
+      status: 201
+    - operation: listBlobs
+      status: 200
+    - operation: listBlobs
+      status: 400
+invariants:
+  - INVARIANT-001
+  - INVARIANT-009

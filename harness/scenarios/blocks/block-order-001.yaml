@@ -1,0 +1,49 @@
+apiVersion: harness.overmesh.io/v1
+id: BLOCK-ORDER-001
+suite: blocks
+environment:
+  providers: [model]
+seed: 8005
+initialState:
+  blob: absent
+operations:
+  - action: putBlock
+    blob: /container/ordered
+    dataset: tiny/hello.txt
+    writeId: ordered-upload
+    uploadId: ordered-upload
+    blockId: YmxvY2stMDAwMQ==
+  - action: putBlock
+    blob: /container/ordered
+    dataset: tiny/world.txt
+    writeId: ordered-upload
+    uploadId: ordered-upload
+    blockId: YmxvY2stMDAwMg==
+  - action: putBlockList
+    blob: /container/ordered
+    writeId: ordered-upload
+    uploadId: ordered-upload
+    blocks:
+      - kind: latest
+        blockId: YmxvY2stMDAwMg==
+      - kind: latest
+        blockId: YmxvY2stMDAwMQ==
+expected:
+  clientOutcome:
+    class: success
+  visibleBlob:
+    present: true
+    mustNeverBePrepared: true
+  healthAfterOperations: HEALTHY
+  healthAfterReconciliation: HEALTHY
+  responses:
+    - operation: putBlock
+      status: 201
+    - operation: putBlock
+      status: 201
+    - operation: putBlockList
+      status: 201
+invariants:
+  - INVARIANT-001
+  - INVARIANT-013
+  - INVARIANT-014

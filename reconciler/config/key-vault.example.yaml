@@ -50,3 +50,7 @@ historyCompaction:
 headDiscovery:
   batchSize: 256
   cursorPath: /var/lib/overmesh/head-discovery-cursor.json
+stagedBlockGc:
+  maxRecordsPerCycle: 256
+  metadataCursorPath: /var/lib/overmesh/staged-block-metadata-cursor.json
+  markerCursorPath: /var/lib/overmesh/staged-block-marker-cursor.json

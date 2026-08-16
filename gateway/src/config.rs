@@ -17,7 +17,7 @@ use serde::Deserialize;
 use crate::{
     auth::Authenticator,
     backend::{HttpBlobBackend, SharedBackend},
-    commit::CommitService,
+    commit::{CommitService, CommitServiceOptions},
     identity::{AzureControlTokenProvider, LocalControlTokenProvider, SharedControlTokenProvider},
     manifest::{KeyValidity, KeyVaultManifestSigner, LocalTestManifestSigner, ManifestSigner},
     ring::{SignedRing, TrustedRingKey, TrustedRingPredecessor},
@@ -33,6 +33,40 @@ pub struct GatewayConfig {
     pub ring: RingConfig,
     pub backends: Vec<BackendConfig>,
     pub signing: SigningConfig,
+    #[serde(default)]
+    pub listing: ListingConfig,
+    #[serde(default)]
+    pub staged_blocks: StagedBlocksConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ListingConfig {
+    #[serde(default = "default_continuation_token_lifetime_seconds")]
+    pub continuation_token_lifetime_seconds: u64,
+}
+
+impl Default for ListingConfig {
+    fn default() -> Self {
+        Self {
+            continuation_token_lifetime_seconds: default_continuation_token_lifetime_seconds(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StagedBlocksConfig {
+    #[serde(default = "default_staged_block_retention_seconds")]
+    pub retention_seconds: u64,
+}
+
+impl Default for StagedBlocksConfig {
+    fn default() -> Self {
+        Self {
+            retention_seconds: default_staged_block_retention_seconds(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -215,6 +249,14 @@ impl GatewayConfig {
     }
 
     pub fn load_commit_service(&self, signed_ring: &SignedRing) -> Result<CommitService> {
+        anyhow::ensure!(
+            (60..=24 * 60 * 60).contains(&self.listing.continuation_token_lifetime_seconds),
+            "listing.continuationTokenLifetimeSeconds must be between 60 and 86400"
+        );
+        anyhow::ensure!(
+            (60..=30 * 24 * 60 * 60).contains(&self.staged_blocks.retention_seconds),
+            "stagedBlocks.retentionSeconds must be between 60 and 2592000"
+        );
         let mut backends = HashMap::new();
         for backend in &self.backends {
             let value: SharedBackend = Arc::new(HttpBlobBackend::new(
@@ -233,11 +275,19 @@ impl GatewayConfig {
         }
         let signer = build_manifest_signer(&self.signing)?;
         let control_tokens = build_control_token_provider(&self.control_identity)?;
-        Ok(CommitService::new(
+        Ok(CommitService::new_with_options(
             Arc::new(signed_ring.document.clone()),
             backends,
             signer,
             control_tokens,
+            CommitServiceOptions {
+                listing_token_lifetime: std::time::Duration::from_secs(
+                    self.listing.continuation_token_lifetime_seconds,
+                ),
+                staging_lifetime: std::time::Duration::from_secs(
+                    self.staged_blocks.retention_seconds,
+                ),
+            },
         ))
     }
 }
@@ -353,6 +403,14 @@ fn resolve(base: &Path, path: &Path) -> PathBuf {
     } else {
         base.join(path)
     }
+}
+
+const fn default_continuation_token_lifetime_seconds() -> u64 {
+    15 * 60
+}
+
+const fn default_staged_block_retention_seconds() -> u64 {
+    7 * 24 * 60 * 60
 }
 
 #[cfg(test)]

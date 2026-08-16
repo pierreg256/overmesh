@@ -50,6 +50,8 @@ pub enum DecisionOperation {
     Get,
     Reconcile,
     ObserveReplicaConsistency,
+    List,
+    Blocks,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +62,24 @@ pub enum ClientOperation {
     Head,
     GetBlob,
     ObservePreparedPublication,
+    ListContainers,
+    ListBlobs,
+    PutBlock,
+    PutBlockList,
+    GetBlockList,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StagedBlockState {
+    pub content: Vec<u8>,
+    pub upload_id: String,
+    pub write_id: String,
+    pub expires_at_ms: u64,
+    pub replica_a_present: bool,
+    pub replica_b_present: bool,
+    pub tampered: bool,
+    pub base_logical_version: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -183,6 +203,10 @@ pub struct BlobState {
     pub high_water_logical_version: u64,
     pub now_ms: u64,
     pub retention_ms: u64,
+    pub staged_blocks: BTreeMap<String, StagedBlockState>,
+    pub committed_from_tampered_stage: bool,
+    pub continuation_valid: bool,
+    pub active_ring_version: u64,
 }
 
 impl Default for BlobState {
@@ -204,6 +228,10 @@ impl Default for BlobState {
             high_water_logical_version: 0,
             now_ms: 0,
             retention_ms: 1_000,
+            staged_blocks: BTreeMap::new(),
+            committed_from_tampered_stage: false,
+            continuation_valid: true,
+            active_ring_version: 1,
         }
     }
 }

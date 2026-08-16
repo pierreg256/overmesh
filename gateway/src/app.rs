@@ -3,7 +3,7 @@ use std::time::SystemTime;
 
 use axum::{
     Json, Router,
-    body::Body,
+    body::{Body, to_bytes},
     extract::State,
     http::{
         HeaderValue, Method, Request, StatusCode,
@@ -21,16 +21,19 @@ use uuid::Uuid;
 use crate::{
     auth::{AuthenticatedPrincipal, Authenticator},
     backend::BackendError,
+    block::{BlockError, BlockListType, MAX_BLOCK_SIZE, PutBlockResult, parse_block_list_xml},
     commit::{CommitError, CommitService, LogicalCondition},
     error::StorageError,
+    listing::{ListRequest, ListingError},
     read::{BlobMetadata, ReadError, ReadService},
     resource::LogicalBlobId,
     ring::RingDocument,
-    upload::{DEFAULT_BLOCK_SIZE, spool_body},
+    upload::{DEFAULT_BLOCK_SIZE, SpoolBodyError, spool_body, spool_body_limited},
 };
 
 pub const SUPPORTED_STORAGE_VERSION: &str = "2025-11-05";
 const MINIMUM_OAUTH_STORAGE_VERSION: &str = "2017-11-09";
+const MAX_BLOCK_LIST_XML_SIZE: usize = 16 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -75,8 +78,227 @@ async fn blob_request(State(state): State<AppState>, request: Request<Body>) -> 
     if let Err(error) = validate_storage_version(request.headers()) {
         return error.into_response();
     }
+    if let Err(error) = validate_logical_account(request.headers(), &state.logical_account) {
+        return error.into_response();
+    }
+    let query = match parse_query(request.uri().query()) {
+        Ok(query) => query,
+        Err(error) => return error.into_response(),
+    };
+    if request.method() == Method::GET
+        && request.uri().path() == "/"
+        && query.single("comp") == Some("list")
+    {
+        return list_containers(state, request, principal, &query).await;
+    }
+    if request.method() == Method::GET
+        && query.single("restype") == Some("container")
+        && query.single("comp") == Some("list")
+    {
+        return list_blobs(state, request, principal, &query).await;
+    }
+    if request.method() == Method::PUT && query.single("comp") == Some("block") {
+        return put_block(state, request, principal, &query).await;
+    }
+    if request.method() == Method::PUT && query.single("comp") == Some("blocklist") {
+        return put_block_list(state, request, principal).await;
+    }
+    if request.method() == Method::GET && query.single("comp") == Some("blocklist") {
+        return get_block_list(state, request, principal, &query).await;
+    }
     if request.method() == Method::PUT && request.uri().query().is_none() {
         return put_blob(state, request, principal).await;
+    }
+
+    async fn list_containers(
+        state: AppState,
+        _request: Request<Body>,
+        principal: AuthenticatedPrincipal,
+        query: &QueryParameters,
+    ) -> Response {
+        let Some(commit_service) = state.commit_service else {
+            return StorageError::feature_not_supported().into_response();
+        };
+        let list_request = match listing_request(query) {
+            Ok(request) => request,
+            Err(error) => return error.into_response(),
+        };
+        let service = commit_service.listing_service(state.logical_account.clone());
+        match service.list_containers(&list_request, &principal).await {
+            Ok(page) => listing_response(page.to_xml(&service_endpoint(&state.logical_account))),
+            Err(error) => listing_error_response(error),
+        }
+    }
+
+    async fn list_blobs(
+        state: AppState,
+        request: Request<Body>,
+        principal: AuthenticatedPrincipal,
+        query: &QueryParameters,
+    ) -> Response {
+        let Some(commit_service) = state.commit_service else {
+            return StorageError::feature_not_supported().into_response();
+        };
+        let container = match LogicalBlobId::parse_container_path(request.uri().path()) {
+            Ok(container) => container,
+            Err(error) => return StorageError::invalid_request(error.to_string()).into_response(),
+        };
+        let list_request = match listing_request(query) {
+            Ok(request) => request,
+            Err(error) => return error.into_response(),
+        };
+        let service = commit_service.listing_service(state.logical_account.clone());
+        match service
+            .list_blobs(&container, &list_request, &principal)
+            .await
+        {
+            Ok(page) => listing_response(page.to_xml(&service_endpoint(&state.logical_account))),
+            Err(error) => listing_error_response(error),
+        }
+    }
+
+    async fn put_block(
+        state: AppState,
+        request: Request<Body>,
+        principal: AuthenticatedPrincipal,
+        query: &QueryParameters,
+    ) -> Response {
+        let Some(commit_service) = state.commit_service else {
+            return StorageError::feature_not_supported().into_response();
+        };
+        let logical_blob = match LogicalBlobId::parse(&state.logical_account, request.uri().path())
+        {
+            Ok(blob) => blob,
+            Err(error) => return StorageError::invalid_request(error.to_string()).into_response(),
+        };
+        let block_id = match query.single("blockid") {
+            Some(block_id) => block_id.to_owned(),
+            None => return StorageError::invalid_query_parameter("blockid").into_response(),
+        };
+        let write_id = match request_write_id(request.headers()) {
+            Ok(write_id) => write_id,
+            Err(error) => return error.into_response(),
+        };
+        let upload_id = match request_upload_id(request.headers()) {
+            Ok(upload_id) => upload_id,
+            Err(error) => return error.into_response(),
+        };
+        let content =
+            match spool_body_limited(request.into_body(), DEFAULT_BLOCK_SIZE, MAX_BLOCK_SIZE).await
+            {
+                Ok(content) => content,
+                Err(SpoolBodyError::TooLarge) => {
+                    return StorageError::request_body_too_large().into_response();
+                }
+                Err(error) => {
+                    return StorageError::invalid_request(format!(
+                        "The request body could not be read: {error}"
+                    ))
+                    .into_response();
+                }
+            };
+        let service = commit_service.block_service();
+        match service
+            .put_block(
+                &logical_blob,
+                &principal,
+                upload_id.as_deref().unwrap_or_default(),
+                &write_id,
+                &block_id,
+                &content,
+            )
+            .await
+        {
+            Ok(result) => put_block_success_response(result),
+            Err(error) => block_error_response(error),
+        }
+    }
+
+    async fn put_block_list(
+        state: AppState,
+        request: Request<Body>,
+        principal: AuthenticatedPrincipal,
+    ) -> Response {
+        let Some(commit_service) = state.commit_service else {
+            return StorageError::feature_not_supported().into_response();
+        };
+        let logical_blob = match LogicalBlobId::parse(&state.logical_account, request.uri().path())
+        {
+            Ok(blob) => blob,
+            Err(error) => return StorageError::invalid_request(error.to_string()).into_response(),
+        };
+        let write_id = match request_write_id(request.headers()) {
+            Ok(write_id) => write_id,
+            Err(error) => return error.into_response(),
+        };
+        let upload_id = match request_upload_id(request.headers()) {
+            Ok(upload_id) => upload_id,
+            Err(error) => return error.into_response(),
+        };
+        let condition = match logical_condition(request.headers()) {
+            Ok(condition) => condition,
+            Err(error) => return error.into_response(),
+        };
+        let body = match to_bytes(request.into_body(), MAX_BLOCK_LIST_XML_SIZE).await {
+            Ok(body) => body,
+            Err(error) => {
+                return StorageError::invalid_request(format!(
+                    "The block list body could not be read: {error}"
+                ))
+                .into_response();
+            }
+        };
+        let selections = match parse_block_list_xml(&body) {
+            Ok(selections) => selections,
+            Err(error) => return block_error_response(error),
+        };
+        let service = commit_service.block_service();
+        match service
+            .put_block_list(
+                &logical_blob,
+                &principal,
+                upload_id.as_deref().unwrap_or_default(),
+                &write_id,
+                &selections,
+                condition,
+            )
+            .await
+        {
+            Ok(result) => put_success_response(result),
+            Err(error) => block_error_response(error),
+        }
+    }
+
+    async fn get_block_list(
+        state: AppState,
+        request: Request<Body>,
+        principal: AuthenticatedPrincipal,
+        query: &QueryParameters,
+    ) -> Response {
+        let Some(commit_service) = state.commit_service else {
+            return StorageError::feature_not_supported().into_response();
+        };
+        let logical_blob = match LogicalBlobId::parse(&state.logical_account, request.uri().path())
+        {
+            Ok(blob) => blob,
+            Err(error) => return StorageError::invalid_request(error.to_string()).into_response(),
+        };
+        let list_type = match BlockListType::parse(query.single("blocklisttype")) {
+            Ok(list_type) => list_type,
+            Err(error) => return block_error_response(error),
+        };
+        let upload_id = match request_upload_id(request.headers()) {
+            Ok(upload_id) => upload_id,
+            Err(error) => return error.into_response(),
+        };
+        let service = commit_service.block_service();
+        match service
+            .get_block_list(&logical_blob, &principal, upload_id.as_deref(), list_type)
+            .await
+        {
+            Ok(result) => listing_response(result.to_xml()),
+            Err(error) => block_error_response(error),
+        }
     }
     if request.method() == Method::HEAD && request.uri().query().is_none() {
         return head_blob(state, request, principal).await;
@@ -253,6 +475,24 @@ fn request_write_id(headers: &http::HeaderMap) -> Result<String, StorageError> {
     Ok(write_id.to_owned())
 }
 
+fn request_upload_id(headers: &http::HeaderMap) -> Result<Option<String>, StorageError> {
+    let Some(value) = headers.get("x-overmesh-upload-id") else {
+        return Ok(None);
+    };
+    let value = value
+        .to_str()
+        .map_err(|_| StorageError::invalid_header("x-overmesh-upload-id"))?;
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~'))
+    {
+        return Err(StorageError::invalid_header("x-overmesh-upload-id"));
+    }
+    Ok(Some(value.to_owned()))
+}
+
 fn logical_condition(headers: &http::HeaderMap) -> Result<LogicalCondition, StorageError> {
     if let Some(value) = headers.get("if-none-match") {
         if value == "*" {
@@ -312,6 +552,38 @@ fn put_success_response(result: crate::commit::CommitResult) -> Response {
     headers.insert(
         "x-overmesh-logical-version",
         HeaderValue::from_str(&result.logical_version.to_string()).expect("version header"),
+    );
+    headers.insert(
+        "x-overmesh-idempotent-replay",
+        HeaderValue::from_static(if result.idempotent_replay {
+            "true"
+        } else {
+            "false"
+        }),
+    );
+    headers.insert(
+        http::header::DATE,
+        HeaderValue::from_str(&httpdate::fmt_http_date(SystemTime::now())).expect("date header"),
+    );
+    response
+}
+
+fn put_block_success_response(result: PutBlockResult) -> Response {
+    let request_id = Uuid::new_v4().to_string();
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::CREATED;
+    let headers = response.headers_mut();
+    headers.insert(
+        "x-ms-request-id",
+        HeaderValue::from_str(&request_id).expect("request id header"),
+    );
+    headers.insert(
+        "x-ms-version",
+        HeaderValue::from_static(SUPPORTED_STORAGE_VERSION),
+    );
+    headers.insert(
+        "x-overmesh-write-id",
+        HeaderValue::from_str(&result.write_id).expect("write id header"),
     );
     headers.insert(
         "x-overmesh-idempotent-replay",
@@ -397,11 +669,158 @@ fn commit_error_response(error: CommitError) -> Response {
         {
             StorageError::authorization_permission_mismatch()
         }
-        CommitError::Backend(_) | CommitError::Manifest(_) | CommitError::Serialization(_) => {
+        CommitError::Backend(_)
+        | CommitError::Manifest(_)
+        | CommitError::Catalog(_)
+        | CommitError::Serialization(_) => {
             StorageError::server_busy("The dual-write commit could not be completed.")
         }
     }
     .into_response()
+}
+
+fn block_error_response(error: BlockError) -> Response {
+    match error {
+        BlockError::InvalidBlockId => StorageError::invalid_block_id().into_response(),
+        BlockError::InvalidBlockList(_) | BlockError::UnequalBlockIdLength => {
+            StorageError::invalid_block_list().into_response()
+        }
+        BlockError::BlockCountExceedsLimit => {
+            StorageError::block_count_exceeds_limit().into_response()
+        }
+        BlockError::BlockTooLarge => StorageError::request_body_too_large().into_response(),
+        BlockError::Conflict => StorageError::invalid_operation(
+            "The staged block ID is already associated with different content or write identity.",
+        )
+        .into_response(),
+        BlockError::MissingBlock => StorageError::new(
+            StatusCode::BAD_REQUEST,
+            "InvalidBlockList",
+            "The specified block list references a block that does not exist.",
+        )
+        .into_response(),
+        BlockError::NotFound => StorageError::blob_not_found().into_response(),
+        BlockError::Expired => StorageError::invalid_block_list().into_response(),
+        BlockError::Commit(error) => commit_error_response(error),
+        BlockError::Backend(BackendError::Http { status, .. })
+            if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN =>
+        {
+            StorageError::authorization_permission_mismatch().into_response()
+        }
+        BlockError::VerificationFailed
+        | BlockError::Backend(_)
+        | BlockError::Manifest(_)
+        | BlockError::Spool(_) => {
+            StorageError::server_busy("Staged block validation failed closed.").into_response()
+        }
+    }
+}
+
+fn listing_error_response(error: ListingError) -> Response {
+    match error {
+        ListingError::InvalidRequest(message) => StorageError::invalid_request(message),
+        ListingError::InvalidMarker(error) => StorageError::invalid_marker(error.to_string()),
+        ListingError::ContainerNotFound => StorageError::container_not_found(),
+        ListingError::Authorization => StorageError::authorization_permission_mismatch(),
+        ListingError::Backend(BackendError::Http { status, .. })
+            if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN =>
+        {
+            StorageError::authorization_permission_mismatch()
+        }
+        ListingError::Backend(_) => StorageError::server_busy("Logical listing failed closed."),
+    }
+    .into_response()
+}
+
+fn listing_response(xml: String) -> Response {
+    let request_id = Uuid::new_v4().to_string();
+    let mut response = Response::new(Body::from(xml));
+    *response.status_mut() = StatusCode::OK;
+    let headers = response.headers_mut();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/xml; charset=utf-8"),
+    );
+    headers.insert(
+        "x-ms-request-id",
+        HeaderValue::from_str(&request_id).expect("request id header"),
+    );
+    headers.insert(
+        "x-ms-version",
+        HeaderValue::from_static(SUPPORTED_STORAGE_VERSION),
+    );
+    headers.insert(
+        http::header::DATE,
+        HeaderValue::from_str(&httpdate::fmt_http_date(SystemTime::now())).expect("date header"),
+    );
+    response
+}
+
+fn listing_request(query: &QueryParameters) -> Result<ListRequest, StorageError> {
+    let max_results = query
+        .single("maxresults")
+        .map(|value| {
+            value
+                .parse::<u32>()
+                .map_err(|_| StorageError::invalid_query_parameter("maxresults"))
+        })
+        .transpose()?;
+    let include = query
+        .values("include")
+        .flat_map(|value| value.split(','))
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect();
+    ListRequest::new(
+        query.single("prefix").unwrap_or_default().to_owned(),
+        query.single("delimiter").unwrap_or_default().to_owned(),
+        query.single("marker").map(str::to_owned),
+        max_results,
+        include,
+    )
+    .map_err(|error| StorageError::invalid_request(error.to_string()))
+}
+
+#[derive(Default)]
+struct QueryParameters {
+    values: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+impl QueryParameters {
+    fn single(&self, name: &str) -> Option<&str> {
+        self.values
+            .get(name)
+            .and_then(|values| (values.len() == 1).then(|| values[0].as_str()))
+    }
+
+    fn values(&self, name: &str) -> impl Iterator<Item = &str> {
+        self.values
+            .get(name)
+            .into_iter()
+            .flatten()
+            .map(String::as_str)
+    }
+}
+
+fn parse_query(query: Option<&str>) -> Result<QueryParameters, StorageError> {
+    let mut parameters = QueryParameters::default();
+    for (name, value) in url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
+        parameters
+            .values
+            .entry(name.into_owned().to_ascii_lowercase())
+            .or_default()
+            .push(value.into_owned());
+    }
+    for (name, values) in &parameters.values {
+        if name != "include" && values.len() > 1 {
+            return Err(StorageError::invalid_query_parameter(name));
+        }
+    }
+    Ok(parameters)
+}
+
+fn service_endpoint(account: &str) -> String {
+    format!("https://{account}.blob.core.windows.net/")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -584,6 +1003,27 @@ fn is_storage_version(value: &str) -> bool {
             .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
 }
 
+fn validate_logical_account(
+    headers: &http::HeaderMap,
+    logical_account: &str,
+) -> Result<(), StorageError> {
+    let Some(host) = headers.get(http::header::HOST) else {
+        return Ok(());
+    };
+    let host = host
+        .to_str()
+        .map_err(|_| StorageError::invalid_header("Host"))?
+        .split(':')
+        .next()
+        .unwrap_or_default();
+    if let Some(account) = host.strip_suffix(".blob.core.windows.net")
+        && account != logical_account
+    {
+        return Err(StorageError::account_not_found());
+    }
+    Ok(())
+}
+
 pub fn status_code(response: &Response) -> StatusCode {
     response.status()
 }
@@ -649,5 +1089,28 @@ mod tests {
             }));
             assert_eq!(response.status(), StatusCode::FORBIDDEN);
         }
+    }
+
+    #[test]
+    fn oversized_blocks_use_the_azure_request_body_too_large_response() {
+        let response = block_error_response(BlockError::BlockTooLarge);
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(response.headers()["x-ms-error-code"], "RequestBodyTooLarge");
+    }
+
+    #[test]
+    fn azure_host_account_mismatch_is_not_found_but_local_hosts_are_allowed() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::HOST,
+            HeaderValue::from_static("other.blob.core.windows.net"),
+        );
+        let error = validate_logical_account(&headers, "expected").expect_err("mismatch");
+        assert_eq!(error.code, "AccountNotFound");
+        headers.insert(
+            http::header::HOST,
+            HeaderValue::from_static("127.0.0.1:18080"),
+        );
+        validate_logical_account(&headers, "expected").expect("local endpoint");
     }
 }

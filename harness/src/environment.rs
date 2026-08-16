@@ -20,6 +20,7 @@ pub fn local_service_statuses() -> Result<Vec<ServiceStatus>> {
         ("toxiproxy-api", "HARNESS_TOXIPROXY_PORT", 18_474),
         ("storage-a-proxy", "HARNESS_PROXY_A_PORT", 12_100),
         ("storage-b-proxy", "HARNESS_PROXY_B_PORT", 12_101),
+        ("storage-c-proxy", "HARNESS_PROXY_C_PORT", 12_102),
     ]
     .into_iter()
     .map(|(name, variable, default_port)| {

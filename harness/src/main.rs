@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
+use overmesh_gateway::{RingDocument, resource::LogicalBlobId};
 use overmesh_harness::{
     RunOptions,
     dataset::generate,
@@ -92,6 +93,16 @@ enum Command {
         #[arg(long, default_value = "local-overmesh")]
         logical_account: String,
     },
+    FindPlacement {
+        #[arg(long, default_value = "harness/rings/ring-v1-three-node.yaml")]
+        ring: PathBuf,
+        #[arg(long, default_value = "local-overmesh")]
+        logical_account: String,
+        #[arg(long, default_value = "placement")]
+        container: String,
+        first_node: String,
+        second_node: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -119,6 +130,7 @@ enum FaultCommand {
 enum ReplicaArgument {
     A,
     B,
+    C,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -159,11 +171,12 @@ impl From<PrincipalArgument> for TestPrincipal {
     }
 }
 
-impl From<ReplicaArgument> for overmesh_harness::scenario::ReplicaName {
+impl From<ReplicaArgument> for toxiproxy::ProxyReplica {
     fn from(value: ReplicaArgument) -> Self {
         match value {
             ReplicaArgument::A => Self::A,
             ReplicaArgument::B => Self::B,
+            ReplicaArgument::C => Self::C,
         }
     }
 }
@@ -326,6 +339,47 @@ async fn execute() -> Result<()> {
                 logical_account,
             })
             .await?;
+        }
+        Command::FindPlacement {
+            ring,
+            logical_account,
+            container,
+            first_node,
+            second_node,
+        } => {
+            let document: RingDocument = serde_yaml::from_slice(
+                &fs::read(&ring)
+                    .with_context(|| format!("failed to read Ring {}", ring.display()))?,
+            )
+            .with_context(|| format!("failed to parse Ring {}", ring.display()))?;
+            let mut expected = [first_node, second_node];
+            expected.sort();
+            if expected[0] == expected[1]
+                || expected
+                    .iter()
+                    .any(|id| !document.nodes.iter().any(|node| node.id == *id))
+            {
+                bail!("placement nodes must be distinct members of the Ring");
+            }
+            let mut found = None;
+            for index in 0..100_000_u32 {
+                let path = format!("/{container}/placement-{index:05}");
+                let logical_blob = LogicalBlobId::parse(&logical_account, &path)?;
+                let mut selected = document
+                    .replicas_for(logical_blob.canonical())?
+                    .into_iter()
+                    .map(|node| node.id.as_str())
+                    .collect::<Vec<_>>();
+                selected.sort_unstable();
+                if selected == expected {
+                    found = Some(path);
+                    break;
+                }
+            }
+            println!(
+                "{}",
+                found.context("failed to find a logical blob for the requested replica pair")?
+            );
         }
     }
     Ok(())

@@ -1,0 +1,40 @@
+apiVersion: harness.overmesh.io/v1
+id: LIST-TOKEN-001
+suite: listing
+environment:
+  providers: [model]
+seed: 8001
+initialState:
+  blob: absent
+operations:
+  - action: putBlob
+    blob: /container/a
+    dataset: tiny/hello.txt
+    writeId: list-write-1
+  - action: listBlobs
+    blob: /container/a
+    maxResults: 1
+  - action: tamperContinuation
+    blob: /container/a
+  - action: listBlobs
+    blob: /container/a
+    marker: opaque-tampered
+    maxResults: 1
+expected:
+  clientOutcome:
+    class: failure
+  visibleBlob:
+    present: true
+    mustNeverBePrepared: true
+  healthAfterOperations: HEALTHY
+  healthAfterReconciliation: HEALTHY
+  responses:
+    - operation: putBlob
+      status: 201
+    - operation: listBlobs
+      status: 200
+    - operation: listBlobs
+      status: 400
+invariants:
+  - INVARIANT-001
+  - INVARIANT-009

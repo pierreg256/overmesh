@@ -44,6 +44,7 @@ impl CommitCoordinator {
                 primary_head.as_ref(),
                 secondary_head.as_ref(),
                 &head_key,
+                logical_blob,
                 write_id,
                 control_token,
             )
@@ -68,6 +69,16 @@ impl CommitCoordinator {
         };
         if current.signed.payload.state == ManifestState::Tombstoned {
             if current.signed.payload.write_id == write_id {
+                publish_catalog_current(
+                    self.primary.as_ref(),
+                    self.secondary.as_ref(),
+                    logical_blob,
+                    &current.signed,
+                    &current.bytes,
+                    control_token,
+                    self.signer.as_ref(),
+                )
+                .await?;
                 return delete_result(&current.signed.payload, true);
             }
             return Err(CommitError::NotFound);
@@ -224,6 +235,16 @@ impl CommitCoordinator {
             self.primary.as_ref(),
             self.secondary.as_ref(),
             &path_hash,
+            &signed_tombstone,
+            &tombstone_bytes,
+            control_token,
+            self.signer.as_ref(),
+        )
+        .await?;
+        publish_catalog_current(
+            self.primary.as_ref(),
+            self.secondary.as_ref(),
+            logical_blob,
             &signed_tombstone,
             &tombstone_bytes,
             control_token,

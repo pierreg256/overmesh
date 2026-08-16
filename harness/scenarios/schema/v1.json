@@ -68,7 +68,9 @@
           "INVARIANT-009",
           "INVARIANT-010",
           "INVARIANT-011",
-          "INVARIANT-012"
+          "INVARIANT-012",
+          "INVARIANT-013",
+          "INVARIANT-014"
         ]
       }
     }
@@ -188,6 +190,307 @@
               "minLength": 1
             },
             "writeId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "action",
+            "blob"
+          ],
+          "properties": {
+            "action": {
+              "const": "listContainers"
+            },
+            "blob": {
+              "type": "string",
+              "minLength": 1
+            },
+            "prefix": {
+              "type": "string"
+            },
+            "maxResults": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5000
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "action",
+            "blob"
+          ],
+          "properties": {
+            "action": {
+              "const": "listBlobs"
+            },
+            "blob": {
+              "type": "string",
+              "minLength": 1
+            },
+            "prefix": {
+              "type": "string"
+            },
+            "delimiter": {
+              "type": "string",
+              "maxLength": 1
+            },
+            "marker": {
+              "type": "string"
+            },
+            "maxResults": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5000
+            },
+            "include": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "metadata"
+                ]
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "action",
+            "blob",
+            "dataset",
+            "writeId",
+            "uploadId",
+            "blockId"
+          ],
+          "properties": {
+            "action": {
+              "const": "putBlock"
+            },
+            "blob": {
+              "type": "string",
+              "minLength": 1
+            },
+            "dataset": {
+              "type": "string",
+              "minLength": 1
+            },
+            "writeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "uploadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "blockId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "action",
+            "blob",
+            "writeId",
+            "uploadId",
+            "blocks"
+          ],
+          "properties": {
+            "action": {
+              "const": "putBlockList"
+            },
+            "blob": {
+              "type": "string",
+              "minLength": 1
+            },
+            "writeId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "uploadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "blocks": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 50000,
+              "items": {
+                "$ref": "#/$defs/blockSelection"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "action",
+            "blob",
+            "blockListType"
+          ],
+          "properties": {
+            "action": {
+              "const": "getBlockList"
+            },
+            "blob": {
+              "type": "string",
+              "minLength": 1
+            },
+            "uploadId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "blockListType": {
+              "enum": [
+                "committed",
+                "uncommitted",
+                "all"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "action",
+            "blob",
+            "blockId"
+          ],
+          "properties": {
+            "action": {
+              "const": "tamperStagedBlock"
+            },
+            "blob": {
+              "type": "string",
+              "minLength": 1
+            },
+            "blockId": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "action",
+            "blob",
+            "blockId",
+            "replica"
+          ],
+          "properties": {
+            "action": {
+              "const": "removeStagedReplica"
+            },
+            "blob": {
+              "type": "string",
+              "minLength": 1
+            },
+            "blockId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "replica": {
+              "$ref": "#/$defs/replica"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "action",
+            "blob"
+          ],
+          "properties": {
+            "action": {
+              "const": "tamperContinuation"
+            },
+            "blob": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "action",
+            "blob"
+          ],
+          "properties": {
+            "action": {
+              "const": "reuseContinuation"
+            },
+            "blob": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "action",
+            "blob"
+          ],
+          "properties": {
+            "action": {
+              "const": "expireContinuation"
+            },
+            "blob": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "action",
+            "blob"
+          ],
+          "properties": {
+            "action": {
+              "const": "rolloverRing"
+            },
+            "blob": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": [
+            "action",
+            "blob"
+          ],
+          "properties": {
+            "action": {
+              "const": "collectStaged"
+            },
+            "blob": {
               "type": "string",
               "minLength": 1
             }
@@ -373,7 +676,7 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^FAULT-(NET|RING|PROC|COMMIT|RACE)-[0-9]{3}$"
+          "pattern": "^FAULT-(NET|RING|PROC|COMMIT|RACE|LIST|TOKEN|STAGE)-[0-9]{3}$"
         }
       },
       "additionalProperties": false
@@ -391,7 +694,12 @@
             "deleteBlob",
             "head",
             "getBlob",
-            "observePreparedPublication"
+            "observePreparedPublication",
+            "listContainers",
+            "listBlobs",
+            "putBlock",
+            "putBlockList",
+            "getBlockList"
           ]
         },
         "status": {
@@ -522,6 +830,27 @@
         "type": "integer",
         "minimum": 1
       }
+    },
+    "blockSelection": {
+      "type": "object",
+      "required": [
+        "kind",
+        "blockId"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "latest",
+            "committed",
+            "uncommitted"
+          ]
+        },
+        "blockId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

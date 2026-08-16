@@ -30,3 +30,7 @@ signing:
   notBeforeUnixMs: 1700000000000
   notAfterUnixMs: 2000000000000
   allowTestSigner: true
+listing:
+  continuationTokenLifetimeSeconds: 900
+stagedBlocks:
+  retentionSeconds: 604800

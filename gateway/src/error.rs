@@ -93,6 +93,14 @@ impl StorageError {
         Self::new(StatusCode::BAD_REQUEST, "InvalidRequest", message)
     }
 
+    pub fn request_body_too_large() -> Self {
+        Self::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "RequestBodyTooLarge",
+            "The request body exceeds the maximum supported size.",
+        )
+    }
+
     pub fn condition_not_met() -> Self {
         Self::new(
             StatusCode::PRECONDITION_FAILED,
@@ -114,6 +122,58 @@ impl StorageError {
             StatusCode::NOT_FOUND,
             "BlobNotFound",
             "The specified blob does not exist.",
+        )
+    }
+
+    pub fn container_not_found() -> Self {
+        Self::new(
+            StatusCode::NOT_FOUND,
+            "ContainerNotFound",
+            "The specified container does not exist.",
+        )
+    }
+
+    pub fn account_not_found() -> Self {
+        Self::new(
+            StatusCode::NOT_FOUND,
+            "AccountNotFound",
+            "The specified storage account does not exist.",
+        )
+    }
+
+    pub fn invalid_query_parameter(name: &str) -> Self {
+        Self::new(
+            StatusCode::BAD_REQUEST,
+            "InvalidQueryParameterValue",
+            format!("The value for query parameter {name} is invalid."),
+        )
+    }
+
+    pub fn invalid_marker(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, "InvalidMarker", message)
+    }
+
+    pub fn invalid_block_id() -> Self {
+        Self::new(
+            StatusCode::BAD_REQUEST,
+            "InvalidBlockId",
+            "The specified block ID is invalid.",
+        )
+    }
+
+    pub fn invalid_block_list() -> Self {
+        Self::new(
+            StatusCode::BAD_REQUEST,
+            "InvalidBlockList",
+            "The specified block list is invalid.",
+        )
+    }
+
+    pub fn block_count_exceeds_limit() -> Self {
+        Self::new(
+            StatusCode::CONFLICT,
+            "BlockCountExceedsLimit",
+            "The block count exceeds the supported limit.",
         )
     }
 

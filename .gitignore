@@ -4,6 +4,7 @@
 /harness/reports/*.json
 /harness/artifacts/*
 /harness/traces/*
+/reconciler/config/*-cursor.local.json
 !/harness/artifacts/README.md
 !/harness/traces/README.md
 .DS_Store

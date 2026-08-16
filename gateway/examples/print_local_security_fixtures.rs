@@ -28,6 +28,11 @@ fn main() -> anyhow::Result<()> {
                 region: "local-b".to_owned(),
                 weight: 100,
             },
+            RingNode {
+                id: "storage-c".to_owned(),
+                region: "local-c".to_owned(),
+                weight: 100,
+            },
         ],
     };
     ring.ring_hash = ring.computed_hash()?;

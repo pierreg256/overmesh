@@ -1,18 +1,39 @@
 use super::*;
 
 impl CommitCoordinator {
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::commit) async fn recover_partial_publication(
         &self,
         primary_head: Option<&LoadedHead>,
         secondary_head: Option<&LoadedHead>,
         head_key: &str,
+        logical_blob: &LogicalBlobId,
+        principal: &AuthenticatedPrincipal,
         write_id: &str,
         content: &SpoolContent,
         control_token: &ControlToken,
     ) -> Result<Option<CommitResult>, CommitError> {
-        let (committed, missing_backend) = match (primary_head, secondary_head) {
-            (Some(committed), None) => (committed, self.secondary.as_ref()),
-            (None, Some(committed)) => (committed, self.primary.as_ref()),
+        let (committed, lagging, missing_backend) = match (primary_head, secondary_head) {
+            (Some(committed), None) => (committed, None, self.secondary.as_ref()),
+            (None, Some(committed)) => (committed, None, self.primary.as_ref()),
+            (Some(committed), Some(lagging))
+                if committed.signed.payload.write_id == write_id
+                    && committed.signed.payload.previous_logical_etag.as_deref()
+                        == Some(&lagging.signed.payload.logical_etag)
+                    && committed.signed.payload.logical_version
+                        == lagging.signed.payload.logical_version.saturating_add(1) =>
+            {
+                (committed, Some(lagging), self.secondary.as_ref())
+            }
+            (Some(lagging), Some(committed))
+                if committed.signed.payload.write_id == write_id
+                    && committed.signed.payload.previous_logical_etag.as_deref()
+                        == Some(&lagging.signed.payload.logical_etag)
+                    && committed.signed.payload.logical_version
+                        == lagging.signed.payload.logical_version.saturating_add(1) =>
+            {
+                (committed, Some(lagging), self.primary.as_ref())
+            }
             _ => return Ok(None),
         };
         if committed.signed.payload.write_id != write_id {
@@ -21,12 +42,53 @@ impl CommitCoordinator {
         if committed.signed.payload.content_sha256 != content.content_sha256 {
             return Err(CommitError::IdempotencyConflict);
         }
+        Self::validate_recovery_candidate(
+            self.primary.as_ref(),
+            self.secondary.as_ref(),
+            &logical_blob.path_hash(),
+            logical_blob.canonical(),
+            self.ring_version,
+            committed,
+            control_token,
+            self.signer.as_ref(),
+        )
+        .await?;
+        self.authorize_replay(principal, &committed.signed.payload)
+            .await?;
+        let committed_key = format!(
+            "{}/committed.json",
+            commit_manifest_object_prefix(&committed.signed.payload)?
+        );
+        verify_identical_objects(
+            self.primary.as_ref(),
+            self.secondary.as_ref(),
+            &committed_key,
+            &committed.bytes,
+            control_token,
+        )
+        .await?;
+        tokio::try_join!(
+            put_file_idempotent(
+                self.primary.as_ref(),
+                &committed.signed.payload.content_container,
+                &committed.signed.payload.content_object,
+                content,
+                &principal.access_token
+            ),
+            put_file_idempotent(
+                self.secondary.as_ref(),
+                &committed.signed.payload.content_container,
+                &committed.signed.payload.content_object,
+                content,
+                &principal.access_token
+            )
+        )?;
         match missing_backend
             .control_put_bytes(
                 head_key,
                 committed.bytes.clone(),
                 "application/json",
-                PutCondition::IfAbsent,
+                head_condition(lagging),
                 control_token,
             )
             .await
@@ -45,6 +107,27 @@ impl CommitCoordinator {
             control_token,
         )
         .await?;
+        let path_hash = logical_blob.path_hash();
+        Self::publish_high_water(
+            self.primary.as_ref(),
+            self.secondary.as_ref(),
+            &path_hash,
+            &committed.signed,
+            &committed.bytes,
+            control_token,
+            self.signer.as_ref(),
+        )
+        .await?;
+        publish_catalog_current(
+            self.primary.as_ref(),
+            self.secondary.as_ref(),
+            logical_blob,
+            &committed.signed,
+            &committed.bytes,
+            control_token,
+            self.signer.as_ref(),
+        )
+        .await?;
         Ok(Some(CommitResult {
             logical_version: committed.signed.payload.logical_version,
             logical_etag: committed.signed.payload.logical_etag.clone(),
@@ -58,6 +141,7 @@ impl CommitCoordinator {
         primary_head: Option<&LoadedHead>,
         secondary_head: Option<&LoadedHead>,
         head_key: &str,
+        logical_blob: &LogicalBlobId,
         write_id: &str,
         control_token: &ControlToken,
     ) -> Result<Option<DeleteResult>, CommitError> {
@@ -119,6 +203,16 @@ impl CommitCoordinator {
             self.primary.as_ref(),
             self.secondary.as_ref(),
             &logical_path_hash(&tombstone.signed.payload.blob),
+            &tombstone.signed,
+            &tombstone.bytes,
+            control_token,
+            self.signer.as_ref(),
+        )
+        .await?;
+        publish_catalog_current(
+            self.primary.as_ref(),
+            self.secondary.as_ref(),
+            logical_blob,
             &tombstone.signed,
             &tombstone.bytes,
             control_token,

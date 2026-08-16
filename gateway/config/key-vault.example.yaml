@@ -44,3 +44,7 @@ signing:
       notBeforeUnixMs: 1744464000000
       notAfterUnixMs: 1776086400000
   credential: workloadIdentity
+listing:
+  continuationTokenLifetimeSeconds: 900
+stagedBlocks:
+  retentionSeconds: 604800

@@ -7,6 +7,7 @@ cargo run --quiet -p overmesh-harness -- doctor >/dev/null
 token=$(cargo run --quiet -p overmesh-harness -- issue-token valid --principal caller)
 cargo run --quiet -p overmesh-harness -- issue-token valid --principal gateway \
   >.harness/gateway-control-token.jwt
+smoke_run="${HARNESS_RUN_ID:-local}-$$"
 
 create_container() {
   local replica_port=$1
@@ -25,7 +26,9 @@ create_container() {
 for replica_port in 12100 12101; do
   create_container "$replica_port" overmesh-system
   create_container "$replica_port" commit
+  create_container "$replica_port" "empty-$smoke_run"
 done
+create_container 12100 "one-sided-$smoke_run"
 
 if curl --silent --fail http://127.0.0.1:18080/healthz >/dev/null 2>&1; then
   echo "Port 18080 is already serving a gateway; refusing to reuse an unknown process." >&2
@@ -76,7 +79,6 @@ test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
 
 make validate-system
 
-smoke_run="${HARNESS_RUN_ID:-local}-$$"
 blob_path="/commit/smoke-v050-$smoke_run"
 write_id="commit-smoke-v050-$smoke_run"
 payload='hello overmesh v0.5.0'
@@ -200,6 +202,113 @@ test "$(curl --silent --output .harness/range-boundary-read.bin \
   "http://127.0.0.1:18080$boundary_path")" = "206"
 test "$(od -An -tx1 .harness/range-boundary-read.bin | tr -d ' \n')" = "0000000041424344"
 
+block_path="/commit/block-smoke-$smoke_run"
+block_upload="block-upload-$smoke_run"
+block_id_a='YmxvY2stMDAwMQ%3D%3D'
+block_id_b='YmxvY2stMDAwMg%3D%3D'
+block_index=0
+for spec in "$block_id_a:first block" "$block_id_b:second block"; do
+  ((block_index += 1))
+  block_id=${spec%%:*}
+  block_body=${spec#*:}
+  test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X PUT \
+    -H "Authorization: Bearer $token" \
+    -H 'x-ms-version: 2025-11-05' \
+    -H "x-overmesh-write-id: $block_upload-$block_index" \
+    --data-binary "$block_body" \
+    "http://127.0.0.1:18080$block_path?comp=block&blockid=$block_id")" = "201"
+done
+test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+  -H "Authorization: Bearer $token" \
+  -H 'x-ms-version: 2025-11-05' \
+  "http://127.0.0.1:18080$block_path")" = "404"
+curl --silent --fail \
+  -H "Authorization: Bearer $token" \
+  -H 'x-ms-version: 2025-11-05' \
+  "http://127.0.0.1:18080$block_path?comp=blocklist&blocklisttype=uncommitted" \
+  -o .harness/block-list-uncommitted.xml
+grep -q '<UncommittedBlocks>' .harness/block-list-uncommitted.xml
+cat >.harness/put-block-list.xml <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<BlockList>
+  <Latest>YmxvY2stMDAwMQ==</Latest>
+  <Latest>YmxvY2stMDAwMg==</Latest>
+</BlockList>
+EOF
+test "$(curl --silent --output /dev/null --dump-header .harness/put-block-list-headers.txt \
+  --write-out '%{http_code}' -X PUT \
+  -H "Authorization: Bearer $token" \
+  -H 'x-ms-version: 2025-11-05' \
+  -H "x-overmesh-write-id: $block_upload-commit" \
+  -H 'Content-Type: application/xml' \
+  --data-binary @.harness/put-block-list.xml \
+  "http://127.0.0.1:18080$block_path?comp=blocklist")" = "201"
+test "$(curl --silent --output .harness/block-read.bin --write-out '%{http_code}' \
+  -H "Authorization: Bearer $token" \
+  -H 'x-ms-version: 2025-11-05' \
+  "http://127.0.0.1:18080$block_path")" = "200"
+test "$(cat .harness/block-read.bin)" = "first blocksecond block"
+curl --silent --fail \
+  -H "Authorization: Bearer $token" \
+  -H 'x-ms-version: 2025-11-05' \
+  "http://127.0.0.1:18080$block_path?comp=blocklist&blocklisttype=committed" \
+  -o .harness/block-list-committed.xml
+grep -q '<CommittedBlocks>' .harness/block-list-committed.xml
+
+folder_path="/commit/folder-$smoke_run/a"
+test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X PUT \
+  -H "Authorization: Bearer $token" \
+  -H 'x-ms-version: 2025-11-05' \
+  -H "x-overmesh-write-id: folder-$smoke_run" \
+  --data-binary 'folder data' \
+  "http://127.0.0.1:18080$folder_path")" = "201"
+curl --silent --fail \
+  -H "Authorization: Bearer $token" \
+  -H 'x-ms-version: 2025-11-05' \
+  'http://127.0.0.1:18080/commit?restype=container&comp=list&delimiter=%2F' \
+  -o .harness/list-delimiter.xml
+grep -q "<BlobPrefix><Name>folder-$smoke_run/</Name></BlobPrefix>" .harness/list-delimiter.xml
+! grep -q '\.overmesh' .harness/list-delimiter.xml
+curl --silent --fail \
+  -H "Authorization: Bearer $token" \
+  -H 'x-ms-version: 2025-11-05' \
+  'http://127.0.0.1:18080/commit?restype=container&comp=list&maxresults=1' \
+  -o .harness/list-page-1.xml
+marker=$(python3 -c 'import sys,xml.etree.ElementTree as ET; print(ET.parse(sys.argv[1]).findtext("NextMarker") or "")' .harness/list-page-1.xml)
+test -n "$marker"
+curl --silent --fail --get \
+  -H "Authorization: Bearer $token" \
+  -H 'x-ms-version: 2025-11-05' \
+  --data-urlencode 'restype=container' \
+  --data-urlencode 'comp=list' \
+  --data-urlencode 'maxresults=1' \
+  --data-urlencode "marker=$marker" \
+  'http://127.0.0.1:18080/commit' \
+  -o .harness/list-page-2.xml
+page_1_name=$(python3 -c 'import sys,xml.etree.ElementTree as ET; print(ET.parse(sys.argv[1]).findtext(".//Blob/Name") or "")' .harness/list-page-1.xml)
+page_2_name=$(python3 -c 'import sys,xml.etree.ElementTree as ET; print(ET.parse(sys.argv[1]).findtext(".//Blob/Name") or "")' .harness/list-page-2.xml)
+test -n "$page_1_name"
+test -n "$page_2_name"
+test "$page_1_name" != "$page_2_name"
+test "$(curl --silent --output .harness/list-tampered-marker.xml --write-out '%{http_code}' --get \
+  -H "Authorization: Bearer $token" \
+  -H 'x-ms-version: 2025-11-05' \
+  --data-urlencode 'restype=container' \
+  --data-urlencode 'comp=list' \
+  --data-urlencode 'maxresults=1' \
+  --data-urlencode "marker=${marker}A" \
+  'http://127.0.0.1:18080/commit')" = "400"
+grep -q '<Code>InvalidMarker</Code>' .harness/list-tampered-marker.xml
+curl --silent --fail \
+  -H "Authorization: Bearer $token" \
+  -H 'x-ms-version: 2025-11-05' \
+  'http://127.0.0.1:18080/?comp=list' \
+  -o .harness/list-containers.xml
+grep -q '<Name>commit</Name>' .harness/list-containers.xml
+! grep -q "<Name>empty-$smoke_run</Name>" .harness/list-containers.xml
+! grep -q '<Name>overmesh-system</Name>' .harness/list-containers.xml
+! grep -q "<Name>one-sided-$smoke_run</Name>" .harness/list-containers.xml
+
 path_hash=$(printf '/local-overmesh%s' "$blob_path" | shasum -a 256 | awk '{print $1}')
 head_key="heads/$path_hash.json"
 curl --insecure --fail --silent \
@@ -213,6 +322,24 @@ curl --insecure --fail --silent \
   "https://127.0.0.1:12101/devstoreaccount1/overmesh-system/$head_key" \
   -o .harness/commit-head-b.json
 cmp .harness/commit-head-a.json .harness/commit-head-b.json
+catalog_key=$(python3 - "$blob_path" <<'PY'
+import sys
+_, container, blob = sys.argv[1].split("/", 2)
+print(f"catalog/v1/{container.encode().hex()}/{blob.encode().hex()}.json")
+PY
+)
+curl --insecure --fail --silent \
+  -H "Authorization: Bearer $token" \
+  -H 'x-ms-version: 2025-11-05' \
+  "https://127.0.0.1:12100/devstoreaccount1/overmesh-system/$catalog_key" \
+  -o .harness/catalog-a.json
+curl --insecure --fail --silent \
+  -H "Authorization: Bearer $token" \
+  -H 'x-ms-version: 2025-11-05' \
+  "https://127.0.0.1:12101/devstoreaccount1/overmesh-system/$catalog_key" \
+  -o .harness/catalog-b.json
+cmp .harness/catalog-a.json .harness/catalog-b.json
+cmp .harness/catalog-a.json .harness/commit-head-a.json
 manifest_info=$(cargo run --quiet -p overmesh-harness -- \
   verify-commit-manifest .harness/commit-head-a.json)
 block_manifest_key=$(printf '%s' "$manifest_info" | cut -f5)

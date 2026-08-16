@@ -34,6 +34,10 @@ pub enum InvariantId {
     Invariant011,
     #[serde(rename = "INVARIANT-012")]
     Invariant012,
+    #[serde(rename = "INVARIANT-013")]
+    Invariant013,
+    #[serde(rename = "INVARIANT-014")]
+    Invariant014,
 }
 
 impl fmt::Display for InvariantId {
@@ -51,6 +55,8 @@ impl fmt::Display for InvariantId {
             Self::Invariant010 => 10,
             Self::Invariant011 => 11,
             Self::Invariant012 => 12,
+            Self::Invariant013 => 13,
+            Self::Invariant014 => 14,
         };
         write!(formatter, "INVARIANT-{number:03}")
     }
@@ -73,6 +79,8 @@ impl FromStr for InvariantId {
             "INVARIANT-010" => Ok(Self::Invariant010),
             "INVARIANT-011" => Ok(Self::Invariant011),
             "INVARIANT-012" => Ok(Self::Invariant012),
+            "INVARIANT-013" => Ok(Self::Invariant013),
+            "INVARIANT-014" => Ok(Self::Invariant014),
             _ => Err(InvariantParseError(value.to_owned())),
         }
     }
@@ -187,6 +195,19 @@ pub fn validate_invariant(id: InvariantId, blob: &BlobState) -> CheckResult {
                 "tampered, quarantined, invalid, or untrusted replicas are refused as repair sources",
             )
         }
+        InvariantId::Invariant013 => (
+            blob.public_observations
+                .iter()
+                .filter(|observation| {
+                    observation.operation == crate::model::ClientOperation::PutBlock
+                })
+                .all(|observation| !observation.exposed),
+            "staged blocks are never publicly visible",
+        ),
+        InvariantId::Invariant014 => (
+            !blob.committed_from_tampered_stage,
+            "tampered staged blocks are never used as commit or repair sources",
+        ),
     };
     CheckResult {
         id: id.to_string(),

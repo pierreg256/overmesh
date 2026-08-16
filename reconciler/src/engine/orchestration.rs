@@ -20,6 +20,9 @@ impl ReconcilerEngine {
                 .history_compaction_max_versions_per_cycle,
             head_discovery_batch_size: options.head_discovery_batch_size,
             head_discovery_cursor_path: options.head_discovery_cursor_path,
+            staged_block_gc_max_records_per_cycle: options.staged_block_gc_max_records_per_cycle,
+            staged_block_metadata_cursor_path: options.staged_block_metadata_cursor_path,
+            staged_block_marker_cursor_path: options.staged_block_marker_cursor_path,
         }
     }
 
@@ -67,6 +70,7 @@ impl ReconcilerEngine {
         self.audit_rbac_posture().await?;
         let started_at_unix_ms = now_unix_ms();
         let token = self.token_provider.token().await?;
+        self.reconcile_staged_blocks(&token).await?;
         let discovery = self.discover_heads(&token, mode).await?;
         let mut blobs = Vec::with_capacity(discovery.candidates.len());
         for candidate in discovery.candidates {
@@ -159,6 +163,17 @@ impl ReconcilerEngine {
             ),
             "administrator-authorized recovery did not produce an identical valid replica"
         );
+        match self
+            .reconcile_catalog_current(blob, &head_object, source.as_ref(), target.as_ref(), token)
+            .await?
+        {
+            CatalogReconciliation::Current | CatalogReconciliation::Repaired => {}
+            CatalogReconciliation::Conflict(reason) => {
+                return self
+                    .quarantine(Some(blob.to_owned()), &head_object, reason, token)
+                    .await;
+            }
+        }
         self.write_audit(
             Some(blob),
             &head_object,
@@ -286,15 +301,64 @@ impl ReconcilerEngine {
         let second_validation = self
             .validate_replica(second.as_ref(), head_object, token)
             .await;
-        self.reconcile_pair(
-            head_object,
-            first.as_ref(),
-            first_validation,
-            second.as_ref(),
-            second_validation,
-            token,
-        )
-        .await
+        if matches!(
+            (
+                first_validation.fully_validated_head(),
+                second_validation.fully_validated_head(),
+            ),
+            (Some(first_head), Some(second_head)) if first_head.bytes == second_head.bytes
+        ) {
+            match self
+                .reconcile_catalog_current(
+                    blob,
+                    head_object,
+                    first.as_ref(),
+                    second.as_ref(),
+                    token,
+                )
+                .await?
+            {
+                CatalogReconciliation::Current | CatalogReconciliation::Repaired => {}
+                CatalogReconciliation::Conflict(reason) => {
+                    return self
+                        .quarantine(Some(blob.to_owned()), head_object, reason, token)
+                        .await;
+                }
+            }
+        }
+        let report = self
+            .reconcile_pair(
+                head_object,
+                first.as_ref(),
+                first_validation,
+                second.as_ref(),
+                second_validation,
+                token,
+            )
+            .await?;
+        if matches!(
+            report.health_after,
+            HealthState::Healthy | HealthState::Tombstoned
+        ) {
+            match self
+                .reconcile_catalog_current(
+                    blob,
+                    head_object,
+                    first.as_ref(),
+                    second.as_ref(),
+                    token,
+                )
+                .await?
+            {
+                CatalogReconciliation::Current | CatalogReconciliation::Repaired => {}
+                CatalogReconciliation::Conflict(reason) => {
+                    return self
+                        .quarantine(Some(blob.to_owned()), head_object, reason, token)
+                        .await;
+                }
+            }
+        }
+        Ok(report)
     }
 
     async fn with_lease<T, F>(

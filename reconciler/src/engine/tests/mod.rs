@@ -322,6 +322,34 @@ impl ReplicaBackend for TestBackend {
             .collect())
     }
 
+    async fn control_list_objects_page(
+        &self,
+        prefix: &str,
+        cursor: Option<&str>,
+        limit: usize,
+        _control_token: &ControlToken,
+    ) -> Result<overmesh_gateway::backend::ObjectListPage, BackendError> {
+        self.state.list_calls.fetch_add(1, Ordering::SeqCst);
+        let start = parse_test_cursor(&self.id, cursor)?;
+        let objects = self.state.control.lock().expect("control lock");
+        let ordered = objects
+            .keys()
+            .filter(|key| key.starts_with(prefix))
+            .cloned()
+            .collect::<Vec<_>>();
+        let total = ordered.len();
+        let page = ordered
+            .into_iter()
+            .skip(start)
+            .take(limit)
+            .collect::<Vec<_>>();
+        let end = start.saturating_add(page.len());
+        Ok(overmesh_gateway::backend::ObjectListPage {
+            objects: page,
+            next_cursor: (end < total).then(|| test_cursor(&self.id, end)),
+        })
+    }
+
     async fn control_delete_object(
         &self,
         object_key: &str,
@@ -472,6 +500,21 @@ fn server_error(message: &str) -> BackendError {
     }
 }
 
+fn test_cursor(backend_id: &str, offset: usize) -> String {
+    format!("opaque::{backend_id}::{offset:08x}")
+}
+
+fn parse_test_cursor(backend_id: &str, cursor: Option<&str>) -> Result<usize, BackendError> {
+    let Some(cursor) = cursor else {
+        return Ok(0);
+    };
+    let value = cursor
+        .strip_prefix(&format!("opaque::{backend_id}::"))
+        .ok_or_else(|| BackendError::InvalidResponse("invalid test cursor".to_owned()))?;
+    usize::from_str_radix(value, 16)
+        .map_err(|_| BackendError::InvalidResponse("invalid test cursor".to_owned()))
+}
+
 struct Fixture {
     engine: ReconcilerEngine,
     first: TestBackend,
@@ -520,6 +563,13 @@ impl Fixture {
                 history_compaction_max_versions_per_cycle,
                 head_discovery_batch_size: 10,
                 head_discovery_cursor_path: PathBuf::from("target/test-head-cursor-unused.json"),
+                staged_block_gc_max_records_per_cycle: 256,
+                staged_block_metadata_cursor_path: PathBuf::from(
+                    "target/test-staged-metadata-cursor-unused.json",
+                ),
+                staged_block_marker_cursor_path: PathBuf::from(
+                    "target/test-staged-marker-cursor-unused.json",
+                ),
             },
         );
         let blob = "/test-account/container/blob".to_owned();
@@ -889,3 +939,4 @@ async fn test_token() -> ControlToken {
 mod discovery;
 mod garbage_collection;
 mod orchestration;
+mod staging;

@@ -16,7 +16,7 @@ use crate::{
         committed_heads_match, logical_etag, manifest_hash,
     },
     report::{ScenarioReport, now_unix_ms},
-    scenario::{ByteRange, Condition, Operation, ReplicaName, Scenario},
+    scenario::{BlockSelectionKind, ByteRange, Condition, Operation, ReplicaName, Scenario},
     validator::{CheckResult, InvariantId, validate_expected, validate_invariant},
 };
 
@@ -139,6 +139,213 @@ fn execute_operation(
             put_blob(state, blob, write_id, &content, faults);
         }
         Operation::DeleteBlob { blob, write_id } => delete_blob(state, blob, write_id),
+        Operation::ListContainers { blob, .. } => {
+            let blob = state.blob_mut(blob);
+            record_response(
+                blob,
+                ClientOperation::ListContainers,
+                200,
+                blob.is_publicly_visible(),
+                None,
+                None,
+            );
+            state.last_outcome = Some(ActualOutcomeClass::Success);
+        }
+        Operation::ListBlobs {
+            blob,
+            marker,
+            max_results,
+            include,
+            ..
+        } => {
+            let blob = state.blob_mut(blob);
+            let valid_request = max_results.is_none_or(|value| (1..=5_000).contains(&value))
+                && include.iter().all(|value| value == "metadata")
+                && marker.as_ref().is_none_or(|_| blob.continuation_valid);
+            record_response(
+                blob,
+                ClientOperation::ListBlobs,
+                if valid_request { 200 } else { 400 },
+                valid_request && blob.is_publicly_visible(),
+                None,
+                None,
+            );
+            state.last_outcome = Some(if valid_request {
+                ActualOutcomeClass::Success
+            } else {
+                ActualOutcomeClass::Failure
+            });
+        }
+        Operation::PutBlock {
+            blob,
+            dataset,
+            write_id,
+            upload_id,
+            block_id,
+        } => {
+            let content = fs::read(repository_root.join("harness/datasets").join(dataset))
+                .with_context(|| format!("failed to read dataset {dataset}"))?;
+            let blob = state.blob_mut(blob);
+            let conflict = blob.staged_blocks.get(block_id).is_some_and(|existing| {
+                existing.content != content
+                    || existing.write_id != *write_id
+                    || existing.upload_id != *upload_id
+            });
+            if !conflict {
+                let base_logical_version = blob
+                    .current_logical_version()
+                    .unwrap_or(blob.high_water_logical_version);
+                blob.staged_blocks.insert(
+                    block_id.clone(),
+                    crate::model::StagedBlockState {
+                        content,
+                        upload_id: upload_id.clone(),
+                        write_id: write_id.clone(),
+                        expires_at_ms: blob.now_ms.saturating_add(blob.retention_ms),
+                        replica_a_present: true,
+                        replica_b_present: true,
+                        tampered: false,
+                        base_logical_version,
+                    },
+                );
+            }
+            record_response(
+                blob,
+                ClientOperation::PutBlock,
+                if conflict { 409 } else { 201 },
+                false,
+                None,
+                None,
+            );
+            state.last_outcome = Some(if conflict {
+                ActualOutcomeClass::Failure
+            } else {
+                ActualOutcomeClass::Success
+            });
+        }
+        Operation::PutBlockList {
+            blob,
+            write_id,
+            upload_id,
+            blocks,
+        } => {
+            let selected = {
+                let blob_state = state.blob_mut(blob);
+                let mut selected = Vec::new();
+                let mut valid = !blocks.is_empty() && blocks.len() <= 50_000;
+                for selection in blocks {
+                    let staged = blob_state.staged_blocks.get(&selection.block_id);
+                    let use_staged = matches!(
+                        selection.kind,
+                        BlockSelectionKind::Latest | BlockSelectionKind::Uncommitted
+                    );
+                    if !use_staged
+                        || staged.is_none_or(|value| {
+                            value.upload_id != *upload_id
+                                || !value.replica_a_present
+                                || !value.replica_b_present
+                                || value.tampered
+                                || value.expires_at_ms < blob_state.now_ms
+                                || value.base_logical_version
+                                    != blob_state
+                                        .current_logical_version()
+                                        .unwrap_or(blob_state.high_water_logical_version)
+                        })
+                    {
+                        valid = false;
+                        break;
+                    }
+                    selected.extend_from_slice(&staged.expect("validated staged block").content);
+                }
+                valid.then_some(selected)
+            };
+            if let Some(content) = selected {
+                put_blob(state, blob, write_id, &content, faults);
+                let blob_state = state.blob_mut(blob);
+                for selection in blocks {
+                    blob_state.staged_blocks.remove(&selection.block_id);
+                }
+                if let Some(last) = blob_state.public_observations.last_mut() {
+                    last.operation = ClientOperation::PutBlockList;
+                }
+            } else {
+                let blob_state = state.blob_mut(blob);
+                record_response(
+                    blob_state,
+                    ClientOperation::PutBlockList,
+                    400,
+                    false,
+                    None,
+                    None,
+                );
+                state.last_outcome = Some(ActualOutcomeClass::Failure);
+            }
+        }
+        Operation::GetBlockList { blob, .. } => {
+            let blob = state.blob_mut(blob);
+            let valid = blob
+                .staged_blocks
+                .values()
+                .all(|block| block.replica_a_present && block.replica_b_present && !block.tampered);
+            let exists = blob.is_publicly_visible() || !blob.staged_blocks.is_empty();
+            let status = if !exists {
+                404
+            } else if valid {
+                200
+            } else {
+                503
+            };
+            record_response(
+                blob,
+                ClientOperation::GetBlockList,
+                status,
+                false,
+                None,
+                None,
+            );
+            state.last_outcome = Some(if status == 200 {
+                ActualOutcomeClass::Success
+            } else {
+                ActualOutcomeClass::Failure
+            });
+        }
+        Operation::TamperContinuation { blob }
+        | Operation::ReuseContinuation { blob }
+        | Operation::ExpireContinuation { blob } => {
+            state.blob_mut(blob).continuation_valid = false;
+            state.last_outcome = Some(ActualOutcomeClass::Success);
+        }
+        Operation::RolloverRing { blob } => {
+            let blob = state.blob_mut(blob);
+            blob.active_ring_version = blob.active_ring_version.saturating_add(1);
+            blob.continuation_valid = false;
+            state.last_outcome = Some(ActualOutcomeClass::Success);
+        }
+        Operation::TamperStagedBlock { blob, block_id } => {
+            if let Some(block) = state.blob_mut(blob).staged_blocks.get_mut(block_id) {
+                block.tampered = true;
+            }
+            state.last_outcome = Some(ActualOutcomeClass::Success);
+        }
+        Operation::RemoveStagedReplica {
+            blob,
+            block_id,
+            replica,
+        } => {
+            if let Some(block) = state.blob_mut(blob).staged_blocks.get_mut(block_id) {
+                match replica {
+                    ReplicaName::A => block.replica_a_present = false,
+                    ReplicaName::B => block.replica_b_present = false,
+                }
+            }
+            state.last_outcome = Some(ActualOutcomeClass::Success);
+        }
+        Operation::CollectStaged { blob } => {
+            let blob = state.blob_mut(blob);
+            blob.staged_blocks
+                .retain(|_, block| block.expires_at_ms >= blob.now_ms || block.tampered);
+            state.last_outcome = Some(ActualOutcomeClass::Success);
+        }
         Operation::Head {
             blob,
             if_match,
@@ -474,6 +681,15 @@ fn get_blob(
 }
 
 fn reconcile_blob(blob: &mut BlobState) {
+    for staged in blob.staged_blocks.values_mut() {
+        if staged.tampered {
+            blob.quarantined = true;
+            blob.tamper_detected = true;
+        } else if staged.replica_a_present || staged.replica_b_present {
+            staged.replica_a_present = true;
+            staged.replica_b_present = true;
+        }
+    }
     if blob.quarantined
         || blob.replica_a.content_tampered
         || blob.replica_b.content_tampered

@@ -1,0 +1,39 @@
+listenAddress: 127.0.0.1:18081
+logicalAccount: local-overmesh
+authentication:
+  issuer: https://sts.windows.net/test-tenant/
+  audience: https://storage.azure.com/
+  tenantId: test-tenant
+  jwksPath: ../../harness/identity/local-auth-jwks.json
+controlIdentity:
+  provider: localTest
+  testTokenPath: ../../.harness/gateway-control-token.jwt
+  allowTestToken: true
+ring:
+  documentPath: ../../harness/rings/ring-v1-three-node.yaml
+  signaturePath: ../../harness/rings/ring-v1-three-node.sig
+  keyId: test-ring-key-01
+  publicKeyPath: ../../harness/keys/test-ring-public.pem
+  notBeforeUnixMs: 1700000000000
+  notAfterUnixMs: 2000000000000
+  minimumVersion: 1
+backends:
+  - id: storage-a
+    endpoint: https://127.0.0.1:12100/devstoreaccount1
+    dangerAcceptInvalidCertificates: true
+  - id: storage-b
+    endpoint: https://127.0.0.1:12101/devstoreaccount1
+    dangerAcceptInvalidCertificates: true
+  - id: storage-c
+    endpoint: https://127.0.0.1:12102/devstoreaccount1
+    dangerAcceptInvalidCertificates: true
+signing:
+  provider: localTest
+  keyId: test-blob-key-01
+  notBeforeUnixMs: 1700000000000
+  notAfterUnixMs: 2000000000000
+  allowTestSigner: true
+listing:
+  continuationTokenLifetimeSeconds: 900
+stagedBlocks:
+  retentionSeconds: 604800

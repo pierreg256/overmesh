@@ -1,0 +1,42 @@
+apiVersion: harness.overmesh.io/v1
+id: BLOCK-STAGED-GC-001
+suite: blocks
+environment:
+  providers: [model]
+seed: 8007
+initialState:
+  blob: absent
+  retentionMs: 100
+operations:
+  - action: putBlock
+    blob: /container/staged-gc
+    dataset: tiny/hello.txt
+    writeId: staged-gc-upload
+    uploadId: staged-gc-upload
+    blockId: YmxvY2stMDAwMQ==
+  - action: advanceTime
+    blob: /container/staged-gc
+    milliseconds: 101
+  - action: collectStaged
+    blob: /container/staged-gc
+  - action: getBlockList
+    blob: /container/staged-gc
+    uploadId: staged-gc-upload
+    blockListType: uncommitted
+expected:
+  clientOutcome:
+    class: failure
+  visibleBlob:
+    present: false
+    mustNeverBePrepared: true
+  healthAfterOperations: ABSENT
+  healthAfterReconciliation: ABSENT
+  responses:
+    - operation: putBlock
+      status: 201
+    - operation: getBlockList
+      status: 404
+invariants:
+  - INVARIANT-009
+  - INVARIANT-013
+  - INVARIANT-014

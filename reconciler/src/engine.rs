@@ -52,6 +52,9 @@ pub struct ReconcilerEngine {
     history_compaction_max_versions_per_cycle: usize,
     head_discovery_batch_size: usize,
     head_discovery_cursor_path: PathBuf,
+    staged_block_gc_max_records_per_cycle: usize,
+    staged_block_metadata_cursor_path: PathBuf,
+    staged_block_marker_cursor_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,19 +69,25 @@ pub struct ReconcilerOptions {
     pub history_compaction_max_versions_per_cycle: usize,
     pub head_discovery_batch_size: usize,
     pub head_discovery_cursor_path: PathBuf,
+    pub staged_block_gc_max_records_per_cycle: usize,
+    pub staged_block_metadata_cursor_path: PathBuf,
+    pub staged_block_marker_cursor_path: PathBuf,
 }
 
 mod audit;
+mod catalog;
 mod discovery;
 mod gc;
 mod history;
 mod orchestration;
 mod repair;
+mod staging;
 mod storage;
 mod validation;
 
 pub use audit::verify_reconciliation_record;
 
+use catalog::CatalogReconciliation;
 use history::{
     expected_version_prefix, garbage_collection_evidence, garbage_collection_marker_key,
     history_compaction_checkpoint_key, validate_compaction_checkpoint,
@@ -122,6 +131,15 @@ struct HeadDiscoveryCursor {
 struct HeadDiscoveryBatch {
     candidates: Vec<HeadCandidate>,
     next_cursor: Option<HeadDiscoveryCursor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StagedDiscoveryCursor {
+    api_version: String,
+    ring_version: u64,
+    node_index: usize,
+    backend_cursor: Option<String>,
 }
 
 #[derive(Debug)]
@@ -238,6 +256,18 @@ impl ReplicaValidation {
             Self::Valid(replica) => Some(&replica.head.signed.payload.blob),
             Self::Tampered { blob, .. } => blob.as_deref(),
             Self::MissingHead | Self::Unavailable { .. } => None,
+        }
+    }
+
+    fn fully_validated_head(&self) -> Option<&ValidatedHead> {
+        match self {
+            Self::RecoverableTombstone { replica, .. } | Self::Valid(replica) => {
+                Some(&replica.head)
+            }
+            Self::MissingHead
+            | Self::Incomplete { .. }
+            | Self::Tampered { .. }
+            | Self::Unavailable { .. } => None,
         }
     }
 }

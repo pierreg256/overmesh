@@ -27,6 +27,10 @@ const COMMIT_MANIFEST_DOMAIN: &[u8] = b"overmesh:commit-manifest:v1\0";
 const RECONCILIATION_RECORD_DOMAIN: &[u8] = b"overmesh:reconciliation-record:v1\0";
 const GARBAGE_COLLECTION_MARKER_DOMAIN: &[u8] = b"overmesh:garbage-collection-marker:v1\0";
 const HISTORY_COMPACTION_CHECKPOINT_DOMAIN: &[u8] = b"overmesh:history-compaction-checkpoint:v1\0";
+const CONTINUATION_TOKEN_DOMAIN: &[u8] = b"overmesh:continuation-token:v1\0";
+const UPLOAD_GENERATION_DOMAIN: &[u8] = b"overmesh:upload-generation:v1\0";
+const STAGED_BLOCK_DOMAIN: &[u8] = b"overmesh:staged-block:v1\0";
+const STAGED_BLOCK_GC_MARKER_DOMAIN: &[u8] = b"overmesh:staged-block-gc-marker:v1\0";
 const LOCAL_TEST_MANIFEST_KEY: [u8; 32] = [11; 32];
 pub const BLOCK_MANIFEST_PAGE_SIZE: u32 = 1024;
 
@@ -145,6 +149,67 @@ pub struct BlockDescriptor {
     pub offset: u64,
     pub length: u64,
     pub sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_block_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StagedBlock {
+    pub api_version: String,
+    pub blob: String,
+    pub upload_id: String,
+    pub write_id: String,
+    pub block_id: String,
+    pub decoded_block_id_length: u32,
+    pub block_id_sha256: String,
+    pub content_container: String,
+    pub content_object: String,
+    pub content_length: u64,
+    pub content_sha256: String,
+    pub base_logical_version: u64,
+    pub base_logical_etag: Option<String>,
+    pub ring_version: u64,
+    pub prepared_replicas: Vec<String>,
+    pub created_at_unix_ms: u64,
+    pub expires_at_unix_ms: u64,
+    pub caller: CallerIdentity,
+    pub signing_key_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UploadGeneration {
+    pub api_version: String,
+    pub blob: String,
+    pub upload_id: String,
+    pub decoded_block_id_length: u32,
+    pub base_logical_version: u64,
+    pub base_logical_etag: Option<String>,
+    pub ring_version: u64,
+    pub prepared_replicas: Vec<String>,
+    pub created_at_unix_ms: u64,
+    pub expires_at_unix_ms: u64,
+    pub caller: CallerIdentity,
+    pub signing_key_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StagedBlockGcMarker {
+    pub api_version: String,
+    pub blob: String,
+    pub metadata_object: String,
+    pub metadata_sha256: String,
+    pub content_container: String,
+    pub content_object: String,
+    pub content_length: u64,
+    pub content_sha256: String,
+    pub ring_version: u64,
+    pub replicas: Vec<String>,
+    pub expired_at_unix_ms: u64,
+    pub validated_at_unix_ms: u64,
+    pub signing_key_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -229,6 +294,10 @@ pub enum SignatureDomain {
     ReconciliationRecord,
     GarbageCollectionMarker,
     HistoryCompactionCheckpoint,
+    ContinuationToken,
+    UploadGeneration,
+    StagedBlock,
+    StagedBlockGcMarker,
 }
 
 impl SignatureDomain {
@@ -239,6 +308,10 @@ impl SignatureDomain {
             Self::ReconciliationRecord => RECONCILIATION_RECORD_DOMAIN,
             Self::GarbageCollectionMarker => GARBAGE_COLLECTION_MARKER_DOMAIN,
             Self::HistoryCompactionCheckpoint => HISTORY_COMPACTION_CHECKPOINT_DOMAIN,
+            Self::ContinuationToken => CONTINUATION_TOKEN_DOMAIN,
+            Self::UploadGeneration => UPLOAD_GENERATION_DOMAIN,
+            Self::StagedBlock => STAGED_BLOCK_DOMAIN,
+            Self::StagedBlockGcMarker => STAGED_BLOCK_GC_MARKER_DOMAIN,
         }
     }
 }

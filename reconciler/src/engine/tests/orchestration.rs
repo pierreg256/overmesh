@@ -1,4 +1,5 @@
 use super::*;
+use overmesh_gateway::catalog::catalog_key_from_canonical;
 
 #[test]
 fn requires_an_explicit_parent_link_for_authority() {
@@ -58,4 +59,155 @@ fn test_head(
         bytes: Vec::new(),
         backend_etag: None,
     }
+}
+
+#[tokio::test]
+async fn catalog_backfill_and_one_sided_repair_copy_exact_current_head_bytes() {
+    let fixture = Fixture::new(
+        &[ManifestState::Committed],
+        &[1],
+        std::time::Duration::from_secs(60),
+    )
+    .await;
+    let current = fixture.history[0].bytes.clone();
+    fixture
+        .first
+        .put_control(&fixture.head_object, current.clone());
+    fixture
+        .second
+        .put_control(&fixture.head_object, current.clone());
+    let token = test_token().await;
+    assert!(matches!(
+        fixture
+            .engine
+            .reconcile_catalog_current(
+                &fixture.blob,
+                &fixture.head_object,
+                &fixture.first,
+                &fixture.second,
+                &token,
+            )
+            .await
+            .expect("backfill"),
+        CatalogReconciliation::Repaired
+    ));
+    let key = catalog_key_from_canonical(&fixture.blob).expect("catalog key");
+    assert_eq!(
+        fixture.first.control(&key).expect("first catalog").bytes,
+        current
+    );
+    fixture.second.remove_control(&key);
+    assert!(matches!(
+        fixture
+            .engine
+            .reconcile_catalog_current(
+                &fixture.blob,
+                &fixture.head_object,
+                &fixture.first,
+                &fixture.second,
+                &token,
+            )
+            .await
+            .expect("one-sided repair"),
+        CatalogReconciliation::Repaired
+    ));
+    assert_eq!(
+        fixture.first.control(&key).expect("first catalog").bytes,
+        fixture.second.control(&key).expect("second catalog").bytes
+    );
+}
+
+#[tokio::test]
+async fn catalog_tamper_or_newer_state_is_reported_for_quarantine() {
+    let fixture = Fixture::new(
+        &[ManifestState::Committed, ManifestState::Committed],
+        &[1, 2],
+        std::time::Duration::from_secs(60),
+    )
+    .await;
+    let current = fixture.history[0].bytes.clone();
+    fixture
+        .first
+        .put_control(&fixture.head_object, current.clone());
+    fixture
+        .second
+        .put_control(&fixture.head_object, current.clone());
+    let key = catalog_key_from_canonical(&fixture.blob).expect("catalog key");
+    fixture.first.put_control(&key, b"{}".to_vec());
+    let token = test_token().await;
+    assert!(matches!(
+        fixture
+            .engine
+            .reconcile_catalog_current(
+                &fixture.blob,
+                &fixture.head_object,
+                &fixture.first,
+                &fixture.second,
+                &token,
+            )
+            .await
+            .expect("tamper classification"),
+        CatalogReconciliation::Conflict(reason) if reason.contains("tampered")
+    ));
+
+    fixture
+        .first
+        .put_control(&key, fixture.history[1].bytes.clone());
+    fixture
+        .second
+        .put_control(&key, fixture.history[1].bytes.clone());
+    assert!(matches!(
+        fixture
+            .engine
+            .reconcile_catalog_current(
+                &fixture.blob,
+                &fixture.head_object,
+                &fixture.first,
+                &fixture.second,
+                &token,
+            )
+            .await
+            .expect("newer classification"),
+        CatalogReconciliation::Conflict(reason) if reason.contains("newer")
+    ));
+}
+
+#[tokio::test]
+async fn catalog_conflict_quarantines_before_tombstone_collection() {
+    let fixture = Fixture::new(
+        &[ManifestState::Committed, ManifestState::Tombstoned],
+        &[1, 2],
+        std::time::Duration::ZERO,
+    )
+    .await;
+    let active = &fixture.history[1];
+    let path_hash = logical_path_hash(&fixture.blob);
+    for backend in [&fixture.first, &fixture.second] {
+        backend.put_control(&fixture.head_object, active.bytes.clone());
+        backend.put_control(
+            &format!("high-water/{path_hash}/current.json"),
+            active.bytes.clone(),
+        );
+        backend.put_control(
+            &committed_manifest_object(&active.signed.payload).expect("committed object"),
+            active.bytes.clone(),
+        );
+    }
+    let key = catalog_key_from_canonical(&fixture.blob).expect("catalog key");
+    fixture.first.put_control(&key, b"{}".to_vec());
+    let report = fixture
+        .engine
+        .reconcile_head_locked(
+            &fixture.head_object,
+            Some(&fixture.blob),
+            fixture.first.id(),
+            &test_token().await,
+        )
+        .await
+        .expect("quarantine");
+    assert_eq!(report.health_after, HealthState::Quarantined);
+    let quarantine_key = format!("quarantine/{path_hash}.json");
+    assert!(fixture.first.control(&quarantine_key).is_some());
+    assert!(fixture.second.control(&quarantine_key).is_some());
+    assert!(fixture.marker_keys().is_empty());
 }

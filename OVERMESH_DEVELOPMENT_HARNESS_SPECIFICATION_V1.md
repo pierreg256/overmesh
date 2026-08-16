@@ -735,8 +735,11 @@ The V1 operation vocabulary includes conditional `HEAD` and `GET`, byte
 ranges, signature invalidation, untrusted signing keys, prepared-publication
 observation, replica consistency observation, explicit repair attempts,
 virtual-time advancement, collection, resurrection attempts, and
-delete/recreate histories. Unknown fields and unknown operation variants MUST
-be rejected.
+delete/recreate histories. It also includes list-containers/list-blobs,
+continuation tamper/reuse/expiry/Ring rollover, Put Block, ordered
+Latest/Committed/Uncommitted Put Block List, Get Block List, staged-replica
+removal/tampering, and staged collection. Unknown fields and unknown operation
+variants MUST be rejected.
 
 ## 14. Test Suites
 
@@ -755,6 +758,11 @@ Validates:
 - range reads;
 - listing and continuation tokens;
 - Azure-compatible errors and headers.
+
+The deterministic model MUST assert that staged blocks remain invisible,
+tampered stages are never commit/repair sources, stale stages cannot cross a
+delete or overwrite base generation, and signed continuation markers reject
+cross-request or Ring reuse.
 
 ### Suite 1: Identity and Security
 
@@ -1153,6 +1161,17 @@ The compatibility matrix MUST pin:
 - requested Azure Storage API version;
 - authentication mode;
 - supported scenario IDs.
+- supported listing parameters and include values;
+- ordered W=2 catalog page bounds and absence of `heads/` discovery;
+- exact signed-head catalog publication, idempotent retry, one-sided recovery,
+  backfill, conflict/tamper quarantine, delete, and recreation;
+- catalog-derived container enumeration, explicit replica authorization
+  asymmetry, system-container exclusion, no account-scoped caller listing, and
+  list-only authorization without per-blob read probes;
+- delimiter groups crossing backend page boundaries and continuation without
+  duplicate or omitted entries for an unchanged catalog;
+- decoded block-ID, block-size, block-count, and staging-retention limits;
+- continuation-token lifetime and concurrent-write semantics.
 
 Each supported SDK validates:
 
@@ -1392,6 +1411,17 @@ Runs:
 - real Azure Key Vault signing;
 - selected Azure Front Door validation;
 - long-running stability tests.
+
+The placement suite MUST include at least three independent Storage Accounts
+with RF=2. It MUST prove that deterministic placement exercises every expected
+replica pair and that disabling one Storage Account affects writes only for
+logical blobs whose selected replica set contains that node. Reads and writes
+for blobs placed on the two surviving nodes MUST remain functional.
+
+The `0.9.0` live gate MUST also provide positive and negative startup fixtures
+for actual Azure regions: three distinct matching Storage Account locations,
+a signed-region mismatch, and two Ring nodes resolving to the same Azure
+region. The latter two cases MUST prevent Gateway readiness.
 
 ### 21.5 Live Performance Baselines
 

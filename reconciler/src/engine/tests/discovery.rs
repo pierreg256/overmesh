@@ -40,6 +40,13 @@ async fn incremental_discovery_is_bounded_and_n_node_reconciliation_uses_selecte
             history_compaction_max_versions_per_cycle: 64,
             head_discovery_batch_size: 2,
             head_discovery_cursor_path: cursor_path.clone(),
+            staged_block_gc_max_records_per_cycle: 256,
+            staged_block_metadata_cursor_path: PathBuf::from(
+                "target/discovery-staged-metadata-cursor-unused.json",
+            ),
+            staged_block_marker_cursor_path: PathBuf::from(
+                "target/discovery-staged-marker-cursor-unused.json",
+            ),
         },
     );
     let token = test_token().await;

@@ -65,6 +65,9 @@ async fn main() -> Result<()> {
         runtime.history_compaction_max_versions_per_cycle;
     let head_discovery_batch_size = runtime.head_discovery_batch_size;
     let head_discovery_cursor_path = runtime.head_discovery_cursor_path;
+    let staged_block_gc_max_records_per_cycle = runtime.staged_block_gc_max_records_per_cycle;
+    let staged_block_metadata_cursor_path = runtime.staged_block_metadata_cursor_path;
+    let staged_block_marker_cursor_path = runtime.staged_block_marker_cursor_path;
     let engine = ReconcilerEngine::new(
         Arc::new(runtime.ring.document),
         runtime.backends,
@@ -76,6 +79,9 @@ async fn main() -> Result<()> {
             history_compaction_max_versions_per_cycle,
             head_discovery_batch_size,
             head_discovery_cursor_path,
+            staged_block_gc_max_records_per_cycle,
+            staged_block_metadata_cursor_path,
+            staged_block_marker_cursor_path,
         },
     );
     match cli.command {

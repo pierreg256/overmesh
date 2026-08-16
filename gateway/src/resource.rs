@@ -63,8 +63,31 @@ impl LogicalBlobId {
         })
     }
 
+    pub fn from_canonical(account: &str, canonical: &str) -> Result<Self, LogicalResourceError> {
+        let account_prefix = format!("/{}", encode_path_component(account));
+        let path = canonical
+            .strip_prefix(&account_prefix)
+            .filter(|value| value.starts_with('/'))
+            .ok_or(LogicalResourceError::EmptyAccount)?;
+        Self::parse(account, path)
+    }
+
     pub fn account(&self) -> &str {
         &self.account
+    }
+
+    pub fn parse_container_path(request_path: &str) -> Result<String, LogicalResourceError> {
+        let encoded = request_path
+            .strip_prefix('/')
+            .ok_or(LogicalResourceError::InvalidContainer)?;
+        if encoded.is_empty() || encoded.contains('/') {
+            return Err(LogicalResourceError::InvalidContainer);
+        }
+        let container = percent_decode(encoded)?;
+        if !valid_container_name(&container) {
+            return Err(LogicalResourceError::InvalidContainer);
+        }
+        Ok(container)
     }
 
     pub fn container(&self) -> &str {

@@ -2,7 +2,7 @@
 
 The gateway is the Azure Blob-compatible HTTP data-plane entry point.
 
-Milestones through `0.7.0` provide:
+Milestones through `0.8.0` provide:
 
 - fail-closed signed Ring startup;
 - ES256 Ring signature validation;
@@ -46,6 +46,26 @@ Milestones through `0.7.0` provide:
 - idempotent delete retry and partial tombstone-publication recovery;
 - durable tombstone high-water checkpoints and anti-resurrection enforcement;
 - recreation after deletion as a strictly newer logical generation.
+- logical `List Blobs` from bounded pages of an ordered W=2 catalog containing
+  exact signed current-head bytes, revalidated against both heads, high-water
+  checkpoints, compaction floors, sidecars, Ring placement, and quarantine;
+- logical `List Containers` from bounded signed catalog pages with per-container
+  caller authorization, excluding `overmesh-system`, unauthorized containers,
+  and containers without a current visible catalog entry;
+- `prefix`, one-character `delimiter`, opaque `marker`, `maxresults`, and
+  `include=metadata`;
+- signed continuation tokens bound to account, scope, normalized query,
+  requested page size, Ring version/hash, last catalog ordering key,
+  issue/expiry time, and signing key;
+- no per-blob caller read authorization or content probe after successful
+  container-list authorization; catalog validation uses typed control-plane
+  reads under the gateway identity;
+- W=2 `Put Block`, `Put Block List`, and `Get Block List` with exact Azure
+  block IDs retained only in signed metadata;
+- immutable unpredictable staged content paths, equal decoded block-ID length
+  enforcement, strict size/count limits, and retry conflict detection;
+- bounded-disk assembly of selected `Latest`, `Committed`, and `Uncommitted`
+  blocks under the existing per-blob lease and commit protocol.
 
 `HEAD` validates signed declarations and physical lengths without downloading
 the block-manifest root, its pages, or the content body. `GET` loads only the
@@ -57,14 +77,48 @@ corruption fails closed.
 
 `DELETE` returns `202` only after both signed tombstone heads and both durable
 high-water checkpoints are identical. It never synchronously removes immutable
-content. Listing, public block APIs, and metadata/property mutation remain
-unsupported until later milestones.
+content. Container creation/deletion and general metadata/property mutation
+remain unsupported.
+
+Listing is case-sensitive and uses canonical Azure path decoding. It omits
+PREPARED and TOMBSTONED heads, staged blocks, `.overmesh/*`, system-container
+objects, and any missing, quarantined, tampered, drifted, or replayed record.
+`include` values other than `metadata` fail explicitly. Continuation over an
+unchanged state has no duplicates or omissions. Concurrent inserts after the
+last ordering key may appear on later pages; inserts before it are observed by
+a new enumeration, and concurrent deletes disappear.
+
+Block uploads use `x-overmesh-upload-id` to identify one staging generation.
+When omitted, the Gateway derives an implicit generation from the caller,
+logical blob, and current base generation so unmodified Azure SDK/CLI/AzCopy
+requests with per-request client IDs still share one uncommitted namespace.
+All `Put Block` requests in a generation must use the same decoded block-ID
+length. The published subset supports at most 50,000 blocks, 64 decoded bytes
+per block ID, and 100 MiB per staged block. Stages are retained for the
+configured period and are never visible through blob reads or listing.
+An explicit upload ID remains bound to its original base generation until its
+stages expire; applications starting after overwrite/delete/recreate use a new
+explicit ID.
+`Put Block` authorization is enforced by the actual unpredictable staged
+content upload. Idempotent committed-write replay first confirms that the
+immutable content still exists, then uses a conditional `Put Blob` against that
+existing object; Azure `409/412` proves current write permission without
+changing bytes. Backend `401/403` maps to `AuthorizationPermissionMismatch`.
 
 Every `PUT` and `DELETE` MUST provide a stable idempotency key. The gateway
 uses `x-overmesh-write-id` when present, otherwise
 `x-ms-client-request-id`. Values are 1-128 path-safe ASCII characters
 (`A-Z`, `a-z`, `0-9`, `-`, `.`, `_`, `~`). A missing ID returns Azure-style
 `400 MissingRequiredHeader`; the gateway never invents a client write ID.
+
+Listing and staging retention are bounded in configuration:
+
+```yaml
+listing:
+  continuationTokenLifetimeSeconds: 900
+stagedBlocks:
+  retentionSeconds: 604800
+```
 
 ## Local execution
 
@@ -112,4 +166,6 @@ key's valid period remain readable after rotation.
 
 Commit responsibilities are split under `src/commit/` into write, delete,
 high-water, recovery, locking, and quarantine modules. `commit.rs` retains the
-stable public coordinator/service API and shared invariants.
+stable public coordinator/service API and shared invariants. Listing,
+continuation-token, and public block behavior live in `listing.rs`,
+`continuation.rs`, and `block.rs`.

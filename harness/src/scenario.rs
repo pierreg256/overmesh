@@ -147,6 +147,69 @@ pub enum Operation {
         blob: String,
         write_id: String,
     },
+    ListContainers {
+        blob: String,
+        #[serde(default)]
+        prefix: String,
+        #[serde(default)]
+        max_results: Option<u32>,
+    },
+    ListBlobs {
+        blob: String,
+        #[serde(default)]
+        prefix: String,
+        #[serde(default)]
+        delimiter: String,
+        #[serde(default)]
+        marker: Option<String>,
+        #[serde(default)]
+        max_results: Option<u32>,
+        #[serde(default)]
+        include: Vec<String>,
+    },
+    PutBlock {
+        blob: String,
+        dataset: String,
+        write_id: String,
+        upload_id: String,
+        block_id: String,
+    },
+    PutBlockList {
+        blob: String,
+        write_id: String,
+        upload_id: String,
+        blocks: Vec<BlockListSelection>,
+    },
+    GetBlockList {
+        blob: String,
+        #[serde(default)]
+        upload_id: Option<String>,
+        block_list_type: ScenarioBlockListType,
+    },
+    TamperContinuation {
+        blob: String,
+    },
+    ReuseContinuation {
+        blob: String,
+    },
+    ExpireContinuation {
+        blob: String,
+    },
+    RolloverRing {
+        blob: String,
+    },
+    TamperStagedBlock {
+        blob: String,
+        block_id: String,
+    },
+    RemoveStagedReplica {
+        blob: String,
+        block_id: String,
+        replica: ReplicaName,
+    },
+    CollectStaged {
+        blob: String,
+    },
     Head {
         blob: String,
         #[serde(default)]
@@ -211,6 +274,18 @@ impl Operation {
         match self {
             Self::PutBlob { blob, .. }
             | Self::DeleteBlob { blob, .. }
+            | Self::ListContainers { blob, .. }
+            | Self::ListBlobs { blob, .. }
+            | Self::PutBlock { blob, .. }
+            | Self::PutBlockList { blob, .. }
+            | Self::GetBlockList { blob, .. }
+            | Self::TamperContinuation { blob }
+            | Self::ReuseContinuation { blob }
+            | Self::ExpireContinuation { blob }
+            | Self::RolloverRing { blob }
+            | Self::TamperStagedBlock { blob, .. }
+            | Self::RemoveStagedReplica { blob, .. }
+            | Self::CollectStaged { blob }
             | Self::Head { blob, .. }
             | Self::GetBlob { blob, .. }
             | Self::TamperContent { blob, .. }
@@ -226,6 +301,29 @@ impl Operation {
             | Self::Reconcile { blob } => blob,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BlockListSelection {
+    pub kind: BlockSelectionKind,
+    pub block_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BlockSelectionKind {
+    Latest,
+    Committed,
+    Uncommitted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ScenarioBlockListType {
+    Committed,
+    Uncommitted,
+    All,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

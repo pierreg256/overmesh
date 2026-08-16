@@ -9,6 +9,10 @@ cargo run --quiet -p overmesh-harness -- issue-token valid --principal reconcile
 reconciler_token=$(cat .harness/reconciler-token.jwt)
 cargo run --quiet -p overmesh-harness -- issue-token valid --principal gateway \
   >.harness/gateway-control-token.jwt
+rm -f \
+  reconciler/config/head-discovery-cursor.local.json \
+  reconciler/config/staged-block-metadata-cursor.local.json \
+  reconciler/config/staged-block-marker-cursor.local.json
 
 create_container() {
   local replica_port=$1
@@ -31,6 +35,10 @@ done
 
 reset_storage() {
   make dev-reset
+  rm -f \
+    reconciler/config/head-discovery-cursor.local.json \
+    reconciler/config/staged-block-metadata-cursor.local.json \
+    reconciler/config/staged-block-marker-cursor.local.json
   for replica_port in 12100 12101; do
     create_container "$replica_port" overmesh-system
     create_container "$replica_port" reconcile
@@ -50,6 +58,10 @@ gateway_pid=$!
 
 cleanup() {
   cargo run --quiet -p overmesh-harness -- fault reset >/dev/null 2>&1 || true
+  rm -f \
+    reconciler/config/head-discovery-cursor.local.json \
+    reconciler/config/staged-block-metadata-cursor.local.json \
+    reconciler/config/staged-block-marker-cursor.local.json
   if kill -0 "$gateway_pid" >/dev/null 2>&1; then
     kill -INT "$gateway_pid"
     wait "$gateway_pid" || true
@@ -131,6 +143,35 @@ run_reconciler() {
 }
 
 smoke_run="${HARNESS_RUN_ID:-local}-$$"
+stage_blob="/reconcile/stage-$smoke_run"
+stage_upload="stage-upload-$smoke_run"
+stage_block_id='YmxvY2stMDAwMQ=='
+stage_hash=$(printf '/local-overmesh%s' "$stage_blob" | shasum -a 256 | awk '{print $1}')
+stage_upload_hash=$(printf '%s' "$stage_upload" | shasum -a 256 | awk '{print $1}')
+stage_block_hash=$(printf '%s' "$stage_block_id" | shasum -a 256 | awk '{print $1}')
+stage_metadata="staged-blocks/$stage_hash/$stage_upload_hash/$stage_block_hash.json"
+test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X PUT \
+  -H "Authorization: Bearer $token" \
+  -H 'x-ms-version: 2025-11-05' \
+  -H "x-overmesh-write-id: $stage_upload" \
+  -H "x-overmesh-upload-id: $stage_upload" \
+  --data-binary 'staged repair data' \
+  "http://127.0.0.1:18080$stage_blob?comp=block&blockid=YmxvY2stMDAwMQ%3D%3D")" = "201"
+test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+  -H "Authorization: Bearer $token" \
+  -H 'x-ms-version: 2025-11-05' \
+  "http://127.0.0.1:18080$stage_blob")" = "404"
+storage_get 12100 "$stage_metadata" .harness/reconcile-stage-a.json
+storage_get 12101 "$stage_metadata" .harness/reconcile-stage-b.json
+cmp .harness/reconcile-stage-a.json .harness/reconcile-stage-b.json
+curl --insecure --fail --silent --output /dev/null -X DELETE \
+  -H "Authorization: Bearer $token" \
+  -H 'x-ms-version: 2025-11-05' \
+  "https://127.0.0.1:12101/devstoreaccount1/overmesh-system/$stage_metadata"
+run_reconciler .harness/reconcile-stage-repair-report.json
+storage_get 12101 "$stage_metadata" .harness/reconcile-stage-repaired-b.json
+cmp .harness/reconcile-stage-a.json .harness/reconcile-stage-repaired-b.json
+
 repair_blob="/reconcile/repair-$smoke_run"
 repair_hash=$(printf '/local-overmesh%s' "$repair_blob" | shasum -a 256 | awk '{print $1}')
 repair_head="heads/$repair_hash.json"

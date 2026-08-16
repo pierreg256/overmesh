@@ -48,13 +48,15 @@ status = "completed"
 version = "0.8.0"
 generation = "V1"
 name = "Listing, block APIs, and continuation tokens"
-status = "active"
+status = "completed"
 deliverables = [
   "Implement Azure-compatible container and blob listing without exposing Overmesh internal namespaces.",
   "Implement supported block staging, block-list inspection, and block-list commit operations under W=2.",
   "Issue signed opaque continuation tokens bound to account, container, prefix, delimiter, Ring version, and listing position.",
   "Preserve caller/control identity separation and validate every client-visible result against signed Overmesh state.",
-  "Extend deterministic, system, SDK, CLI, AzCopy, and live Azure gates for the new operations."
+  "Extend deterministic, system, SDK, CLI, AzCopy, and live Azure gates for the new operations.",
+  "Define deterministic concurrent-list semantics, block-generation retention, staged repair, and fail-closed GC evidence.",
+  "Validate RF=2 placement across three local Storage backends and prove that a single backend outage affects only writes whose replica set contains that backend."
 ]
 
 [[milestones]]
@@ -65,6 +67,8 @@ status = "planned"
 deliverables = [
   "Provision private Azure Container Apps environments for the Gateway and Reconciler before client conformance work.",
   "Deploy managed-identity-only Gateway and Reconciler revisions with private Storage and Key Vault connectivity.",
+  "Validate startup against Azure Resource Manager and refuse readiness unless every Ring Storage Account location matches its signed Ring region and all Ring nodes use distinct Azure regions.",
+  "Run live Azure placement and single-Storage-Account failure tests with at least three Storage Accounts while preserving RF=2.",
   "Integrate Azure Front Door with caching and content transformation disabled for Blob data-plane routes.",
   "Validate Azure SDK .NET, Python, and JavaScript, Azure CLI, and AzCopy against the deployed surface.",
   "Complete two-region live Azure conformance and retain signed deployment evidence."

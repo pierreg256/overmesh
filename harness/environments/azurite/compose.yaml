@@ -59,12 +59,43 @@ services:
       timeout: 2s
       retries: 30
 
+  storage-c:
+    image: mcr.microsoft.com/azure-storage/azurite:3.36.0
+    command:
+      - azurite-blob
+      - --blobHost
+      - 0.0.0.0
+      - --location
+      - /data
+      - --debug
+      - /logs/azurite-c.log
+      - --oauth
+      - basic
+      - --cert
+      - /certs/azurite.pem
+      - --key
+      - /certs/azurite-key.pem
+    volumes:
+      - storage-c-data:/data
+      - storage-c-logs:/logs
+      - ${PWD}/.harness/certs:/certs:ro
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "const net=require('net');const socket=net.connect(10000,'127.0.0.1');socket.on('connect',()=>process.exit(0));socket.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),1000);"
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
   toxiproxy:
     image: ghcr.io/shopify/toxiproxy:2.12.0
     ports:
       - "${HARNESS_TOXIPROXY_PORT:-18474}:8474"
       - "${HARNESS_PROXY_A_PORT:-12100}:11000"
       - "${HARNESS_PROXY_B_PORT:-12101}:11001"
+      - "${HARNESS_PROXY_C_PORT:-12102}:11002"
     healthcheck:
       test:
         - CMD
@@ -83,6 +114,8 @@ services:
         condition: service_healthy
       storage-b:
         condition: service_healthy
+      storage-c:
+        condition: service_healthy
       toxiproxy:
         condition: service_healthy
     entrypoint:
@@ -92,12 +125,16 @@ services:
       - |
         curl -fsS -X DELETE http://toxiproxy:8474/proxies/storage-a >/dev/null 2>&1 || true
         curl -fsS -X DELETE http://toxiproxy:8474/proxies/storage-b >/dev/null 2>&1 || true
+        curl -fsS -X DELETE http://toxiproxy:8474/proxies/storage-c >/dev/null 2>&1 || true
         curl -fsS -X POST http://toxiproxy:8474/proxies \
           -H 'Content-Type: application/json' \
           -d '{"name":"storage-a","listen":"0.0.0.0:11000","upstream":"storage-a:10000"}'
         curl -fsS -X POST http://toxiproxy:8474/proxies \
           -H 'Content-Type: application/json' \
           -d '{"name":"storage-b","listen":"0.0.0.0:11001","upstream":"storage-b:10000"}'
+        curl -fsS -X POST http://toxiproxy:8474/proxies \
+          -H 'Content-Type: application/json' \
+          -d '{"name":"storage-c","listen":"0.0.0.0:11002","upstream":"storage-c:10000"}'
     restart: "no"
 
 volumes:
@@ -105,3 +142,5 @@ volumes:
   storage-a-logs:
   storage-b-data:
   storage-b-logs:
+  storage-c-data:
+  storage-c-logs:

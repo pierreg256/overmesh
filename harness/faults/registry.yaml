@@ -45,4 +45,9 @@ groups:
     - FAULT-RACE-005
     - FAULT-RACE-006
     - FAULT-RACE-007
-
+  listing:
+    - FAULT-LIST-001
+  continuation:
+    - FAULT-TOKEN-001
+  staging:
+    - FAULT-STAGE-001

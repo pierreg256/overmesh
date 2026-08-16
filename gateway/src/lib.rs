@@ -1,10 +1,14 @@
 pub mod app;
 pub mod auth;
 pub mod backend;
+pub mod block;
+pub mod catalog;
 pub mod commit;
 pub mod config;
+pub mod continuation;
 pub mod error;
 pub mod identity;
+pub mod listing;
 pub mod manifest;
 pub mod read;
 pub mod resource;

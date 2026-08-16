@@ -42,6 +42,29 @@ pub struct ReconcilerConfig {
     pub history_compaction: HistoryCompactionConfig,
     #[serde(default)]
     pub head_discovery: HeadDiscoveryConfig,
+    #[serde(default)]
+    pub staged_block_gc: StagedBlockGcConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StagedBlockGcConfig {
+    #[serde(default = "default_staged_block_gc_max_records_per_cycle")]
+    pub max_records_per_cycle: usize,
+    #[serde(default = "default_staged_block_metadata_cursor_path")]
+    pub metadata_cursor_path: PathBuf,
+    #[serde(default = "default_staged_block_marker_cursor_path")]
+    pub marker_cursor_path: PathBuf,
+}
+
+impl Default for StagedBlockGcConfig {
+    fn default() -> Self {
+        Self {
+            max_records_per_cycle: default_staged_block_gc_max_records_per_cycle(),
+            metadata_cursor_path: default_staged_block_metadata_cursor_path(),
+            marker_cursor_path: default_staged_block_marker_cursor_path(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -126,6 +149,9 @@ pub struct ReconcilerRuntime {
     pub history_compaction_max_versions_per_cycle: usize,
     pub head_discovery_batch_size: usize,
     pub head_discovery_cursor_path: PathBuf,
+    pub staged_block_gc_max_records_per_cycle: usize,
+    pub staged_block_metadata_cursor_path: PathBuf,
+    pub staged_block_marker_cursor_path: PathBuf,
 }
 
 impl ReconcilerConfig {
@@ -156,6 +182,10 @@ impl ReconcilerConfig {
             *path = resolve(base, path);
         }
         config.head_discovery.cursor_path = resolve(base, &config.head_discovery.cursor_path);
+        config.staged_block_gc.metadata_cursor_path =
+            resolve(base, &config.staged_block_gc.metadata_cursor_path);
+        config.staged_block_gc.marker_cursor_path =
+            resolve(base, &config.staged_block_gc.marker_cursor_path);
         Ok(config)
     }
 
@@ -163,6 +193,14 @@ impl ReconcilerConfig {
         anyhow::ensure!(
             (1..=5_000).contains(&self.head_discovery.batch_size),
             "headDiscovery.batchSize must be between 1 and 5000"
+        );
+        anyhow::ensure!(
+            (1..=5_000).contains(&self.staged_block_gc.max_records_per_cycle),
+            "stagedBlockGc.maxRecordsPerCycle must be between 1 and 5000"
+        );
+        anyhow::ensure!(
+            self.staged_block_gc.metadata_cursor_path != self.staged_block_gc.marker_cursor_path,
+            "stagedBlockGc metadataCursorPath and markerCursorPath must differ"
         );
         anyhow::ensure!(
             (1..=5_000).contains(&self.history_compaction.max_versions_per_cycle),
@@ -303,6 +341,9 @@ impl ReconcilerConfig {
                 .max_versions_per_cycle,
             head_discovery_batch_size: self.head_discovery.batch_size,
             head_discovery_cursor_path: self.head_discovery.cursor_path,
+            staged_block_gc_max_records_per_cycle: self.staged_block_gc.max_records_per_cycle,
+            staged_block_metadata_cursor_path: self.staged_block_gc.metadata_cursor_path,
+            staged_block_marker_cursor_path: self.staged_block_gc.marker_cursor_path,
         })
     }
 }
@@ -329,6 +370,18 @@ fn default_head_discovery_batch_size() -> usize {
 
 fn default_head_discovery_cursor_path() -> PathBuf {
     PathBuf::from("reconciler-head-discovery-cursor.json")
+}
+
+const fn default_staged_block_gc_max_records_per_cycle() -> usize {
+    256
+}
+
+fn default_staged_block_metadata_cursor_path() -> PathBuf {
+    PathBuf::from("reconciler-staged-block-metadata-cursor.json")
+}
+
+fn default_staged_block_marker_cursor_path() -> PathBuf {
+    PathBuf::from("reconciler-staged-block-marker-cursor.json")
 }
 
 fn default_management_endpoint() -> String {

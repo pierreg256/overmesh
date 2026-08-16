@@ -28,6 +28,7 @@ account_b_json=".harness/live-storage-account-b-$run_id.json"
 blob_a_json=".harness/live-storage-blob-a-$run_id.json"
 blob_b_json=".harness/live-storage-blob-b-$run_id.json"
 probe_body=".harness/live-storage-probe-$run_id.xml"
+probe_headers=".harness/live-storage-probe-$run_id.headers"
 
 cleanup() {
   rm -f \
@@ -35,7 +36,8 @@ cleanup() {
     "$account_b_json" \
     "$blob_a_json" \
     "$blob_b_json" \
-    "$probe_body"
+    "$probe_body" \
+    "$probe_headers"
 }
 trap cleanup EXIT
 
@@ -208,7 +210,8 @@ probe_absent_blob() {
   elif [[ "$method" == "DELETE" ]]; then
     query_suffix='?snapshot=2000-01-01T00%3A00%3A00.0000000Z'
   fi
-  status=$(curl --silent --show-error --output "$probe_body" --write-out '%{http_code}' \
+  status=$(curl --silent --show-error --dump-header "$probe_headers" \
+    --output "$probe_body" --write-out '%{http_code}' \
     "${curl_method[@]}" \
     -H "Authorization: Bearer $token" \
     -H "x-ms-version: $version" \
@@ -220,6 +223,139 @@ probe_absent_blob() {
     exit 1
   fi
   echo "$identity $method probe returned expected $status for $endpoint using $version."
+}
+
+probe_listing_authorization() {
+  local endpoint=$1
+  local allowed_token=$2
+  local denied_token=$3
+  local version=$4
+  local status
+  for scope in account container system; do
+    local url="${endpoint%/}/?comp=list&maxresults=1"
+    if [[ "$scope" == "container" ]]; then
+      url="${endpoint%/}/$OVERMESH_LIVE_CUSTOMER_CONTAINER?restype=container&comp=list&maxresults=1"
+    elif [[ "$scope" == "system" ]]; then
+      url="${endpoint%/}/overmesh-system?restype=container&comp=list&maxresults=1"
+    fi
+    status=$(curl --silent --show-error --output "$probe_body" --write-out '%{http_code}' \
+      --oauth2-bearer "$allowed_token" \
+      -H "x-ms-version: $version" \
+      -H "x-ms-date: $(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S GMT')" \
+      "$url")
+    local allowed_expected=200
+    if [[ "$scope" == "account" || "$scope" == "system" ]]; then
+      allowed_expected=403
+    fi
+    [[ "$status" == "$allowed_expected" ]] || {
+      echo "Allowed $scope listing returned $status instead of $allowed_expected for $endpoint using $version." >&2
+      cat "$probe_body" >&2
+      exit 1
+    }
+    status=$(curl --silent --show-error --output "$probe_body" --write-out '%{http_code}' \
+      --oauth2-bearer "$denied_token" \
+      -H "x-ms-version: $version" \
+      -H "x-ms-date: $(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S GMT')" \
+      "$url")
+    [[ "$status" == "403" ]] || {
+      echo "Denied $scope listing returned $status instead of 403 for $endpoint using $version." >&2
+      cat "$probe_body" >&2
+      exit 1
+    }
+  done
+}
+
+probe_block_operations() {
+  local endpoint=$1
+  local allowed_token=$2
+  local denied_token=$3
+  local version=$4
+  local blob=".overmesh-authorization-canary/block/$run_id-$version"
+  local denied_blob="$blob-denied"
+  local blob_url="${endpoint%/}/$OVERMESH_LIVE_CUSTOMER_CONTAINER/$blob"
+  local denied_url="${endpoint%/}/$OVERMESH_LIVE_CUSTOMER_CONTAINER/$denied_blob"
+  local block_id='YmxvY2stMDAwMQ%3D%3D'
+  local block_list='.harness/live-storage-block-list-'$run_id'.xml'
+  local status
+  printf '%s' '<BlockList><Latest>YmxvY2stMDAwMQ==</Latest></BlockList>' >"$block_list"
+
+  cleanup_block_canary() {
+    curl --silent --show-error --output /dev/null -X PUT \
+      --oauth2-bearer "$allowed_token" \
+      -H "x-ms-version: $version" \
+      -H "x-ms-date: $(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S GMT')" \
+      -H 'x-ms-blob-type: BlockBlob' \
+      -H 'Content-Length: 0' \
+      "$blob_url" || true
+    curl --silent --show-error --output /dev/null -X DELETE \
+      --oauth2-bearer "$allowed_token" \
+      -H "x-ms-version: $version" \
+      -H "x-ms-date: $(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S GMT')" \
+      "$blob_url" || true
+    rm -f "$block_list"
+  }
+
+  status=$(printf 'block-data' | curl --silent --show-error --output "$probe_body" --write-out '%{http_code}' \
+    -X PUT --oauth2-bearer "$allowed_token" \
+    -H "x-ms-version: $version" \
+    -H "x-ms-date: $(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S GMT')" \
+    --data-binary @- "$blob_url?comp=block&blockid=$block_id")
+  [[ "$status" == "201" ]] || {
+    echo "Allowed Put Block returned $status instead of 201." >&2
+    cat "$probe_body" >&2
+    cleanup_block_canary
+    exit 1
+  }
+
+  status=$(printf 'denied' | curl --silent --show-error --output "$probe_body" --write-out '%{http_code}' \
+    -X PUT --oauth2-bearer "$denied_token" \
+    -H "x-ms-version: $version" \
+    -H "x-ms-date: $(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S GMT')" \
+    --data-binary @- "$denied_url?comp=block&blockid=$block_id")
+  [[ "$status" == "403" ]] || {
+    echo "Denied Put Block returned $status instead of 403." >&2
+    cat "$probe_body" >&2
+    cleanup_block_canary
+    exit 1
+  }
+
+  status=$(curl --silent --show-error --output "$probe_body" --write-out '%{http_code}' \
+    --oauth2-bearer "$allowed_token" \
+    -H "x-ms-version: $version" \
+    -H "x-ms-date: $(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S GMT')" \
+    "$blob_url?comp=blocklist&blocklisttype=uncommitted")
+  [[ "$status" == "200" ]] && grep -q '<UncommittedBlocks>' "$probe_body" || {
+    echo "Get Block List uncommitted shape probe failed with $status." >&2
+    cat "$probe_body" >&2
+    cleanup_block_canary
+    exit 1
+  }
+
+  status=$(curl --silent --show-error --output "$probe_body" --write-out '%{http_code}' \
+    -X PUT --oauth2-bearer "$allowed_token" \
+    -H "x-ms-version: $version" \
+    -H "x-ms-date: $(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S GMT')" \
+    -H 'Content-Type: application/xml' \
+    --data-binary @"$block_list" "$blob_url?comp=blocklist")
+  [[ "$status" == "201" ]] || {
+    echo "Put Block List returned $status instead of 201." >&2
+    cat "$probe_body" >&2
+    cleanup_block_canary
+    exit 1
+  }
+
+  status=$(curl --silent --show-error --output "$probe_body" --write-out '%{http_code}' \
+    --oauth2-bearer "$allowed_token" \
+    -H "x-ms-version: $version" \
+    -H "x-ms-date: $(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S GMT')" \
+    "$blob_url?comp=blocklist&blocklisttype=committed")
+  [[ "$status" == "200" ]] && grep -q '<CommittedBlocks>' "$probe_body" || {
+    echo "Get Block List committed shape probe failed with $status." >&2
+    cat "$probe_body" >&2
+    cleanup_block_canary
+    exit 1
+  }
+  cleanup_block_canary
 }
 
 IFS=',' read -r -a versions <<<"$storage_versions"
@@ -236,6 +372,16 @@ for version in "${versions[@]}"; do
     probe_absent_blob HEAD read "$endpoint" "$OVERMESH_LIVE_DENIED_TOKEN" "$version" 403 denied
     probe_absent_blob DELETE delete "$endpoint" "$OVERMESH_LIVE_DENIED_TOKEN" "$version" 403 denied
     probe_absent_blob DELETE delete "$endpoint" "$OVERMESH_LIVE_ALLOWED_TOKEN" "$version" 404 allowed
+    probe_listing_authorization \
+      "$endpoint" \
+      "$OVERMESH_LIVE_ALLOWED_TOKEN" \
+      "$OVERMESH_LIVE_DENIED_TOKEN" \
+      "$version"
+    probe_block_operations \
+      "$endpoint" \
+      "$OVERMESH_LIVE_ALLOWED_TOKEN" \
+      "$OVERMESH_LIVE_DENIED_TOKEN" \
+      "$version"
   done
 done
 

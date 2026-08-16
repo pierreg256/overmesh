@@ -2,7 +2,7 @@ use super::*;
 
 impl CommitCoordinator {
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::commit) async fn validate_or_repair_high_water(
+    pub(crate) async fn validate_or_repair_high_water(
         primary: &dyn ReplicaBackend,
         secondary: &dyn ReplicaBackend,
         path_hash: &str,
@@ -41,6 +41,25 @@ impl CommitCoordinator {
             Self::load_current_high_water(primary, path_hash, control_token, signer),
             Self::load_current_high_water(secondary, path_hash, control_token, signer)
         )?;
+        for high in [primary_high.as_ref(), secondary_high.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            if high.signed.payload.blob != expected_blob
+                || high.signed.payload.ring_version != ring_version
+                || compaction.as_ref().is_some_and(|checkpoint| {
+                    high.signed.payload.logical_version
+                        <= checkpoint.signed.payload.compacted_through_logical_version
+                        || high.signed.payload.logical_version
+                            < checkpoint
+                                .signed
+                                .payload
+                                .garbage_collection_history_head_logical_version
+                })
+            {
+                return Err(CommitError::VerificationFailed);
+            }
+        }
         let highest = match (primary_high, secondary_high) {
             (None, None) => None,
             (Some(value), None) => {
@@ -76,6 +95,10 @@ impl CommitCoordinator {
                 } else if primary_value.signed.payload.logical_version
                     > secondary_value.signed.payload.logical_version
                 {
+                    validate_manifest_successor(
+                        &primary_value.signed.payload,
+                        &secondary_value.signed.payload,
+                    )?;
                     Self::copy_high_water(
                         secondary,
                         path_hash,
@@ -86,6 +109,10 @@ impl CommitCoordinator {
                     .await?;
                     Some(primary_value)
                 } else {
+                    validate_manifest_successor(
+                        &secondary_value.signed.payload,
+                        &primary_value.signed.payload,
+                    )?;
                     Self::copy_high_water(
                         primary,
                         path_hash,
@@ -134,7 +161,7 @@ impl CommitCoordinator {
         }
     }
 
-    pub(in crate::commit) async fn publish_high_water(
+    pub(crate) async fn publish_high_water(
         primary: &dyn ReplicaBackend,
         secondary: &dyn ReplicaBackend,
         path_hash: &str,
@@ -148,6 +175,30 @@ impl CommitCoordinator {
             &committed.payload.signing_key_id,
             signer,
         )?;
+        let compaction = Self::strict_compaction_checkpoint(
+            primary,
+            secondary,
+            path_hash,
+            &committed.payload.blob,
+            committed.payload.ring_version,
+            control_token,
+            signer,
+        )
+        .await?;
+        let (primary_current, secondary_current) = tokio::try_join!(
+            Self::load_current_high_water(primary, path_hash, control_token, signer),
+            Self::load_current_high_water(secondary, path_hash, control_token, signer)
+        )?;
+        validate_recovery_floor(
+            &committed.payload,
+            primary_current.as_ref(),
+            compaction.as_ref(),
+        )?;
+        validate_recovery_floor(
+            &committed.payload,
+            secondary_current.as_ref(),
+            compaction.as_ref(),
+        )?;
         let bytes = committed_bytes.to_vec();
         let history_key = Self::high_water_history_key(path_hash, &committed.payload);
         tokio::try_join!(
@@ -155,24 +206,24 @@ impl CommitCoordinator {
             put_bytes_idempotent(secondary, &history_key, bytes.clone(), control_token)
         )?;
         let current_key = Self::high_water_current_key(path_hash);
-        let (primary_current, secondary_current) = tokio::try_join!(
-            primary.control_get_object(&current_key, control_token),
-            secondary.control_get_object(&current_key, control_token)
-        )?;
+        let primary_condition =
+            high_water_publication_condition(primary_current.as_ref(), committed, &bytes)?;
+        let secondary_condition =
+            high_water_publication_condition(secondary_current.as_ref(), committed, &bytes)?;
         let (primary_publish, secondary_publish) = tokio::join!(
-            primary.control_put_bytes(
+            publish_high_water_current(
+                primary,
                 &current_key,
-                bytes.clone(),
-                "application/json",
-                head_condition_from_object(primary_current.as_ref()),
-                control_token,
+                &bytes,
+                primary_condition,
+                control_token
             ),
-            secondary.control_put_bytes(
+            publish_high_water_current(
+                secondary,
                 &current_key,
-                bytes.clone(),
-                "application/json",
-                head_condition_from_object(secondary_current.as_ref()),
-                control_token,
+                &bytes,
+                secondary_condition,
+                control_token
             )
         );
         match (primary_publish, secondary_publish) {
@@ -189,6 +240,44 @@ impl CommitCoordinator {
             (Err(first), Err(_second)) => return Err(CommitError::Backend(first)),
         }
         verify_identical_objects(primary, secondary, &current_key, &bytes, control_token).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn validate_recovery_candidate(
+        primary: &dyn ReplicaBackend,
+        secondary: &dyn ReplicaBackend,
+        path_hash: &str,
+        expected_blob: &str,
+        ring_version: u64,
+        candidate: &LoadedHead,
+        control_token: &ControlToken,
+        signer: &dyn ManifestSigner,
+    ) -> Result<(), CommitError> {
+        if candidate.signed.payload.blob != expected_blob
+            || candidate.signed.payload.ring_version != ring_version
+        {
+            return Err(CommitError::VerificationFailed);
+        }
+        let compaction = Self::strict_compaction_checkpoint(
+            primary,
+            secondary,
+            path_hash,
+            expected_blob,
+            ring_version,
+            control_token,
+            signer,
+        )
+        .await?;
+        let (primary_high, secondary_high) = tokio::try_join!(
+            Self::load_current_high_water(primary, path_hash, control_token, signer),
+            Self::load_current_high_water(secondary, path_hash, control_token, signer)
+        )?;
+        let strict_high = match (primary_high.as_ref(), secondary_high.as_ref()) {
+            (None, None) => None,
+            (Some(primary), Some(secondary)) if primary.bytes == secondary.bytes => Some(primary),
+            _ => return Err(CommitError::VerificationFailed),
+        };
+        validate_recovery_floor(&candidate.signed.payload, strict_high, compaction.as_ref())
     }
 
     pub(in crate::commit) async fn load_current_high_water(
@@ -211,6 +300,7 @@ impl CommitCoordinator {
         ) {
             return Err(CommitError::VerificationFailed);
         }
+
         if signed.payload.state == ManifestState::Tombstoned {
             validate_tombstone_manifest(&signed.payload)?;
         }
@@ -452,6 +542,114 @@ impl CommitCoordinator {
             .await?;
         Ok(())
     }
+}
+
+fn validate_recovery_floor(
+    candidate: &CommitManifest,
+    high_water: Option<&LoadedHighWater>,
+    compaction: Option<&LoadedCompactionCheckpoint>,
+) -> Result<(), CommitError> {
+    if let Some(checkpoint) = compaction {
+        let floor = &checkpoint.signed.payload;
+        if candidate.logical_version <= floor.compacted_through_logical_version
+            || candidate.logical_version < floor.garbage_collection_history_head_logical_version
+        {
+            return Err(CommitError::VerificationFailed);
+        }
+        if candidate.logical_version == floor.compacted_through_logical_version.saturating_add(1)
+            && (candidate.previous_logical_etag.as_deref()
+                != Some(floor.compacted_through_logical_etag.as_str())
+                || !valid_state_transition(floor.compacted_through_state, candidate.state))
+        {
+            return Err(CommitError::VerificationFailed);
+        }
+    }
+    match high_water {
+        Some(current) if &current.signed.payload == candidate => Ok(()),
+        Some(current) => validate_manifest_successor(candidate, &current.signed.payload),
+        None if compaction.is_some() => {
+            let floor = &compaction.expect("checked compaction").signed.payload;
+            if candidate.logical_version
+                == floor.compacted_through_logical_version.saturating_add(1)
+                && candidate.previous_logical_etag.as_deref()
+                    == Some(floor.compacted_through_logical_etag.as_str())
+                && valid_state_transition(floor.compacted_through_state, candidate.state)
+            {
+                Ok(())
+            } else {
+                Err(CommitError::VerificationFailed)
+            }
+        }
+        None if candidate.logical_version == 1 && candidate.previous_logical_etag.is_none() => {
+            Ok(())
+        }
+        None => Err(CommitError::VerificationFailed),
+    }
+}
+
+fn validate_manifest_successor(
+    candidate: &CommitManifest,
+    previous: &CommitManifest,
+) -> Result<(), CommitError> {
+    if candidate.blob == previous.blob
+        && candidate.ring_version == previous.ring_version
+        && candidate.logical_version == previous.logical_version.saturating_add(1)
+        && candidate.previous_logical_etag.as_deref() == Some(previous.logical_etag.as_str())
+        && candidate.committed_at_unix_ms >= previous.committed_at_unix_ms
+        && valid_state_transition(previous.state, candidate.state)
+    {
+        Ok(())
+    } else {
+        Err(CommitError::VerificationFailed)
+    }
+}
+
+fn valid_state_transition(previous: ManifestState, candidate: ManifestState) -> bool {
+    matches!(
+        (previous, candidate),
+        (ManifestState::Committed, ManifestState::Committed)
+            | (ManifestState::Committed, ManifestState::Tombstoned)
+            | (ManifestState::Tombstoned, ManifestState::Committed)
+    )
+}
+
+fn high_water_publication_condition(
+    current: Option<&LoadedHighWater>,
+    candidate: &SignedDocument<CommitManifest>,
+    candidate_bytes: &[u8],
+) -> Result<Option<PutCondition>, CommitError> {
+    match current {
+        Some(current) if current.bytes == candidate_bytes => Ok(None),
+        Some(current) => {
+            validate_manifest_successor(&candidate.payload, &current.signed.payload)?;
+            Ok(Some(head_condition_from_etag(
+                current.backend_etag.as_deref(),
+            )))
+        }
+        None => Ok(Some(PutCondition::IfAbsent)),
+    }
+}
+
+async fn publish_high_water_current(
+    backend: &dyn ReplicaBackend,
+    current_key: &str,
+    bytes: &[u8],
+    condition: Option<PutCondition>,
+    control_token: &ControlToken,
+) -> Result<(), BackendError> {
+    let Some(condition) = condition else {
+        return Ok(());
+    };
+    backend
+        .control_put_bytes(
+            current_key,
+            bytes.to_vec(),
+            "application/json",
+            condition,
+            control_token,
+        )
+        .await
+        .map(|_| ())
 }
 
 fn compaction_checkpoint_descends(

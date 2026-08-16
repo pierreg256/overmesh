@@ -57,6 +57,18 @@ pub struct ObjectListPage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendContainer {
+    pub name: String,
+    pub last_modified_unix_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackendContainerListPage {
+    pub containers: Vec<BackendContainer>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataObjectProperties {
     pub length: u64,
 }
@@ -132,6 +144,48 @@ pub trait ReplicaBackend: Send + Sync {
         caller_token: &CallerToken,
     ) -> Result<(), BackendError>;
 
+    async fn authorize_existing_blob_write(
+        &self,
+        _container: &str,
+        _object_key: &str,
+        _caller_token: &CallerToken,
+    ) -> Result<(), BackendError> {
+        Err(BackendError::InvalidResponse(
+            "existing-blob write authorization is not implemented by this backend".to_owned(),
+        ))
+    }
+
+    async fn authorize_account_list(
+        &self,
+        _caller_token: &CallerToken,
+    ) -> Result<(), BackendError> {
+        Err(BackendError::InvalidResponse(
+            "account listing authorization is not implemented by this backend".to_owned(),
+        ))
+    }
+
+    async fn authorize_container_list(
+        &self,
+        _container: &str,
+        _caller_token: &CallerToken,
+    ) -> Result<(), BackendError> {
+        Err(BackendError::InvalidResponse(
+            "container listing authorization is not implemented by this backend".to_owned(),
+        ))
+    }
+
+    async fn caller_list_containers_page(
+        &self,
+        _prefix: &str,
+        _after: Option<&str>,
+        _limit: usize,
+        _caller_token: &CallerToken,
+    ) -> Result<BackendContainerListPage, BackendError> {
+        Err(BackendError::InvalidResponse(
+            "typed account container listing is not implemented by this backend".to_owned(),
+        ))
+    }
+
     async fn authorize_blob_delete(
         &self,
         blob: &LogicalBlobId,
@@ -188,22 +242,7 @@ pub trait ReplicaBackend: Send + Sync {
         cursor: Option<&str>,
         limit: usize,
         control_token: &ControlToken,
-    ) -> Result<ObjectListPage, BackendError> {
-        let mut objects = self.control_list_objects(prefix, control_token).await?;
-        objects.sort();
-        let start = cursor.map_or(0, |value| {
-            objects.partition_point(|object| object.as_str() <= value)
-        });
-        let end = start.saturating_add(limit).min(objects.len());
-        let page_objects = objects[start..end].to_vec();
-        let next_cursor = (end < objects.len())
-            .then(|| page_objects.last().cloned())
-            .flatten();
-        Ok(ObjectListPage {
-            objects: page_objects,
-            next_cursor,
-        })
-    }
+    ) -> Result<ObjectListPage, BackendError>;
 
     async fn control_delete_object(
         &self,
@@ -388,6 +427,134 @@ impl ReplicaBackend for HttpBlobBackend {
         } else {
             Err(response_error(response).await)
         }
+    }
+
+    async fn authorize_existing_blob_write(
+        &self,
+        container: &str,
+        object_key: &str,
+        caller_token: &CallerToken,
+    ) -> Result<(), BackendError> {
+        let response = self
+            .authorized(
+                self.client.put(self.data_object_url(container, object_key)),
+                caller_token.expose(),
+            )
+            .header("x-ms-blob-type", "BlockBlob")
+            .header(CONTENT_LENGTH, 0)
+            .header(IF_NONE_MATCH, "*")
+            .body(Vec::new())
+            .send()
+            .await?;
+        if matches!(
+            response.status(),
+            StatusCode::CONFLICT | StatusCode::PRECONDITION_FAILED
+        ) {
+            return Ok(());
+        }
+        Err(response_error(response).await)
+    }
+
+    async fn authorize_account_list(&self, caller_token: &CallerToken) -> Result<(), BackendError> {
+        let response = self
+            .authorized(
+                self.client
+                    .get(&self.endpoint)
+                    .query(&[("comp", "list"), ("maxresults", "1")]),
+                caller_token.expose(),
+            )
+            .send()
+            .await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(response_error(response).await)
+        }
+    }
+
+    async fn authorize_container_list(
+        &self,
+        container: &str,
+        caller_token: &CallerToken,
+    ) -> Result<(), BackendError> {
+        let response = self
+            .authorized(
+                self.client
+                    .get(format!(
+                        "{}/{}",
+                        self.endpoint,
+                        encode_path_component(container)
+                    ))
+                    .query(&[
+                        ("restype", "container"),
+                        ("comp", "list"),
+                        ("maxresults", "1"),
+                    ]),
+                caller_token.expose(),
+            )
+            .send()
+            .await?;
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(response_error(response).await)
+        }
+    }
+
+    async fn caller_list_containers_page(
+        &self,
+        prefix: &str,
+        cursor: Option<&str>,
+        limit: usize,
+        caller_token: &CallerToken,
+    ) -> Result<BackendContainerListPage, BackendError> {
+        let max_results = limit.clamp(1, 5_000).to_string();
+        let mut request = self.authorized(
+            self.client.get(&self.endpoint).query(&[
+                ("comp", "list"),
+                ("prefix", prefix),
+                ("maxresults", max_results.as_str()),
+            ]),
+            caller_token.expose(),
+        );
+        if let Some(value) = cursor {
+            request = request.query(&[("marker", value)]);
+        }
+        let response = request.send().await?;
+        if !response.status().is_success() {
+            return Err(response_error(response).await);
+        }
+        let page: ContainerListResponse =
+            quick_xml::de::from_reader(response.bytes().await?.as_ref())
+                .map_err(|error| BackendError::InvalidResponse(error.to_string()))?;
+        let containers = page
+            .containers
+            .entries
+            .into_iter()
+            .map(|entry| {
+                let modified = httpdate::parse_http_date(&entry.properties.last_modified)
+                    .map_err(|error| BackendError::InvalidResponse(error.to_string()))?;
+                let last_modified_unix_ms = u64::try_from(
+                    modified
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_err(|error| BackendError::InvalidResponse(error.to_string()))?
+                        .as_millis(),
+                )
+                .map_err(|_| {
+                    BackendError::InvalidResponse(
+                        "container Last-Modified exceeds u64 milliseconds".to_owned(),
+                    )
+                })?;
+                Ok(BackendContainer {
+                    name: entry.name,
+                    last_modified_unix_ms,
+                })
+            })
+            .collect::<Result<Vec<_>, BackendError>>()?;
+        Ok(BackendContainerListPage {
+            containers,
+            next_cursor: page.next_marker.filter(|value| !value.is_empty()),
+        })
     }
 
     async fn authorize_blob_delete(
@@ -975,6 +1142,33 @@ struct BlobEntries {
 #[serde(rename_all = "PascalCase")]
 struct BlobEntry {
     name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ContainerListResponse {
+    #[serde(default)]
+    containers: ContainerEntries,
+    next_marker: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ContainerEntries {
+    #[serde(rename = "Container", default)]
+    entries: Vec<ContainerEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ContainerEntry {
+    name: String,
+    properties: ContainerProperties,
+}
+
+#[derive(Debug, Deserialize)]
+struct ContainerProperties {
+    #[serde(rename = "Last-Modified")]
+    last_modified: String,
 }
 
 #[cfg(test)]

@@ -2,17 +2,19 @@ HARNESS_RUN_ID ?= local
 HARNESS_TOXIPROXY_PORT ?= 18474
 HARNESS_PROXY_A_PORT ?= 12100
 HARNESS_PROXY_B_PORT ?= 12101
+HARNESS_PROXY_C_PORT ?= 12102
 
 export HARNESS_TOXIPROXY_PORT
 export HARNESS_PROXY_A_PORT
 export HARNESS_PROXY_B_PORT
+export HARNESS_PROXY_C_PORT
 
 COMPOSE_PROJECT_NAME := overmesh-harness-$(HARNESS_RUN_ID)
 COMPOSE_FILE := harness/environments/azurite/compose.yaml
 COMPOSE := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE)
 HARNESS := cargo run --quiet -p overmesh-harness --
 
-.PHONY: harness-certs dev-up dev-down dev-reset fault-reset gateway-smoke reconciler-smoke validate-system harness-list harness-run-all version-check test-pr test-main test-nightly test-live-azure test-release
+.PHONY: harness-certs dev-up dev-down dev-reset fault-reset gateway-smoke placement-smoke reconciler-smoke validate-system harness-list harness-run-all version-check test-pr test-main test-nightly test-live-azure test-release
 
 HARNESS_CERT_DIR := .harness/certs
 HARNESS_CERT := $(HARNESS_CERT_DIR)/azurite.pem
@@ -30,7 +32,7 @@ harness-certs:
 	fi
 
 dev-up: harness-certs
-	$(COMPOSE) up -d --wait storage-a storage-b toxiproxy
+	$(COMPOSE) up -d --wait storage-a storage-b storage-c toxiproxy
 	$(COMPOSE) run --rm --no-deps toxiproxy-config
 	$(HARNESS) doctor
 
@@ -46,6 +48,9 @@ fault-reset:
 
 gateway-smoke:
 	./harness/scripts/gateway-smoke.sh
+
+placement-smoke:
+	./harness/scripts/placement-smoke.sh
 
 reconciler-smoke:
 	./harness/scripts/reconciler-smoke.sh

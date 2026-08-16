@@ -6,9 +6,14 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 
-use crate::scenario::ReplicaName;
+#[derive(Debug, Clone, Copy)]
+pub enum ProxyReplica {
+    A,
+    B,
+    C,
+}
 
-pub fn set_enabled(replica: ReplicaName, enabled: bool) -> Result<()> {
+pub fn set_enabled(replica: ProxyReplica, enabled: bool) -> Result<()> {
     request(
         "POST",
         &format!("/proxies/{}", proxy_name(replica)),
@@ -16,7 +21,7 @@ pub fn set_enabled(replica: ReplicaName, enabled: bool) -> Result<()> {
     )
 }
 
-pub fn add_latency(replica: ReplicaName, latency_ms: u64, jitter_ms: u64) -> Result<()> {
+pub fn add_latency(replica: ProxyReplica, latency_ms: u64, jitter_ms: u64) -> Result<()> {
     let proxy = proxy_name(replica);
     for (name, stream) in [
         ("overmesh-latency-downstream", "downstream"),
@@ -46,10 +51,11 @@ pub fn reset() -> Result<()> {
     request("POST", "/reset", None)
 }
 
-fn proxy_name(replica: ReplicaName) -> &'static str {
+fn proxy_name(replica: ProxyReplica) -> &'static str {
     match replica {
-        ReplicaName::A => "storage-a",
-        ReplicaName::B => "storage-b",
+        ProxyReplica::A => "storage-a",
+        ProxyReplica::B => "storage-b",
+        ProxyReplica::C => "storage-c",
     }
 }
 

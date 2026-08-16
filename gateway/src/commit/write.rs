@@ -1,7 +1,7 @@
 use super::*;
 
 impl CommitCoordinator {
-    pub(in crate::commit) async fn put_blob_locked(
+    pub(crate) async fn put_blob_locked(
         &self,
         logical_blob: &LogicalBlobId,
         principal: &AuthenticatedPrincipal,
@@ -31,6 +31,8 @@ impl CommitCoordinator {
                 primary_head.as_ref(),
                 secondary_head.as_ref(),
                 &head_key,
+                logical_blob,
+                principal,
                 write_id,
                 content,
                 control_token,
@@ -40,6 +42,44 @@ impl CommitCoordinator {
             return Ok(result);
         }
         let current = strict_current_head(primary_head.as_ref(), secondary_head.as_ref())?;
+        if let Some(head) = current
+            && head.signed.payload.write_id == write_id
+        {
+            if head.signed.payload.content_sha256 == content.content_sha256
+                && head.signed.payload.state == ManifestState::Committed
+            {
+                self.authorize_replay(principal, &head.signed.payload)
+                    .await?;
+                Self::validate_or_repair_high_water(
+                    self.primary.as_ref(),
+                    self.secondary.as_ref(),
+                    &path_hash,
+                    logical_blob.canonical(),
+                    self.ring_version,
+                    current,
+                    control_token,
+                    self.signer.as_ref(),
+                )
+                .await?;
+                publish_catalog_current(
+                    self.primary.as_ref(),
+                    self.secondary.as_ref(),
+                    logical_blob,
+                    &head.signed,
+                    &head.bytes,
+                    control_token,
+                    self.signer.as_ref(),
+                )
+                .await?;
+                return Ok(CommitResult {
+                    logical_version: head.signed.payload.logical_version,
+                    logical_etag: head.signed.payload.logical_etag.clone(),
+                    write_id: write_id.to_owned(),
+                    idempotent_replay: true,
+                });
+            }
+            return Err(CommitError::IdempotencyConflict);
+        }
         Self::validate_or_repair_high_water(
             self.primary.as_ref(),
             self.secondary.as_ref(),
@@ -51,22 +91,6 @@ impl CommitCoordinator {
             self.signer.as_ref(),
         )
         .await?;
-
-        if let Some(head) = current
-            && head.signed.payload.write_id == write_id
-        {
-            if head.signed.payload.content_sha256 == content.content_sha256
-                && head.signed.payload.state == ManifestState::Committed
-            {
-                return Ok(CommitResult {
-                    logical_version: head.signed.payload.logical_version,
-                    logical_etag: head.signed.payload.logical_etag.clone(),
-                    write_id: write_id.to_owned(),
-                    idempotent_replay: true,
-                });
-            }
-            return Err(CommitError::IdempotencyConflict);
-        }
         match (&logical_condition, current) {
             (LogicalCondition::None, _) | (LogicalCondition::IfAbsent, None) => {}
             (LogicalCondition::IfAbsent, Some(head))
@@ -258,6 +282,16 @@ impl CommitCoordinator {
             self.primary.as_ref(),
             self.secondary.as_ref(),
             &path_hash,
+            &signed_committed,
+            &committed_bytes,
+            control_token,
+            self.signer.as_ref(),
+        )
+        .await?;
+        publish_catalog_current(
+            self.primary.as_ref(),
+            self.secondary.as_ref(),
+            logical_blob,
             &signed_committed,
             &committed_bytes,
             control_token,

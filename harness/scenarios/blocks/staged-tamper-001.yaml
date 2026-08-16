@@ -1,0 +1,42 @@
+apiVersion: harness.overmesh.io/v1
+id: BLOCK-STAGE-TAMPER-001
+suite: blocks
+environment:
+  providers: [model]
+seed: 8003
+initialState:
+  blob: absent
+operations:
+  - action: putBlock
+    blob: /container/tampered-block
+    dataset: tiny/hello.txt
+    writeId: upload-tamper
+    uploadId: upload-tamper
+    blockId: YmxvY2stMDAwMQ==
+  - action: tamperStagedBlock
+    blob: /container/tampered-block
+    blockId: YmxvY2stMDAwMQ==
+  - action: putBlockList
+    blob: /container/tampered-block
+    writeId: upload-tamper
+    uploadId: upload-tamper
+    blocks:
+      - kind: uncommitted
+        blockId: YmxvY2stMDAwMQ==
+expected:
+  clientOutcome:
+    class: failure
+  visibleBlob:
+    present: false
+    mustNeverBePrepared: true
+  healthAfterOperations: ABSENT
+  healthAfterReconciliation: QUARANTINED
+  responses:
+    - operation: putBlock
+      status: 201
+    - operation: putBlockList
+      status: 400
+invariants:
+  - INVARIANT-009
+  - INVARIANT-013
+  - INVARIANT-014

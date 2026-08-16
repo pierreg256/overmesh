@@ -450,7 +450,7 @@ impl ReadService {
     }
 }
 
-fn validate_committed_head(
+pub(crate) fn validate_committed_head(
     head: &CommitManifest,
     logical_blob: &LogicalBlobId,
     ring_version: u64,

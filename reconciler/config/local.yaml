@@ -33,3 +33,7 @@ historyCompaction:
 headDiscovery:
   batchSize: 64
   cursorPath: ./head-discovery-cursor.local.json
+stagedBlockGc:
+  maxRecordsPerCycle: 256
+  metadataCursorPath: ./staged-block-metadata-cursor.local.json
+  markerCursorPath: ./staged-block-marker-cursor.local.json

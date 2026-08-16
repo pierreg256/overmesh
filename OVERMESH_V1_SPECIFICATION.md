@@ -108,6 +108,12 @@ Any gateway instance can be deleted or recreated without functional data loss.
 Durable consistency state is stored as signed Overmesh system objects in the
 backend Storage Accounts. This does not make the gateway stateful.
 
+Beginning with milestone `0.9.0`, Gateway readiness MUST validate every Ring
+node against Azure Resource Manager. The actual Storage Account location MUST
+match the signed `region` value, and all Storage Accounts in one active Ring
+MUST occupy distinct Azure regions. A missing resource ID, an unavailable ARM
+check, a region mismatch, or duplicate actual regions MUST fail startup.
+
 ### 3.3 Fail Closed
 
 The gateway and reconciler MUST reject operations when they cannot validate the
@@ -593,8 +599,9 @@ Logical `PUT Blob` MUST NOT stage a synthetic authorization block. The actual
 conditional upload of the unpredictable immutable content object is the write
 authorization decision on each replica. A first upload requires `201 Created`;
 an idempotent retry may accept Azure's `409 BlobAlreadyExists` or
-`412 Precondition Failed` only after the existing immutable object's bytes and
-digest are validated. A denied caller returns `401` or `403`, which Overmesh
+`412 Precondition Failed` only after the immutable object is confirmed present
+with the signed length. The conditional retry targets that existing immutable
+object and cannot change its bytes. A denied caller returns `401` or `403`, which Overmesh
 maps to `AuthorizationPermissionMismatch` without retryable server-error
 semantics.
 
@@ -843,6 +850,133 @@ delete access for garbage collection. It MUST be distinct from the gateway
 identity, MUST NOT have role-assignment management permission, and MUST NOT
 have permanent-delete or immutability-superuser permission.
 
+### 13.4 Logical Listing and Continuation
+
+`List Blobs` uses a logical W=2 catalog in the isolated control namespace.
+Each mutable catalog object contains the exact canonical bytes of the current
+signed `COMMITTED` or `TOMBSTONED` head. Catalog object keys encode canonical
+container and blob UTF-8 bytes with an order-preserving path-safe encoding, so
+backend lexical order is logical container/blob order. Listing MUST read only
+the bounded catalog pages required to produce `maxresults` and continuation;
+it MUST NOT discover listing truth by scanning `heads/`, history, customer
+data paths, or staged namespaces.
+
+Before exposure, the selected catalog bytes MUST be identical on the active
+RF=2 replicas and MUST validate as a canonical signed commit manifest. The
+catalog key, signed blob/container path, logical version and ETag, state,
+Ring version and selected replicas MUST agree. The same exact bytes MUST be
+the current head, current high-water checkpoint, and committed sidecar on both
+replicas, and MUST remain above identical valid compaction floors. Quarantine,
+tamper, conflict, one-sided publication, incomplete publication, replay, and
+`TOMBSTONED` state are skipped.
+
+Successful PUT, DELETE, recreation, Put Block List commit, idempotent retry,
+and partial-publication recovery MUST conditionally publish and verify the
+same exact catalog bytes on both selected replicas while holding the per-blob
+lease. A valid one-sided entry is repaired by copying exact bytes; tampered,
+conflicting, same-version-different, or newer catalog state fails closed.
+
+`List Containers` derives candidates only from bounded pages of the signed
+logical catalog, then performs a caller-authorized container listing probe on
+both selected replicas. This avoids requiring account-scoped caller RBAC, which
+would expose `overmesh-system`. Containers without any current visible catalog
+entry are therefore outside the published `0.8.0` subset. `overmesh-system`,
+one-sided authorization, invalid catalog entries, and unauthorized containers
+are excluded explicitly. A failure
+or authorization denial on either replica fails the request closed. Physical
+blob paths are never used as listing truth.
+
+Listing MUST exclude system-container objects, `.overmesh/*`, staged blocks,
+`PREPARED` and `TOMBSTONED` state, incomplete publications, compacted/replayed
+heads, and any missing, drifted, tampered, or quarantined candidate.
+
+After a successful Azure container-list authorization, blob enumeration MUST
+NOT issue per-blob caller read probes unless the exact Azure DataAction
+requires one. Internal signature, head, high-water, compaction, sidecar, and
+quarantine validation uses typed control operations under the gateway
+identity and MUST NOT silently require a stronger caller role than direct
+Azure `List Blobs`.
+
+The 0.8 published subset supports:
+
+- case-sensitive canonical names and Azure path percent decoding;
+- `prefix`;
+- an empty or one-character `delimiter`, with deduplicated `BlobPrefix`;
+- `maxresults` from 1 through 5000;
+- `include=metadata`, exposing the signed Overmesh SHA-256 as metadata;
+- opaque signed `marker` values.
+
+All other `include` values fail explicitly. Results and prefixes use
+deterministic logical-name ordering. A continuation token binds the logical
+account, optional container, operation scope, prefix, delimiter, normalized
+include set, requested page size, Ring version and hash, last catalog ordering key,
+issue and expiry times, signing key ID, token version, and signature domain.
+Verification checks canonical encoding, signature/key validity at issue time,
+expiry, complete request equality, ordering-key validity, and active Ring
+binding. Rotation may retain overlapping verification keys.
+
+For an unchanged catalog, continuation has no duplicates or omissions across
+gateway restarts. Delimiter pagination consumes the complete contiguous
+catalog range represented by a returned `BlobPrefix` before issuing its
+marker, including when that range crosses backend page boundaries. Listing is
+not a frozen snapshot during concurrent writes: inserts after the last
+consumed catalog key may appear later, inserts before it require a new
+enumeration, updates at or before it are not repeated, and concurrent deletes
+or tombstones disappear.
+
+The reconciler derives catalog truth only from an identical fully validated
+W=2 current head. It backfills missing entries, repairs valid one-sided or
+older identical entries with conditional writes, and quarantines tampered,
+mis-keyed, conflicting, or newer catalog state. Catalog reconciliation occurs
+before destructive collection for an already identical W=2 head and after
+head/tombstone repair, so history compaction and garbage collection never
+become alternate listing sources.
+
+### 13.5 Public Block Operations
+
+`Put Block` decodes canonical standard Base64 IDs, preserves the exact client
+text in signed metadata, and uses only hashes plus unpredictable reservations
+in physical paths. The 0.8 subset permits 64 decoded ID bytes, 100 MiB per
+block, 50,000 blocks per committed list, and requires equal decoded ID lengths
+within one `x-overmesh-upload-id` generation. The upload ID defaults to the
+implicit hash-bound namespace for the caller, logical blob, and current base
+generation, allowing standard clients to use different request IDs for
+individual block calls. An explicit `x-overmesh-upload-id` isolates concurrent
+application-managed generations.
+
+Each stage binds the canonical blob, upload/write IDs, caller, base logical
+version and ETag, block ID/hash/length, content hash/path, Ring version,
+replicas, creation/expiry times, and signing key. Success requires immutable
+caller-authorized bytes and identical signed metadata on both replicas.
+Identical retries are idempotent; conflicting reuse fails. Staged blocks are
+never visible to `GET`, `HEAD`, or logical listing.
+
+Before publishing stage metadata, the Gateway uploads the unpredictable staged
+content object with the caller token on both selected replicas. This actual
+conditional upload is the write authorization decision; no synthetic Put Block
+probe is permitted. Idempotent stage retries re-execute and validate that same
+immutable upload. The live capability gate pins allowed and denied Put Block
+behavior for every supported Storage API version.
+
+`Put Block List` accepts ordered `Latest`, `Committed`, and `Uncommitted`
+elements. Under the per-blob lease it validates quarantine, head/high-water
+state, compaction floors, stage generation/base state, committed block pages,
+both physical replicas, hashes, order, limits, conditions, and caller access.
+It assembles selected blocks through bounded disk spooling and then executes
+the normal paged-integrity PREPARED/COMMITTED W=2 publication. The same write
+ID and ordered IDs return the committed result on retry.
+
+`Get Block List` returns Azure XML for `committed`, `uncommitted`, or `all`.
+Committed IDs come from signed committed block pages. Uncommitted IDs come
+only from identical signed non-expired stage metadata whose base still equals
+the current logical state. Divergence or tampering fails closed.
+
+Overwrite/delete makes older stages stale; stale stages cannot commit or
+resurrect a tombstoned generation. New stages may target the newer tombstone
+base for an explicit recreate. Expired stages are repaired or collected only
+after complete validation, and committed assembled content is outside the
+staging namespace.
+
 ## 14. Blob Health States
 
 A logical blob has one of the following health states:
@@ -941,7 +1075,7 @@ The V1 compatibility suite MUST cover:
 - Azure-compatible error status and error bodies.
 
 Continuation tokens generated by Overmesh MUST be opaque, signed, and bound to
-the listing parameters and Ring version.
+the complete listing request plus Ring version and hash.
 
 Features not listed in the published V1 compatibility matrix MUST be rejected
 explicitly rather than approximated silently.
@@ -1085,10 +1219,12 @@ version, workspace module versions, and active roadmap milestone MUST agree.
   posture readiness, and mandatory live Azure authorization-probe validation;
 - `0.6.0`: validated client `HEAD` and `GET`, including ranges;
 - `0.7.0`: `DELETE`, signed tombstones, retention, and garbage collection;
-- `0.8.0`: listing, block APIs, and signed continuation tokens;
+- `0.8.0`: validated logical listing, W=2 block staging/commit/inspection,
+  signed continuation tokens, staged repair, retention, and garbage collection;
 - `0.9.0`: private Azure Container Apps infrastructure for Gateway and
-  Reconciler first, followed by Front Door, SDK, Azure CLI, AzCopy, and
-  two-region live Azure conformance;
+  Reconciler first; three-or-more-Storage-Account placement and single-node
+  failure validation; ARM-backed distinct-region startup enforcement; followed
+  by Front Door, SDK, Azure CLI, AzCopy, and live Azure conformance;
 - `0.10.0`: live performance baselines comparing direct Azure Storage access
   with the same operations through Overmesh, with signed historical results;
 - `0.11.0`: evidence-driven performance optimization and regression budgets;

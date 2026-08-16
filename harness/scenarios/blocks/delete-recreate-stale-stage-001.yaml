@@ -1,0 +1,46 @@
+apiVersion: harness.overmesh.io/v1
+id: BLOCK-STALE-GENERATION-001
+suite: blocks
+environment:
+  providers: [model]
+seed: 8006
+initialState:
+  blob: absent
+operations:
+  - action: putBlock
+    blob: /container/stale-stage
+    dataset: tiny/hello.txt
+    writeId: stale-upload
+    uploadId: stale-upload
+    blockId: YmxvY2stMDAwMQ==
+  - action: putBlob
+    blob: /container/stale-stage
+    dataset: tiny/world.txt
+    writeId: intervening-write
+  - action: putBlockList
+    blob: /container/stale-stage
+    writeId: stale-upload
+    uploadId: stale-upload
+    blocks:
+      - kind: uncommitted
+        blockId: YmxvY2stMDAwMQ==
+expected:
+  clientOutcome:
+    class: failure
+  visibleBlob:
+    present: true
+    mustNeverBePrepared: true
+  healthAfterOperations: HEALTHY
+  healthAfterReconciliation: HEALTHY
+  responses:
+    - operation: putBlock
+      status: 201
+    - operation: putBlob
+      status: 201
+    - operation: putBlockList
+      status: 400
+invariants:
+  - INVARIANT-001
+  - INVARIANT-010
+  - INVARIANT-013
+  - INVARIANT-014

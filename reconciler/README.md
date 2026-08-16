@@ -4,7 +4,7 @@ The reconciler is an independent data-plane process. It never handles client
 traffic and authenticates to both Azure Storage replicas with its own managed
 identity or workload identity.
 
-Milestones through `0.7.0` provide:
+Milestones through `0.8.0` provide:
 
 - bounded, cursor-backed incremental head discovery across every Ring node;
 - explicit full-scan audit mode;
@@ -35,6 +35,17 @@ Milestones through `0.7.0` provide:
 - streaming complete-content and per-block validation without reconciliation
   buffering the full content object;
 - RF=2 placement and reconciliation on Rings containing more than two nodes.
+- backfill and conditional repair of exact signed-head catalog entries on the
+  active RF=2 replicas;
+- quarantine of tampered, conflicting, mis-keyed, or newer-than-head catalog
+  state before garbage collection, while preserving catalog correctness
+  through tombstone repair, history compaction, and collection;
+- discovery and signature/structure validation of staged-block metadata;
+- repair only from a signed stage whose physical bytes hash correctly;
+- quarantine on staged metadata/content divergence or tampering;
+- validate-plan-execute expiry collection of identical W=2 staged data and
+  metadata, with signed GC markers and partial-cleanup recovery;
+- bounded staged-block work through `stagedBlockGc.maxRecordsPerCycle`.
 
 `physicalCollectionDelaySeconds` configures the minimum delay between a
 generation being superseded and physical collection. Retention starts at the
@@ -51,6 +62,16 @@ can move below the signed fixed-name compaction floor.
 checkpoint at `headDiscovery.cursorPath` advances only after a successful
 cycle. Normal cycles scan one bounded page from one Ring node, then continue
 from the persisted cursor on the next cycle.
+
+Staged blocks carry a signed expiry selected by the Gateway. The Reconciler
+does not treat an unsigned or tampered stage as a repair source and performs no
+stage delete until both metadata replicas, both physical replicas, hashes,
+namespace guards, and backend ETags have been revalidated.
+
+```yaml
+stagedBlockGc:
+  maxRecordsPerCycle: 256
+```
 
 Run one complete cycle:
 

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     path::Path,
     sync::{
         Arc, Mutex,
@@ -13,7 +13,7 @@ use http::StatusCode;
 
 use super::*;
 use crate::{
-    backend::{BackendLease, DataObjectProperties, PutResult},
+    backend::{BackendLease, DataObjectProperties, ObjectListPage, PutResult},
     identity::{CallerToken, ControlToken, ControlTokenProvider},
     manifest::LocalTestManifestSigner,
     read::{ReadError, ReadService},
@@ -38,6 +38,12 @@ struct MemoryState {
     etag_counter: AtomicU64,
     digest_calls: AtomicU64,
     list_calls: AtomicU64,
+    control_page_calls: AtomicU64,
+    max_control_page_limit: AtomicU64,
+    blob_read_auth_calls: AtomicU64,
+    blob_write_auth_calls: AtomicU64,
+    deny_blob_write: AtomicBool,
+    containers: Mutex<BTreeMap<String, u64>>,
     lease_held: AtomicBool,
     fail_prefix: Mutex<Option<String>>,
 }
@@ -74,6 +80,22 @@ impl MemoryBackend {
             .expect("object lock")
             .get(key)
             .cloned()
+    }
+
+    fn remove_object(&self, key: &str) {
+        self.state.objects.lock().expect("object lock").remove(key);
+    }
+
+    fn deny_blob_write(&self, denied: bool) {
+        self.state.deny_blob_write.store(denied, Ordering::SeqCst);
+    }
+
+    fn add_container(&self, name: &str, last_modified_unix_ms: u64) {
+        self.state
+            .containers
+            .lock()
+            .expect("container lock")
+            .insert(name.to_owned(), last_modified_unix_ms);
     }
 
     fn control_get_count(&self, key: &str) -> u64 {
@@ -168,7 +190,89 @@ impl ReplicaBackend for MemoryBackend {
         _blob: &LogicalBlobId,
         _caller_token: &CallerToken,
     ) -> Result<(), BackendError> {
+        self.state
+            .blob_read_auth_calls
+            .fetch_add(1, Ordering::SeqCst);
         Ok(())
+    }
+
+    async fn authorize_existing_blob_write(
+        &self,
+        _container: &str,
+        _object_key: &str,
+        _caller_token: &CallerToken,
+    ) -> Result<(), BackendError> {
+        self.state
+            .blob_write_auth_calls
+            .fetch_add(1, Ordering::SeqCst);
+        if self.state.deny_blob_write.load(Ordering::SeqCst) {
+            Err(BackendError::Http {
+                status: StatusCode::FORBIDDEN,
+                message: "write denied".to_owned(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn authorize_account_list(
+        &self,
+        _caller_token: &CallerToken,
+    ) -> Result<(), BackendError> {
+        Ok(())
+    }
+
+    async fn authorize_container_list(
+        &self,
+        container: &str,
+        _caller_token: &CallerToken,
+    ) -> Result<(), BackendError> {
+        if self
+            .state
+            .containers
+            .lock()
+            .expect("container lock")
+            .contains_key(container)
+        {
+            Ok(())
+        } else {
+            Err(BackendError::Http {
+                status: StatusCode::NOT_FOUND,
+                message: "container not found".to_owned(),
+            })
+        }
+    }
+
+    async fn caller_list_containers_page(
+        &self,
+        prefix: &str,
+        cursor: Option<&str>,
+        limit: usize,
+        _caller_token: &CallerToken,
+    ) -> Result<crate::backend::BackendContainerListPage, BackendError> {
+        let containers = self.state.containers.lock().expect("container lock");
+        let start = parse_opaque_cursor(&self.id, cursor)?;
+        let values = containers
+            .iter()
+            .filter(|(name, _)| name.starts_with(prefix))
+            .skip(start)
+            .take(limit)
+            .map(
+                |(name, last_modified_unix_ms)| crate::backend::BackendContainer {
+                    name: name.clone(),
+                    last_modified_unix_ms: *last_modified_unix_ms,
+                },
+            )
+            .collect::<Vec<_>>();
+        let total = containers
+            .keys()
+            .filter(|name| name.starts_with(prefix))
+            .count();
+        let end = start.saturating_add(values.len());
+        Ok(crate::backend::BackendContainerListPage {
+            next_cursor: (end < total).then(|| opaque_cursor(&self.id, end)),
+            containers: values,
+        })
     }
 
     async fn authorize_blob_delete(
@@ -232,6 +336,7 @@ impl ReplicaBackend for MemoryBackend {
         condition: PutCondition,
         _caller_token: &CallerToken,
     ) -> Result<PutResult, BackendError> {
+        self.add_container(container, 1);
         self.put(
             &format!("data/{container}/{object_key}"),
             tokio::fs::read(path).await?,
@@ -284,6 +389,38 @@ impl ReplicaBackend for MemoryBackend {
             .filter(|key| key.starts_with(prefix))
             .cloned()
             .collect())
+    }
+
+    async fn control_list_objects_page(
+        &self,
+        prefix: &str,
+        cursor: Option<&str>,
+        limit: usize,
+        _control_token: &ControlToken,
+    ) -> Result<ObjectListPage, BackendError> {
+        self.state.control_page_calls.fetch_add(1, Ordering::SeqCst);
+        self.state
+            .max_control_page_limit
+            .fetch_max(u64::try_from(limit).expect("page limit"), Ordering::SeqCst);
+        let objects = self.state.objects.lock().expect("object lock");
+        let mut ordered = objects
+            .keys()
+            .filter(|key| key.starts_with(prefix))
+            .cloned()
+            .collect::<Vec<_>>();
+        ordered.sort();
+        let start = parse_opaque_cursor(&self.id, cursor)?;
+        let total = ordered.len();
+        let values = ordered
+            .into_iter()
+            .skip(start)
+            .take(limit)
+            .collect::<Vec<_>>();
+        let end = start.saturating_add(values.len());
+        Ok(ObjectListPage {
+            next_cursor: (end < total).then(|| opaque_cursor(&self.id, end)),
+            objects: values,
+        })
     }
 
     async fn control_delete_object(
@@ -398,6 +535,7 @@ impl ReplicaBackend for MemoryBackend {
         condition: PutCondition,
         _control_token: &ControlToken,
     ) -> Result<PutResult, BackendError> {
+        self.add_container(container, 1);
         self.put(&format!("data/{container}/{object_key}"), bytes, condition)
     }
 
@@ -418,6 +556,21 @@ impl ReplicaBackend for MemoryBackend {
         objects.remove(&key);
         Ok(())
     }
+}
+
+fn opaque_cursor(backend_id: &str, offset: usize) -> String {
+    format!("opaque::{backend_id}::{offset:08x}")
+}
+
+fn parse_opaque_cursor(backend_id: &str, cursor: Option<&str>) -> Result<usize, BackendError> {
+    let Some(cursor) = cursor else {
+        return Ok(0);
+    };
+    let encoded = cursor
+        .strip_prefix(&format!("opaque::{backend_id}::"))
+        .ok_or_else(|| BackendError::InvalidResponse("invalid opaque test cursor".to_owned()))?;
+    usize::from_str_radix(encoded, 16)
+        .map_err(|_| BackendError::InvalidResponse("invalid opaque test cursor".to_owned()))
 }
 
 fn coordinator(primary: Arc<MemoryBackend>, secondary: Arc<MemoryBackend>) -> CommitCoordinator {
@@ -507,6 +660,69 @@ fn read_fixture(
     (coordinator, read_service, primary, secondary)
 }
 
+fn service_fixture() -> Arc<CommitService> {
+    service_fixture_parts().0
+}
+
+fn service_fixture_parts() -> (Arc<CommitService>, Arc<MemoryBackend>, Arc<MemoryBackend>) {
+    service_fixture_parts_with_staging_lifetime(Duration::from_secs(7 * 24 * 60 * 60))
+}
+
+fn service_fixture_parts_with_staging_lifetime(
+    staging_lifetime: Duration,
+) -> (Arc<CommitService>, Arc<MemoryBackend>, Arc<MemoryBackend>) {
+    let storage_a = Arc::new(MemoryBackend::new("storage-a"));
+    let storage_b = Arc::new(MemoryBackend::new("storage-b"));
+    let mut ring = RingDocument {
+        api_version: "overmesh.io/v1".to_owned(),
+        ring_version: 1,
+        root: true,
+        parent_ring_version: None,
+        parent_ring_hash: None,
+        replication_factor: 2,
+        created_at: "2026-08-15T10:00:00Z".to_owned(),
+        signed_at_unix_ms: 1_776_000_000_000,
+        signing_key_id: "test-ring-key-01".to_owned(),
+        ring_hash: String::new(),
+        nodes: vec![
+            RingNode {
+                id: "storage-a".to_owned(),
+                region: "local-a".to_owned(),
+                weight: 100,
+            },
+            RingNode {
+                id: "storage-b".to_owned(),
+                region: "local-b".to_owned(),
+                weight: 100,
+            },
+        ],
+    };
+    ring.ring_hash = ring.computed_hash().expect("ring hash");
+    let signer: Arc<dyn ManifestSigner> = Arc::new(
+        LocalTestManifestSigner::new(
+            "test-blob-key-01",
+            true,
+            crate::manifest::KeyValidity::new(0, u64::MAX).expect("validity"),
+        )
+        .expect("test signer"),
+    );
+    let backends: HashMap<String, SharedBackend> = HashMap::from([
+        ("storage-a".to_owned(), storage_a.clone() as SharedBackend),
+        ("storage-b".to_owned(), storage_b.clone() as SharedBackend),
+    ]);
+    let service = Arc::new(CommitService::new_with_options(
+        Arc::new(ring),
+        backends,
+        signer,
+        Arc::new(TestControlTokenProvider),
+        CommitServiceOptions {
+            listing_token_lifetime: Duration::from_secs(15 * 60),
+            staging_lifetime,
+        },
+    ));
+    (service, storage_a, storage_b)
+}
+
 fn principal() -> AuthenticatedPrincipal {
     AuthenticatedPrincipal {
         subject: "test-subject".to_owned(),
@@ -514,6 +730,16 @@ fn principal() -> AuthenticatedPrincipal {
         object_id: "00000000-0000-0000-0000-000000000001".to_owned(),
         authorized_party: Some("00000000-0000-0000-0000-000000000002".to_owned()),
         access_token: CallerToken::new("caller-token".to_owned()),
+    }
+}
+
+fn other_principal() -> AuthenticatedPrincipal {
+    AuthenticatedPrincipal {
+        subject: "other-subject".to_owned(),
+        tenant_id: "test-tenant".to_owned(),
+        object_id: "00000000-0000-0000-0000-000000000099".to_owned(),
+        authorized_party: Some("00000000-0000-0000-0000-000000000002".to_owned()),
+        access_token: CallerToken::new("other-caller-token".to_owned()),
     }
 }
 
@@ -606,6 +832,1324 @@ async fn commits_signed_tombstone_to_both_replicas() {
 }
 
 #[tokio::test]
+async fn stages_commits_and_reports_client_block_ids() {
+    use crate::block::{BlockListType, BlockSelection, BlockSelectionKind};
+
+    let (service, storage_a, storage_b) = service_fixture_parts();
+    let blocks = service.block_service();
+    let logical_blob = blob("/container/blocked");
+    let first = spool_body(Body::from("hello "), 4).await.expect("first");
+    let second = spool_body(Body::from("world"), 4).await.expect("second");
+    blocks
+        .put_block(
+            &logical_blob,
+            &principal(),
+            "upload-1",
+            "upload-1",
+            "YmxvY2stMDAwMQ==",
+            &first,
+        )
+        .await
+        .expect("first staged block");
+    blocks
+        .put_block(
+            &logical_blob,
+            &principal(),
+            "upload-1",
+            "upload-1",
+            "YmxvY2stMDAwMg==",
+            &second,
+        )
+        .await
+        .expect("second staged block");
+    let staged = blocks
+        .get_block_list(
+            &logical_blob,
+            &principal(),
+            Some("upload-1"),
+            BlockListType::Uncommitted,
+        )
+        .await
+        .expect("uncommitted list");
+    assert_eq!(staged.uncommitted.len(), 2);
+    let selections = [
+        BlockSelection {
+            kind: BlockSelectionKind::Latest,
+            block_id: "YmxvY2stMDAwMQ==".to_owned(),
+        },
+        BlockSelection {
+            kind: BlockSelectionKind::Latest,
+            block_id: "YmxvY2stMDAwMg==".to_owned(),
+        },
+    ];
+    blocks
+        .put_block_list(
+            &logical_blob,
+            &principal(),
+            "upload-1",
+            "upload-1",
+            &selections,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("block list commit");
+    assert!(
+        blocks
+            .put_block_list(
+                &logical_blob,
+                &principal(),
+                "upload-1",
+                "upload-1",
+                &selections,
+                LogicalCondition::None,
+            )
+            .await
+            .expect("block list retry")
+            .idempotent_replay
+    );
+    let catalog_key = crate::catalog::catalog_key(&logical_blob);
+    let catalog_a = storage_a.object(&catalog_key).expect("catalog A");
+    let catalog_b = storage_b.object(&catalog_key).expect("catalog B");
+    assert_eq!(catalog_a.bytes, catalog_b.bytes);
+    assert_eq!(
+        catalog_a.bytes,
+        storage_a
+            .object(&format!("heads/{}.json", logical_blob.path_hash()))
+            .expect("current head")
+            .bytes
+    );
+    let committed = blocks
+        .get_block_list(
+            &logical_blob,
+            &principal(),
+            Some("upload-1"),
+            BlockListType::Committed,
+        )
+        .await
+        .expect("committed list");
+    assert_eq!(
+        committed
+            .committed
+            .iter()
+            .map(|block| block.block_id.as_str())
+            .collect::<Vec<_>>(),
+        ["YmxvY2stMDAwMQ==", "YmxvY2stMDAwMg=="]
+    );
+    let read = service
+        .read_service()
+        .get_blob(&logical_blob, &principal(), None)
+        .await
+        .expect("read");
+    assert_eq!(
+        to_bytes(read.body, 1024).await.expect("body"),
+        "hello world"
+    );
+}
+
+#[tokio::test]
+async fn tombstoned_blob_without_eligible_stages_has_no_block_list() {
+    use crate::block::BlockListType;
+
+    let service = service_fixture();
+    let logical_blob = blob("/container/tombstoned-block-list");
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "write",
+            &content,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("commit");
+    service
+        .delete_blob(
+            &logical_blob,
+            &principal(),
+            "delete",
+            LogicalCondition::None,
+        )
+        .await
+        .expect("delete");
+    let blocks = service.block_service();
+    for list_type in [
+        BlockListType::Committed,
+        BlockListType::Uncommitted,
+        BlockListType::All,
+    ] {
+        assert!(matches!(
+            blocks
+                .get_block_list(&logical_blob, &principal(), None, list_type)
+                .await,
+            Err(crate::block::BlockError::NotFound)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn put_block_retry_completes_signed_metadata_before_missing_data() {
+    let (service, storage_a, _storage_b) = service_fixture_parts();
+    storage_a.fail_on_prefix("data/container/.overmesh/staged/");
+    let blocks = service.block_service();
+    let logical_blob = blob("/container/retry-stage");
+    let content = spool_body(Body::from("retry content"), 4)
+        .await
+        .expect("content");
+    assert!(
+        blocks
+            .put_block(
+                &logical_blob,
+                &principal(),
+                "retry-upload",
+                "retry-upload",
+                "YmxvY2stMDAwMQ==",
+                &content,
+            )
+            .await
+            .is_err()
+    );
+    let metadata_key = format!(
+        "staged-blocks/{}/{}/{}.json",
+        logical_blob.path_hash(),
+        stable_component("retry-upload"),
+        stable_component("YmxvY2stMDAwMQ==")
+    );
+    assert!(storage_a.object(&metadata_key).is_some());
+    storage_a.clear_failure();
+    assert!(
+        blocks
+            .put_block(
+                &logical_blob,
+                &principal(),
+                "retry-upload",
+                "retry-upload",
+                "YmxvY2stMDAwMQ==",
+                &content,
+            )
+            .await
+            .expect("retry")
+            .idempotent_replay
+    );
+}
+
+#[tokio::test]
+async fn put_block_retry_repairs_a_w1_upload_generation_before_replay() {
+    let (service, storage_a, storage_b) = service_fixture_parts();
+    let blocks = service.block_service();
+    let logical_blob = blob("/container/retry-generation");
+    let generation_prefix = format!("staged-uploads/{}/", logical_blob.path_hash());
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    blocks
+        .put_block(
+            &logical_blob,
+            &principal(),
+            "upload",
+            "write",
+            "YQ==",
+            &content,
+        )
+        .await
+        .expect("initial stage");
+    let generation_key = format!(
+        "{}{}/generation.json",
+        generation_prefix,
+        stable_component("upload")
+    );
+    assert!(storage_a.object(&generation_key).is_some());
+    storage_b.remove_object(&generation_key);
+    assert!(storage_b.object(&generation_key).is_none());
+    blocks
+        .put_block(
+            &logical_blob,
+            &principal(),
+            "upload",
+            "write",
+            "YQ==",
+            &content,
+        )
+        .await
+        .expect("retry");
+    assert_eq!(
+        storage_a
+            .object(&generation_key)
+            .expect("primary generation")
+            .bytes,
+        storage_b
+            .object(&generation_key)
+            .expect("secondary generation")
+            .bytes
+    );
+}
+
+#[tokio::test]
+async fn put_block_list_retry_recovers_a_w1_head_publication() {
+    use crate::{
+        block::{BlockSelection, BlockSelectionKind},
+        listing::{BlobListEntry, ListRequest},
+    };
+
+    let (service, _storage_a, storage_b) = service_fixture_parts();
+    let blocks = service.block_service();
+    let logical_blob = blob("/container/w1-block-list");
+    let content = spool_body(Body::from("w1 content"), 4)
+        .await
+        .expect("content");
+    blocks
+        .put_block(
+            &logical_blob,
+            &principal(),
+            "w1-upload",
+            "w1-upload",
+            "YmxvY2stMDAwMQ==",
+            &content,
+        )
+        .await
+        .expect("stage");
+    let selections = [BlockSelection {
+        kind: BlockSelectionKind::Latest,
+        block_id: "YmxvY2stMDAwMQ==".to_owned(),
+    }];
+    storage_b.fail_on_prefix("heads/");
+    assert!(
+        blocks
+            .put_block_list(
+                &logical_blob,
+                &principal(),
+                "w1-upload",
+                "w1-upload",
+                &selections,
+                LogicalCondition::None,
+            )
+            .await
+            .is_err()
+    );
+    storage_b.clear_failure();
+    storage_b.deny_blob_write(true);
+    assert!(matches!(
+        blocks
+            .put_block_list(
+                &logical_blob,
+                &principal(),
+                "w1-upload",
+                "w1-upload",
+                &selections,
+                LogicalCondition::None,
+            )
+            .await,
+        Err(crate::block::BlockError::Commit(CommitError::Backend(
+            BackendError::Http {
+                status: StatusCode::FORBIDDEN,
+                ..
+            }
+        )))
+    ));
+    assert!(
+        storage_b
+            .object(&format!("heads/{}.json", logical_blob.path_hash()))
+            .is_none()
+    );
+    storage_b.deny_blob_write(false);
+    assert!(
+        blocks
+            .put_block_list(
+                &logical_blob,
+                &principal(),
+                "w1-upload",
+                "w1-upload",
+                &selections,
+                LogicalCondition::None,
+            )
+            .await
+            .expect("recovered retry")
+            .idempotent_replay
+    );
+    let page = service
+        .listing_service("test-account")
+        .list_blobs(
+            "container",
+            &ListRequest::new(String::new(), String::new(), None, Some(10), Vec::new())
+                .expect("request"),
+            &principal(),
+        )
+        .await
+        .expect("listing after recovery");
+    assert!(matches!(
+        page.entries.as_slice(),
+        [BlobListEntry::Blob(blob)] if blob.name == "w1-block-list"
+    ));
+}
+
+#[tokio::test]
+async fn implicit_block_generation_supports_per_request_client_ids() {
+    use crate::block::{BlockSelection, BlockSelectionKind};
+
+    let service = service_fixture();
+    let blocks = service.block_service();
+    let logical_blob = blob("/container/sdk-blocks");
+    for (write_id, block_id, body) in [
+        ("sdk-request-1", "YmxvY2stMDAwMQ==", "one"),
+        ("sdk-request-2", "YmxvY2stMDAwMg==", "two"),
+    ] {
+        let content = spool_body(Body::from(body), 4).await.expect("content");
+        blocks
+            .put_block(
+                &logical_blob,
+                &principal(),
+                "",
+                write_id,
+                block_id,
+                &content,
+            )
+            .await
+            .expect("implicit stage");
+    }
+    blocks
+        .put_block_list(
+            &logical_blob,
+            &principal(),
+            "",
+            "sdk-request-3",
+            &[
+                BlockSelection {
+                    kind: BlockSelectionKind::Latest,
+                    block_id: "YmxvY2stMDAwMQ==".to_owned(),
+                },
+                BlockSelection {
+                    kind: BlockSelectionKind::Latest,
+                    block_id: "YmxvY2stMDAwMg==".to_owned(),
+                },
+            ],
+            LogicalCondition::None,
+        )
+        .await
+        .expect("implicit block commit");
+}
+
+#[tokio::test]
+async fn implicit_block_list_namespace_is_scoped_to_caller_and_excludes_explicit_uploads() {
+    use crate::block::BlockListType;
+
+    let service = service_fixture();
+    let blocks = service.block_service();
+    let logical_blob = blob("/container/implicit-scope");
+    let first = spool_body(Body::from("one"), 4).await.expect("first");
+    let second = spool_body(Body::from("two"), 4).await.expect("second");
+    let explicit = spool_body(Body::from("three"), 4).await.expect("explicit");
+    blocks
+        .put_block(
+            &logical_blob,
+            &principal(),
+            "",
+            "implicit-one",
+            "YQ==",
+            &first,
+        )
+        .await
+        .expect("first implicit stage");
+    blocks
+        .put_block(
+            &logical_blob,
+            &other_principal(),
+            "",
+            "implicit-two",
+            "Yg==",
+            &second,
+        )
+        .await
+        .expect("second caller implicit stage");
+    blocks
+        .put_block(
+            &logical_blob,
+            &principal(),
+            "explicit-upload",
+            "explicit",
+            "Yw==",
+            &explicit,
+        )
+        .await
+        .expect("explicit stage");
+
+    let first_list = blocks
+        .get_block_list(
+            &logical_blob,
+            &principal(),
+            None,
+            BlockListType::Uncommitted,
+        )
+        .await
+        .expect("first caller list");
+    assert_eq!(
+        first_list
+            .uncommitted
+            .iter()
+            .map(|block| block.block_id.as_str())
+            .collect::<Vec<_>>(),
+        ["YQ=="]
+    );
+    let second_list = blocks
+        .get_block_list(
+            &logical_blob,
+            &other_principal(),
+            None,
+            BlockListType::Uncommitted,
+        )
+        .await
+        .expect("second caller list");
+    assert_eq!(
+        second_list
+            .uncommitted
+            .iter()
+            .map(|block| block.block_id.as_str())
+            .collect::<Vec<_>>(),
+        ["Yg=="]
+    );
+}
+
+#[tokio::test]
+async fn concurrent_first_blocks_cannot_create_conflicting_upload_generations() {
+    let service = service_fixture();
+    let blocks = service.block_service();
+    let logical_blob = blob("/container/concurrent-lengths");
+    let first = spool_body(Body::from("one"), 4).await.expect("first");
+    let second = spool_body(Body::from("two"), 4).await.expect("second");
+    let caller = principal();
+    let (first_result, second_result) = tokio::join!(
+        blocks.put_block(
+            &logical_blob,
+            &caller,
+            "shared-upload",
+            "first",
+            "YQ==",
+            &first,
+        ),
+        blocks.put_block(
+            &logical_blob,
+            &caller,
+            "shared-upload",
+            "second",
+            "YmI=",
+            &second,
+        )
+    );
+    assert_ne!(first_result.is_ok(), second_result.is_ok());
+    let retry = if first_result.is_ok() {
+        blocks
+            .put_block(
+                &logical_blob,
+                &principal(),
+                "shared-upload",
+                "second",
+                "YmI=",
+                &second,
+            )
+            .await
+    } else {
+        blocks
+            .put_block(
+                &logical_blob,
+                &principal(),
+                "shared-upload",
+                "first",
+                "YQ==",
+                &first,
+            )
+            .await
+    };
+    assert!(matches!(
+        retry,
+        Err(crate::block::BlockError::UnequalBlockIdLength)
+    ));
+}
+
+#[tokio::test]
+async fn concurrent_same_block_metadata_never_splits_across_replicas() {
+    let (service, primary, secondary) = service_fixture_parts();
+    let blocks = service.block_service();
+    let logical_blob = blob("/container/concurrent-block");
+    let first = spool_body(Body::from("one"), 4).await.expect("first");
+    let second = spool_body(Body::from("two"), 4).await.expect("second");
+    let caller = principal();
+    let (first_result, second_result) = tokio::join!(
+        blocks.put_block(
+            &logical_blob,
+            &caller,
+            "shared-upload",
+            "first",
+            "YQ==",
+            &first,
+        ),
+        blocks.put_block(
+            &logical_blob,
+            &caller,
+            "shared-upload",
+            "second",
+            "YQ==",
+            &second,
+        )
+    );
+    assert_ne!(first_result.is_ok(), second_result.is_ok());
+    let metadata_key = format!(
+        "staged-blocks/{}/{}/{}.json",
+        logical_blob.path_hash(),
+        stable_component("shared-upload"),
+        stable_component("YQ==")
+    );
+    assert_eq!(
+        primary
+            .object(&metadata_key)
+            .expect("primary metadata")
+            .bytes,
+        secondary
+            .object(&metadata_key)
+            .expect("secondary metadata")
+            .bytes
+    );
+}
+
+#[tokio::test]
+async fn retry_of_expired_staged_metadata_fails_explicitly() {
+    let (service, _primary, secondary) =
+        service_fixture_parts_with_staging_lifetime(Duration::ZERO);
+    let blocks = service.block_service();
+    let logical_blob = blob("/container/expired-stage");
+    let content = spool_body(Body::from("expired"), 4).await.expect("content");
+    blocks
+        .put_block(
+            &logical_blob,
+            &principal(),
+            "expired-upload",
+            "expired-write",
+            "YQ==",
+            &content,
+        )
+        .await
+        .expect("initial stage");
+    let metadata_key = format!(
+        "staged-blocks/{}/{}/{}.json",
+        logical_blob.path_hash(),
+        stable_component("expired-upload"),
+        stable_component("YQ==")
+    );
+    secondary.remove_object(&metadata_key);
+    tokio::time::sleep(Duration::from_millis(2)).await;
+    assert!(matches!(
+        blocks
+            .put_block(
+                &logical_blob,
+                &principal(),
+                "expired-upload",
+                "expired-write",
+                "YQ==",
+                &content,
+            )
+            .await,
+        Err(crate::block::BlockError::Expired)
+    ));
+    assert!(secondary.object(&metadata_key).is_none());
+}
+
+#[tokio::test]
+async fn logical_listing_hides_stages_and_paginates_with_signed_markers() {
+    use crate::listing::{BlobListEntry, ListRequest};
+
+    let service = service_fixture();
+    for (path, write_id) in [
+        ("/container/a", "list-a"),
+        ("/container/dir/b", "list-b"),
+        ("/container/dir/c", "list-c"),
+        ("/container/.overmesh/internal", "list-internal"),
+    ] {
+        let content = spool_body(Body::from(path.to_owned()), 4)
+            .await
+            .expect("content");
+        service
+            .put_blob(
+                &blob(path),
+                &principal(),
+                write_id,
+                &content,
+                LogicalCondition::None,
+            )
+            .await
+            .expect("commit");
+    }
+    let staged = spool_body(Body::from("hidden"), 4).await.expect("stage");
+    service
+        .block_service()
+        .put_block(
+            &blob("/container/staged-only"),
+            &principal(),
+            "list-stage",
+            "list-stage",
+            "YmxvY2stMDAwMQ==",
+            &staged,
+        )
+        .await
+        .expect("stage");
+
+    let listing = service.listing_service("test-account");
+    let first = listing
+        .list_blobs(
+            "container",
+            &ListRequest::new(String::new(), String::new(), None, Some(2), Vec::new())
+                .expect("request"),
+            &principal(),
+        )
+        .await
+        .expect("first page");
+    assert_eq!(first.entries.len(), 2);
+    assert!(first.next_marker.is_some());
+    assert!(first.entries.iter().all(|entry| {
+        !matches!(entry, BlobListEntry::Blob(blob) if blob.name == "staged-only" || blob.name.starts_with(".overmesh"))
+    }));
+    let second = listing
+        .list_blobs(
+            "container",
+            &ListRequest::new(
+                String::new(),
+                String::new(),
+                first.next_marker,
+                Some(2),
+                Vec::new(),
+            )
+            .expect("continuation request"),
+            &principal(),
+        )
+        .await
+        .expect("second page");
+    assert_eq!(second.entries.len(), 1);
+
+    let delimited = listing
+        .list_blobs(
+            "container",
+            &ListRequest::new(String::new(), "/".to_owned(), None, Some(5), Vec::new())
+                .expect("delimiter request"),
+            &principal(),
+        )
+        .await
+        .expect("delimiter listing");
+    assert!(
+        delimited
+            .entries
+            .iter()
+            .any(|entry| matches!(entry, BlobListEntry::Prefix(prefix) if prefix == "dir/"))
+    );
+}
+
+#[tokio::test]
+async fn listing_uses_bounded_catalog_pages_without_blob_read_probes() {
+    use crate::listing::{BlobListEntry, ListRequest};
+
+    let (service, primary, secondary) = service_fixture_parts();
+    for index in 0..40 {
+        let path = format!("/container/blob-{index:03}");
+        let content = spool_body(Body::from(path.clone()), 4)
+            .await
+            .expect("content");
+        service
+            .put_blob(
+                &blob(&path),
+                &principal(),
+                &format!("catalog-{index:03}"),
+                &content,
+                LogicalCondition::None,
+            )
+            .await
+            .expect("commit");
+    }
+    let first_before = primary.state.control_page_calls.load(Ordering::SeqCst);
+    let second_before = secondary.state.control_page_calls.load(Ordering::SeqCst);
+    let page = service
+        .listing_service("test-account")
+        .list_blobs(
+            "container",
+            &ListRequest::new(String::new(), String::new(), None, Some(2), Vec::new())
+                .expect("request"),
+            &principal(),
+        )
+        .await
+        .expect("listing");
+    assert_eq!(page.entries.len(), 2);
+    assert!(page.next_marker.is_some());
+    assert!(
+        page.entries
+            .iter()
+            .all(|entry| matches!(entry, BlobListEntry::Blob(_)))
+    );
+    assert_eq!(
+        primary.state.control_page_calls.load(Ordering::SeqCst) - first_before,
+        1
+    );
+    assert_eq!(
+        secondary.state.control_page_calls.load(Ordering::SeqCst) - second_before,
+        1
+    );
+    assert_eq!(
+        primary.state.max_control_page_limit.load(Ordering::SeqCst),
+        32
+    );
+    assert_eq!(primary.state.blob_read_auth_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        secondary.state.blob_read_auth_calls.load(Ordering::SeqCst),
+        0
+    );
+    assert_eq!(primary.state.list_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(secondary.state.list_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn list_containers_uses_visible_catalog_entries_without_account_listing() {
+    use crate::listing::ListRequest;
+
+    let (service, primary, secondary) = service_fixture_parts();
+    for backend in [&primary, &secondary] {
+        backend.add_container("visible-customer", 10);
+        backend.add_container("empty-customer", 10);
+        backend.add_container("overmesh-system", 20);
+    }
+    primary.add_container("one-sided", 30);
+    let content = spool_body(Body::from("visible"), 4).await.expect("content");
+    service
+        .put_blob(
+            &blob("/visible-customer/blob"),
+            &principal(),
+            "visible-container",
+            &content,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("commit");
+
+    let page = service
+        .listing_service("test-account")
+        .list_containers(
+            &ListRequest::new(String::new(), String::new(), None, Some(10), Vec::new())
+                .expect("request"),
+            &principal(),
+        )
+        .await
+        .expect("container listing");
+    assert_eq!(
+        page.containers
+            .iter()
+            .map(|container| container.name.as_str())
+            .collect::<Vec<_>>(),
+        ["visible-customer"]
+    );
+    assert_eq!(primary.state.list_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(secondary.state.list_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn container_continuation_uses_independent_opaque_backend_cursors() {
+    use crate::listing::ListRequest;
+
+    let (service, primary, secondary) = service_fixture_parts();
+    let expected = (0..25)
+        .map(|index| format!("container-{index:03}"))
+        .collect::<Vec<_>>();
+    for (index, name) in expected.iter().enumerate() {
+        primary.add_container(name, 10);
+        secondary.add_container(name, 20);
+        let path = format!("/{name}/blob");
+        let content = spool_body(Body::from(path.clone()), 4)
+            .await
+            .expect("content");
+        service
+            .put_blob(
+                &blob(&path),
+                &principal(),
+                &format!("container-{index:03}"),
+                &content,
+                LogicalCondition::None,
+            )
+            .await
+            .expect("commit");
+    }
+    let listing = service.listing_service("test-account");
+    let mut marker = None;
+    let mut actual = Vec::new();
+    loop {
+        let page = listing
+            .list_containers(
+                &ListRequest::new(String::new(), String::new(), marker, Some(7), Vec::new())
+                    .expect("request"),
+                &principal(),
+            )
+            .await
+            .expect("page");
+        actual.extend(page.containers.into_iter().map(|container| container.name));
+        marker = page.next_marker;
+        if marker.is_none() {
+            break;
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test]
+async fn delimiter_continuation_consumes_a_prefix_group_across_catalog_pages() {
+    use crate::listing::{BlobListEntry, ListRequest};
+
+    let (service, primary, secondary) = service_fixture_parts();
+    for index in 0..33 {
+        let path = format!("/container/dir/blob-{index:03}");
+        let content = spool_body(Body::from(path.clone()), 4)
+            .await
+            .expect("content");
+        service
+            .put_blob(
+                &blob(&path),
+                &principal(),
+                &format!("delimiter-{index:03}"),
+                &content,
+                LogicalCondition::None,
+            )
+            .await
+            .expect("commit");
+    }
+    let content = spool_body(Body::from("z"), 4).await.expect("content");
+    service
+        .put_blob(
+            &blob("/container/z"),
+            &principal(),
+            "delimiter-z",
+            &content,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("commit");
+
+    let listing = service.listing_service("test-account");
+    let first_before = primary.state.control_page_calls.load(Ordering::SeqCst);
+    let first = listing
+        .list_blobs(
+            "container",
+            &ListRequest::new(String::new(), "/".to_owned(), None, Some(1), Vec::new())
+                .expect("request"),
+            &principal(),
+        )
+        .await
+        .expect("first page");
+    assert_eq!(first.entries, [BlobListEntry::Prefix("dir/".to_owned())]);
+    assert!(first.next_marker.is_some());
+    assert_eq!(
+        primary.state.control_page_calls.load(Ordering::SeqCst) - first_before,
+        2
+    );
+    assert_eq!(
+        secondary.state.control_page_calls.load(Ordering::SeqCst),
+        primary.state.control_page_calls.load(Ordering::SeqCst)
+    );
+    let second = listing
+        .list_blobs(
+            "container",
+            &ListRequest::new(
+                String::new(),
+                "/".to_owned(),
+                first.next_marker,
+                Some(1),
+                Vec::new(),
+            )
+            .expect("request"),
+            &principal(),
+        )
+        .await
+        .expect("second page");
+    assert!(matches!(
+        second.entries.as_slice(),
+        [BlobListEntry::Blob(blob)] if blob.name == "z"
+    ));
+    assert!(second.next_marker.is_none());
+}
+
+#[tokio::test]
+async fn continuation_has_no_duplicate_or_omitted_catalog_entries() {
+    use crate::listing::{BlobListEntry, ListRequest};
+
+    let service = service_fixture();
+    let expected = (0..25)
+        .map(|index| format!("blob-{index:03}"))
+        .collect::<Vec<_>>();
+    for name in &expected {
+        let path = format!("/container/{name}");
+        let content = spool_body(Body::from(path.clone()), 4)
+            .await
+            .expect("content");
+        service
+            .put_blob(
+                &blob(&path),
+                &principal(),
+                &format!("page-{name}"),
+                &content,
+                LogicalCondition::None,
+            )
+            .await
+            .expect("commit");
+    }
+    let listing = service.listing_service("test-account");
+    let mut marker = None;
+    let mut actual = Vec::new();
+    loop {
+        let page = listing
+            .list_blobs(
+                "container",
+                &ListRequest::new(String::new(), String::new(), marker, Some(7), Vec::new())
+                    .expect("request"),
+                &principal(),
+            )
+            .await
+            .expect("page");
+        actual.extend(page.entries.into_iter().map(|entry| match entry {
+            BlobListEntry::Blob(blob) => blob.name,
+            BlobListEntry::Prefix(_) => panic!("unexpected prefix"),
+        }));
+        marker = page.next_marker;
+        if marker.is_none() {
+            break;
+        }
+    }
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test]
+async fn catalog_tamper_is_hidden_and_delete_recreate_updates_current_entry() {
+    use crate::{
+        catalog::catalog_key,
+        listing::{BlobListEntry, ListRequest},
+    };
+
+    let (service, primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/current");
+    let first = spool_body(Body::from("first"), 4).await.expect("content");
+    service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "current-1",
+            &first,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("commit");
+    let key = catalog_key(&logical_blob);
+    secondary
+        .put(&key, b"{}".to_vec(), PutCondition::None)
+        .expect("tamper");
+    let listing = service.listing_service("test-account");
+    let request = ListRequest::new(String::new(), String::new(), None, Some(10), Vec::new())
+        .expect("request");
+    assert!(
+        listing
+            .list_blobs("container", &request, &principal())
+            .await
+            .expect("tampered listing")
+            .entries
+            .is_empty()
+    );
+    secondary
+        .put(
+            &key,
+            primary.object(&key).expect("catalog").bytes,
+            PutCondition::None,
+        )
+        .expect("restore");
+    service
+        .delete_blob(
+            &logical_blob,
+            &principal(),
+            "current-delete",
+            LogicalCondition::None,
+        )
+        .await
+        .expect("delete");
+    assert!(
+        listing
+            .list_blobs("container", &request, &principal())
+            .await
+            .expect("deleted listing")
+            .entries
+            .is_empty()
+    );
+    let second = spool_body(Body::from("second"), 4).await.expect("content");
+    service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "current-2",
+            &second,
+            LogicalCondition::IfAbsent,
+        )
+        .await
+        .expect("recreate");
+    assert!(matches!(
+        listing
+            .list_blobs("container", &request, &principal())
+            .await
+            .expect("recreated listing")
+            .entries
+            .as_slice(),
+        [BlobListEntry::Blob(blob)] if blob.name == "current"
+    ));
+    assert_eq!(
+        primary.object(&key).expect("primary catalog").bytes,
+        secondary.object(&key).expect("secondary catalog").bytes
+    );
+}
+
+#[tokio::test]
+async fn retry_repairs_one_sided_catalog_publication_with_exact_signed_bytes() {
+    use crate::catalog::catalog_key;
+
+    let (service, primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/catalog-retry");
+    let key = catalog_key(&logical_blob);
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    secondary.fail_on_prefix(&key);
+    assert!(matches!(
+        service
+            .put_blob(
+                &logical_blob,
+                &principal(),
+                "catalog-retry",
+                &content,
+                LogicalCondition::None,
+            )
+            .await,
+        Err(CommitError::Ambiguous)
+    ));
+    secondary.clear_failure();
+    let retry = service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "catalog-retry",
+            &content,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("retry");
+    assert!(retry.idempotent_replay);
+    let primary_catalog = primary.object(&key).expect("primary catalog");
+    let secondary_catalog = secondary.object(&key).expect("secondary catalog");
+    assert_eq!(primary_catalog.bytes, secondary_catalog.bytes);
+    assert_eq!(
+        primary_catalog.bytes,
+        primary
+            .object(&format!("heads/{}.json", logical_blob.path_hash()))
+            .expect("head")
+            .bytes
+    );
+}
+
+#[tokio::test]
+async fn put_blob_replay_reauthorizes_and_rejects_a_different_caller() {
+    let (service, primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/replay-auth");
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "replay-auth",
+            &content,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("commit");
+
+    let high_water_key = CommitCoordinator::high_water_current_key(&logical_blob.path_hash());
+    secondary.remove_object(&high_water_key);
+    secondary.deny_blob_write(true);
+    assert!(matches!(
+        service
+            .put_blob(
+                &logical_blob,
+                &principal(),
+                "replay-auth",
+                &content,
+                LogicalCondition::None,
+            )
+            .await,
+        Err(CommitError::Backend(BackendError::Http {
+            status: StatusCode::FORBIDDEN,
+            ..
+        }))
+    ));
+    assert!(secondary.object(&high_water_key).is_none());
+    secondary.deny_blob_write(false);
+    assert!(matches!(
+        service
+            .put_blob(
+                &logical_blob,
+                &other_principal(),
+                "replay-auth",
+                &content,
+                LogicalCondition::None,
+            )
+            .await,
+        Err(CommitError::IdempotencyConflict)
+    ));
+    assert!(primary.state.blob_write_auth_calls.load(Ordering::SeqCst) > 0);
+}
+
+#[tokio::test]
+async fn w1_put_blob_recovery_reauthorizes_before_repairing_the_head() {
+    let (service, _primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/w1-auth");
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    let head_key = format!("heads/{}.json", logical_blob.path_hash());
+    secondary.fail_on_prefix(&head_key);
+    assert!(matches!(
+        service
+            .put_blob(
+                &logical_blob,
+                &principal(),
+                "w1-auth",
+                &content,
+                LogicalCondition::None,
+            )
+            .await,
+        Err(CommitError::Ambiguous)
+    ));
+    secondary.clear_failure();
+    secondary.deny_blob_write(true);
+    assert!(matches!(
+        service
+            .put_blob(
+                &logical_blob,
+                &principal(),
+                "w1-auth",
+                &content,
+                LogicalCondition::None,
+            )
+            .await,
+        Err(CommitError::Backend(BackendError::Http {
+            status: StatusCode::FORBIDDEN,
+            ..
+        }))
+    ));
+    assert!(secondary.object(&head_key).is_none());
+}
+
+#[tokio::test]
+async fn put_block_list_replay_reauthorizes_and_repairs_catalog_visibility() {
+    use crate::{
+        block::{BlockSelection, BlockSelectionKind},
+        catalog::catalog_key,
+        listing::{BlobListEntry, ListRequest},
+    };
+
+    let (service, primary, secondary) = service_fixture_parts();
+    let blocks = service.block_service();
+    let logical_blob = blob("/container/block-replay-auth");
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    blocks
+        .put_block(
+            &logical_blob,
+            &principal(),
+            "upload",
+            "stage",
+            "YQ==",
+            &content,
+        )
+        .await
+        .expect("stage");
+    let selections = [BlockSelection {
+        kind: BlockSelectionKind::Latest,
+        block_id: "YQ==".to_owned(),
+    }];
+    blocks
+        .put_block_list(
+            &logical_blob,
+            &principal(),
+            "upload",
+            "commit",
+            &selections,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("commit");
+    let catalog_key = catalog_key(&logical_blob);
+    let high_water_key = CommitCoordinator::high_water_current_key(&logical_blob.path_hash());
+    primary.remove_object(&catalog_key);
+    secondary.remove_object(&catalog_key);
+    secondary.remove_object(&high_water_key);
+
+    secondary.deny_blob_write(true);
+    assert!(matches!(
+        blocks
+            .put_block_list(
+                &logical_blob,
+                &principal(),
+                "upload",
+                "commit",
+                &selections,
+                LogicalCondition::None,
+            )
+            .await,
+        Err(crate::block::BlockError::Commit(CommitError::Backend(
+            BackendError::Http {
+                status: StatusCode::FORBIDDEN,
+                ..
+            }
+        )))
+    ));
+    assert!(primary.object(&catalog_key).is_none());
+    assert!(secondary.object(&catalog_key).is_none());
+    assert!(secondary.object(&high_water_key).is_none());
+    secondary.deny_blob_write(false);
+    assert!(matches!(
+        blocks
+            .put_block_list(
+                &logical_blob,
+                &other_principal(),
+                "upload",
+                "commit",
+                &selections,
+                LogicalCondition::None,
+            )
+            .await,
+        Err(crate::block::BlockError::Commit(
+            CommitError::IdempotencyConflict
+        ))
+    ));
+    blocks
+        .put_block_list(
+            &logical_blob,
+            &principal(),
+            "upload",
+            "commit",
+            &selections,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("authorized replay");
+    assert_eq!(
+        primary.object(&catalog_key).expect("primary catalog").bytes,
+        secondary
+            .object(&catalog_key)
+            .expect("secondary catalog")
+            .bytes
+    );
+    let page = service
+        .listing_service("test-account")
+        .list_blobs(
+            "container",
+            &ListRequest::new(String::new(), String::new(), None, Some(10), Vec::new())
+                .expect("request"),
+            &principal(),
+        )
+        .await
+        .expect("listing");
+    assert!(matches!(
+        page.entries.as_slice(),
+        [BlobListEntry::Blob(blob)] if blob.name == "block-replay-auth"
+    ));
+}
+
+#[tokio::test]
 async fn delete_retry_is_idempotent_and_repairs_partial_head_publication() {
     let (coordinator, _, primary, secondary) = read_fixture("/container/delete-retry");
     let content = spool_body(Body::from("hello"), 4).await.expect("content");
@@ -684,6 +2228,72 @@ async fn tombstone_allows_a_new_if_absent_generation_without_resurrection() {
         .await
         .expect("read recreated blob");
     assert_eq!(to_bytes(read.body, usize::MAX).await.expect("body"), "new");
+}
+
+#[tokio::test]
+async fn stale_w1_retry_after_delete_recreate_cannot_roll_back_head_or_high_water() {
+    let (coordinator, _, primary, secondary) = read_fixture("/container/stale-retry");
+    let old = spool_body(Body::from("old"), 4).await.expect("old");
+    commit(
+        &coordinator,
+        "/container/stale-retry",
+        "old-write",
+        &old,
+        LogicalCondition::None,
+    )
+    .await
+    .expect("old commit");
+    let logical_blob = blob("/container/stale-retry");
+    let head_key = format!("heads/{}.json", logical_blob.path_hash());
+    let high_water_key = CommitCoordinator::high_water_current_key(&logical_blob.path_hash());
+    let old_head = primary.object(&head_key).expect("old head");
+    delete(
+        &coordinator,
+        "/container/stale-retry",
+        "delete",
+        LogicalCondition::None,
+    )
+    .await
+    .expect("delete");
+    let recreated_content = spool_body(Body::from("new"), 4).await.expect("new");
+    commit(
+        &coordinator,
+        "/container/stale-retry",
+        "recreated",
+        &recreated_content,
+        LogicalCondition::IfAbsent,
+    )
+    .await
+    .expect("recreate");
+    let current_high_water = primary.object(&high_water_key).expect("current high water");
+    primary
+        .put(&head_key, old_head.bytes, PutCondition::None)
+        .expect("stale primary");
+    secondary.remove_object(&head_key);
+
+    assert!(matches!(
+        commit(
+            &coordinator,
+            "/container/stale-retry",
+            "old-write",
+            &old,
+            LogicalCondition::None,
+        )
+        .await,
+        Err(CommitError::VerificationFailed)
+    ));
+    assert!(secondary.object(&head_key).is_none());
+    assert_eq!(
+        primary.object(&high_water_key).expect("primary high").bytes,
+        current_high_water.bytes
+    );
+    assert_eq!(
+        secondary
+            .object(&high_water_key)
+            .expect("secondary high")
+            .bytes,
+        current_high_water.bytes
+    );
 }
 
 #[tokio::test]
@@ -788,6 +2398,110 @@ async fn compaction_floor_rejects_replayed_head_and_high_water_below_the_floor()
         .await,
         Err(CommitError::VerificationFailed)
     ));
+}
+
+#[tokio::test]
+async fn compaction_floor_rejects_w1_recovery_before_mutating_the_missing_head() {
+    let path = "/container/compacted-w1-retry";
+    let (coordinator, _, primary, secondary) = read_fixture(path);
+    let first_content = spool_body(Body::from("first"), 4).await.expect("first");
+    commit(
+        &coordinator,
+        path,
+        "write-1",
+        &first_content,
+        LogicalCondition::None,
+    )
+    .await
+    .expect("first commit");
+    let logical_blob = blob(path);
+    let path_hash = logical_blob.path_hash();
+    let head_key = format!("heads/{path_hash}.json");
+    let first_head = primary.object(&head_key).expect("first head");
+    let first =
+        SignedDocument::<CommitManifest>::from_bytes(&first_head.bytes).expect("first manifest");
+    let second_content = spool_body(Body::from("second"), 4).await.expect("second");
+    commit(
+        &coordinator,
+        path,
+        "write-2",
+        &second_content,
+        LogicalCondition::None,
+    )
+    .await
+    .expect("second commit");
+    let checkpoint = SignedDocument::create(
+        HistoryCompactionCheckpoint {
+            api_version: "overmesh.io/history-compaction-checkpoint/v1".to_owned(),
+            blob: logical_blob.canonical().to_owned(),
+            path_hash: path_hash.clone(),
+            head_object: head_key.clone(),
+            ring_version: 1,
+            checkpoint_version: 1,
+            compacted_through_logical_version: 1,
+            compacted_through_state: ManifestState::Committed,
+            compacted_through_logical_etag: first.payload.logical_etag.clone(),
+            compacted_through_committed_at_unix_ms: first.payload.committed_at_unix_ms,
+            covered_terminal_manifest_sha256: sha256_bytes(&first_head.bytes),
+            previous_checkpoint_sha256: None,
+            previous_checkpoint_version: None,
+            garbage_collection_marker_object: format!(
+                "garbage-collection/{path_hash}/00000000000000000001.json"
+            ),
+            garbage_collection_marker_sha256: sha256_bytes(b"marker"),
+            garbage_collection_through_logical_version: 1,
+            garbage_collection_history_head_logical_version: 2,
+            garbage_collected_committed_versions: vec![1],
+            garbage_collection_delay_ms: 0,
+            garbage_collected_at_unix_ms: first.payload.committed_at_unix_ms,
+            compacted_at_unix_ms: first.payload.committed_at_unix_ms,
+            signing_key_id: coordinator.signer.key_id().to_owned(),
+        },
+        SignatureDomain::HistoryCompactionCheckpoint,
+        coordinator.signer.as_ref(),
+    )
+    .await
+    .expect("checkpoint")
+    .canonical_bytes()
+    .expect("checkpoint bytes");
+    let checkpoint_key = CommitCoordinator::history_compaction_checkpoint_key(&path_hash);
+    for backend in [&primary, &secondary] {
+        backend
+            .put(&checkpoint_key, checkpoint.clone(), PutCondition::None)
+            .expect("checkpoint");
+        backend.remove_object(&CommitCoordinator::high_water_current_key(&path_hash));
+    }
+    primary
+        .put(&head_key, first_head.bytes, PutCondition::None)
+        .expect("stale primary");
+    secondary.remove_object(&head_key);
+
+    assert!(matches!(
+        commit(
+            &coordinator,
+            path,
+            "write-1",
+            &first_content,
+            LogicalCondition::None,
+        )
+        .await,
+        Err(CommitError::VerificationFailed)
+    ));
+    assert!(secondary.object(&head_key).is_none());
+    assert_eq!(
+        primary
+            .object(&checkpoint_key)
+            .expect("primary checkpoint")
+            .bytes,
+        checkpoint
+    );
+    assert_eq!(
+        secondary
+            .object(&checkpoint_key)
+            .expect("secondary checkpoint")
+            .bytes,
+        checkpoint
+    );
 }
 
 #[tokio::test]
@@ -1382,6 +3096,64 @@ async fn rejects_a_valid_head_replayed_below_the_high_water_record() {
         .await,
         Err(CommitError::VerificationFailed)
     ));
+}
+
+#[tokio::test]
+async fn high_water_publication_never_replaces_a_higher_version_by_etag() {
+    let primary = Arc::new(MemoryBackend::new("storage-a"));
+    let secondary = Arc::new(MemoryBackend::new("storage-b"));
+    let coordinator = coordinator(primary.clone(), secondary.clone());
+    let logical_blob = blob("/container/high-water-rollback");
+    let first = spool_body(Body::from("first"), 4).await.expect("first");
+    let second = spool_body(Body::from("second"), 4).await.expect("second");
+    commit(
+        &coordinator,
+        "/container/high-water-rollback",
+        "write-1",
+        &first,
+        LogicalCondition::None,
+    )
+    .await
+    .expect("first commit");
+    let head_key = format!("heads/{}.json", logical_blob.path_hash());
+    let first_head = primary.object(&head_key).expect("first head");
+    let first_signed =
+        SignedDocument::<CommitManifest>::from_bytes(&first_head.bytes).expect("first signed");
+    commit(
+        &coordinator,
+        "/container/high-water-rollback",
+        "write-2",
+        &second,
+        LogicalCondition::None,
+    )
+    .await
+    .expect("second commit");
+    let high_water_key = CommitCoordinator::high_water_current_key(&logical_blob.path_hash());
+    let higher = primary.object(&high_water_key).expect("higher high water");
+    assert!(matches!(
+        CommitCoordinator::publish_high_water(
+            primary.as_ref(),
+            secondary.as_ref(),
+            &logical_blob.path_hash(),
+            &first_signed,
+            &first_head.bytes,
+            &ControlToken::new("control-token".to_owned()),
+            coordinator.signer.as_ref(),
+        )
+        .await,
+        Err(CommitError::VerificationFailed)
+    ));
+    assert_eq!(
+        primary.object(&high_water_key).expect("primary high").bytes,
+        higher.bytes
+    );
+    assert_eq!(
+        secondary
+            .object(&high_water_key)
+            .expect("secondary high")
+            .bytes,
+        higher.bytes
+    );
 }
 
 #[tokio::test]

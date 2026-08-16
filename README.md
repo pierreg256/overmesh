@@ -7,6 +7,7 @@ strictly replicated Azure Blob-compatible surface across two Azure regions.
 
 - [`OVERMESH_V1_SPECIFICATION.md`](OVERMESH_V1_SPECIFICATION.md)
 - [`OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md`](OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md)
+- [`COMPATIBILITY.md`](COMPATIBILITY.md)
 
 Overmesh is distributed under the [MIT License](LICENSE).
 
@@ -22,7 +23,7 @@ The harness deliberately has two validation layers:
 The Rust harness also includes:
 
 - a strict declarative scenario loader and independent reference model;
-- twelve observation-based invariant checks;
+- fourteen observation-based invariant checks;
 - deterministic commit failpoints;
 - ES256 canonicalization and signature tests;
 - deterministic dataset generation;
@@ -99,10 +100,16 @@ signed history compaction, streaming reconciliation, RF=2 placement across
 N-node Rings, key-validity windows, Ring lineage, and the hardened live Azure
 authorization gates.
 
-Milestone `0.8.0` begins with Azure-compatible listing that excludes every
-Overmesh internal namespace. It then adds W=2 block staging and block-list
-commit semantics, followed by opaque signed continuation tokens bound to the
-complete listing request and Ring version.
+Milestone `0.8.0` implements Azure-compatible logical container/blob listing,
+W=2 signed block staging and block-list commits, committed/uncommitted block
+inspection, and opaque signed continuation tokens. Blob listing uses a W=2
+lexicographically ordered catalog whose mutable entries are the exact signed
+current heads. Bounded catalog pages are revalidated against both heads,
+high-water state, compaction floors, and quarantine before exposure; physical
+customer paths, system objects, staged blocks, tombstones, and unhealthy
+records are never client-visible. Container listing filters catalog-derived
+candidates with caller-authorized container probes, avoiding
+account-scoped caller RBAC and keeping the system container inaccessible.
 
 Before V1 stabilization, milestone `0.10.0` will establish signed live
 performance baselines against direct Azure Storage and Overmesh paths.
