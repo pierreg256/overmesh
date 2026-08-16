@@ -1,0 +1,39 @@
+apiVersion: harness.overmesh.io/v1
+id: META-006
+suite: manifest-content-integrity
+environment:
+  providers:
+    - model
+    - azurite
+    - azure
+seed: 6006
+initialState:
+  blob: absent
+operations:
+  - action: putBlob
+    blob: /integrity/content.bin
+    dataset: tiny/hello.txt
+    writeId: 2f4d242f-0000-4000-8000-000000006006
+  - action: tamperContent
+    blob: /integrity/content.bin
+    replica: A
+  - action: head
+    blob: /integrity/content.bin
+  - action: getBlob
+    blob: /integrity/content.bin
+faults: []
+expected:
+  clientOutcome:
+    class: failure
+  visibleBlob:
+    present: false
+    mustNeverBePrepared: true
+  healthAfterOperations: QUARANTINED
+  healthAfterReconciliation: QUARANTINED
+invariants:
+  - INVARIANT-006
+  - INVARIANT-007
+  - INVARIANT-008
+  - INVARIANT-009
+  - INVARIANT-012
+

@@ -1,0 +1,33 @@
+apiVersion: harness.overmesh.io/v1
+id: COMMIT-FAIL-008
+suite: commit-state-machine
+environment:
+  providers:
+    - model
+    - azurite
+    - azure
+seed: 42008
+initialState:
+  blob: absent
+operations:
+  - action: putBlob
+    blob: /images/photo.jpg
+    dataset: tiny/hello.txt
+    writeId: 2f4d242f-0000-4000-8000-000000000008
+faults:
+  - id: FAULT-COMMIT-008
+expected:
+  clientOutcome:
+    class: failure-or-ambiguous
+  visibleBlob:
+    present: false
+    mustNeverBePrepared: true
+  healthAfterOperations: DRIFTED
+  healthAfterReconciliation: HEALTHY
+invariants:
+  - INVARIANT-006
+  - INVARIANT-007
+  - INVARIANT-009
+  - INVARIANT-011
+  - INVARIANT-012
+

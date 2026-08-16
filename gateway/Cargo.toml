@@ -1,0 +1,55 @@
+[package]
+name = "overmesh-gateway"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "overmesh_gateway"
+path = "src/lib.rs"
+
+[[bin]]
+name = "overmesh-gateway"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+azure_core.workspace = true
+azure_identity.workspace = true
+azure_security_keyvault_keys.workspace = true
+axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
+clap.workspace = true
+hex.workspace = true
+http.workspace = true
+http-body-util.workspace = true
+httpdate.workspace = true
+futures-util.workspace = true
+jsonwebtoken.workspace = true
+p256.workspace = true
+quick-xml.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_jcs.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tower.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+rand_chacha.workspace = true
+rsa.workspace = true
+
+[lints]
+workspace = true

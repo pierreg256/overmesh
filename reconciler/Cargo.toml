@@ -1,0 +1,38 @@
+[package]
+name = "overmesh-reconciler"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "overmesh_reconciler"
+path = "src/lib.rs"
+
+[[bin]]
+name = "overmesh-reconciler"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+azure_core.workspace = true
+azure_identity.workspace = true
+clap.workspace = true
+overmesh-gateway = { path = "../gateway" }
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+
+[lints]
+workspace = true

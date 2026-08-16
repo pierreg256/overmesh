@@ -1,0 +1,37 @@
+apiVersion: harness.overmesh.io/v1
+id: PREPARED-INVISIBILITY-008
+suite: commit-state-machine
+environment:
+  providers:
+    - model
+seed: 42009
+initialState:
+  blob: absent
+operations:
+  - action: putBlob
+    blob: /commit/prepared-hidden.bin
+    dataset: tiny/hello.txt
+    writeId: prepared-hidden-008
+  - action: observePreparedPublication
+    blob: /commit/prepared-hidden.bin
+faults:
+  - id: FAULT-COMMIT-008
+expected:
+  clientOutcome:
+    class: failure
+  visibleBlob:
+    present: false
+    mustNeverBePrepared: true
+  healthAfterOperations: DRIFTED
+  healthAfterReconciliation: HEALTHY
+  responses:
+    - operation: putBlob
+      status: 503
+    - operation: observePreparedPublication
+      status: 404
+invariants:
+  - INVARIANT-006
+  - INVARIANT-007
+  - INVARIANT-009
+  - INVARIANT-011
+  - INVARIANT-012

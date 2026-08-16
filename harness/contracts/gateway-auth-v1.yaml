@@ -1,0 +1,99 @@
+apiVersion: harness.overmesh.io/gateway-auth-contract/v1
+cases:
+  - id: AUTH-001
+    description: Valid bearer token reaches the authenticated Blob handler
+    method: GET
+    path: /container/blob
+    authentication: valid-bearer
+    storageVersion: "2025-11-05"
+    expectedStatus: 501
+    expectedErrorCode: FeatureNotSupported
+
+  - id: AUTH-002
+    description: Missing authentication is rejected
+    method: GET
+    path: /container/blob
+    authentication: none
+    storageVersion: "2025-11-05"
+    expectedStatus: 401
+    expectedErrorCode: AuthenticationFailed
+
+  - id: AUTH-003
+    description: Shared Key authentication is explicitly rejected
+    method: GET
+    path: /container/blob
+    authentication: shared-key
+    storageVersion: "2025-11-05"
+    expectedStatus: 403
+    expectedErrorCode: KeyBasedAuthenticationNotPermitted
+
+  - id: AUTH-004
+    description: Service SAS authentication is explicitly rejected
+    method: GET
+    path: /container/blob?sv=2025-11-05&sp=r&sig=forbidden
+    authentication: none
+    storageVersion: "2025-11-05"
+    expectedStatus: 403
+    expectedErrorCode: AuthenticationFailed
+
+  - id: AUTH-005
+    description: A token for the wrong audience is rejected
+    method: GET
+    path: /container/blob
+    authentication: wrong-audience
+    storageVersion: "2025-11-05"
+    expectedStatus: 401
+    expectedErrorCode: AuthenticationFailed
+
+  - id: AUTH-006
+    description: A token for the wrong tenant is rejected
+    method: GET
+    path: /container/blob
+    authentication: wrong-tenant
+    storageVersion: "2025-11-05"
+    expectedStatus: 401
+    expectedErrorCode: AuthenticationFailed
+
+  - id: AUTH-007
+    description: An expired token is rejected
+    method: GET
+    path: /container/blob
+    authentication: expired
+    storageVersion: "2025-11-05"
+    expectedStatus: 401
+    expectedErrorCode: AuthenticationFailed
+
+  - id: AUTH-008
+    description: OAuth requests require a Storage API version
+    method: GET
+    path: /container/blob
+    authentication: valid-bearer
+    expectedStatus: 400
+    expectedErrorCode: MissingRequiredHeader
+
+  - id: AUTH-009
+    description: Storage API versions older than OAuth support are rejected
+    method: GET
+    path: /container/blob
+    authentication: valid-bearer
+    storageVersion: "2016-05-31"
+    expectedStatus: 400
+    expectedErrorCode: InvalidHeaderValue
+
+  - id: AUTH-010
+    description: Unsupported authenticated HTTP methods use Azure-compatible errors
+    method: PATCH
+    path: /container/blob
+    authentication: valid-bearer
+    storageVersion: "2025-11-05"
+    expectedStatus: 405
+    expectedErrorCode: UnsupportedHttpVerb
+
+  - id: AUTH-011
+    description: An Entra-style RS256 bearer token reaches the authenticated Blob handler
+    method: GET
+    path: /container/blob
+    authentication: valid-bearer-rs256
+    storageVersion: "2025-11-05"
+    expectedStatus: 501
+    expectedErrorCode: FeatureNotSupported

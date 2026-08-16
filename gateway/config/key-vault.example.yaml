@@ -1,0 +1,46 @@
+listenAddress: 0.0.0.0:8080
+logicalAccount: production-overmesh
+authentication:
+  issuer: https://sts.windows.net/TENANT_ID/
+  audience: https://storage.azure.com/
+  tenantId: TENANT_ID
+  jwksPath: /etc/overmesh/entra-jwks.json
+controlIdentity:
+  provider: managedIdentity
+  managedIdentityClientId: 00000000-0000-0000-0000-000000000000
+ring:
+  documentPath: /etc/overmesh/ring.yaml
+  signaturePath: /etc/overmesh/ring.sig
+  keyId: https://example.vault.azure.net/keys/overmesh-ring/current-version
+  publicKeyPath: /etc/overmesh/ring-public.pem
+  notBeforeUnixMs: 1776000000000
+  notAfterUnixMs: 1807536000000
+  trustedPublicKeys:
+    - keyId: https://example.vault.azure.net/keys/overmesh-ring/previous-version
+      publicKeyPath: /etc/overmesh/ring-public-previous.pem
+      notBeforeUnixMs: 1744464000000
+      notAfterUnixMs: 1776086400000
+  trustedPredecessor:
+    ringVersion: 41
+    ringHash: sha256:REPLACE_WITH_64_HEX_CHARACTERS
+  minimumVersion: 42
+backends:
+  - id: storage-a
+    endpoint: https://STORAGE_A.blob.core.windows.net
+  - id: storage-b
+    endpoint: https://STORAGE_B.blob.core.windows.net
+signing:
+  provider: azureKeyVault
+  keyId: https://VAULT_NAME.vault.azure.net/keys/overmesh-manifests/KEY_VERSION
+  notBeforeUnixMs: 1776000000000
+  notAfterUnixMs: 1807536000000
+  vaultUrl: https://VAULT_NAME.vault.azure.net
+  keyName: overmesh-manifests
+  keyVersion: KEY_VERSION
+  publicKeyPath: /etc/overmesh/manifest-public.pem
+  trustedPublicKeys:
+    - keyId: https://example.vault.azure.net/keys/overmesh-manifests/previous-version
+      publicKeyPath: /etc/overmesh/manifest-public-previous.pem
+      notBeforeUnixMs: 1744464000000
+      notAfterUnixMs: 1776086400000
+  credential: workloadIdentity

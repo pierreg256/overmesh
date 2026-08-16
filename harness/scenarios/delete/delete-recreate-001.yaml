@@ -1,0 +1,56 @@
+apiVersion: harness.overmesh.io/v1
+id: DELETE-RECREATE-001
+suite: delete-garbage-collection
+environment:
+  providers:
+    - model
+seed: 6403
+initialState:
+  blob: absent
+operations:
+  - action: putBlob
+    blob: /delete/recreate.bin
+    dataset: tiny/hello.txt
+    writeId: delete-recreate-v1
+  - action: deleteBlob
+    blob: /delete/recreate.bin
+    writeId: delete-recreate-tombstone-v2
+  - action: putBlob
+    blob: /delete/recreate.bin
+    dataset: tiny/hello.txt
+    writeId: delete-recreate-v3
+  - action: attemptResurrection
+    blob: /delete/recreate.bin
+    logicalVersion: 1
+  - action: head
+    blob: /delete/recreate.bin
+faults: []
+expected:
+  clientOutcome:
+    class: success
+  visibleBlob:
+    present: true
+    mustNeverBePrepared: true
+  healthAfterOperations: HEALTHY
+  healthAfterReconciliation: HEALTHY
+  responses:
+    - operation: putBlob
+      status: 201
+    - operation: deleteBlob
+      status: 202
+    - operation: putBlob
+      status: 201
+    - operation: head
+      status: 200
+  currentLogicalVersion: 3
+  physicalContentVersions:
+    - 1
+    - 3
+  collectedVersions: []
+invariants:
+  - INVARIANT-001
+  - INVARIANT-006
+  - INVARIANT-007
+  - INVARIANT-009
+  - INVARIANT-010
+  - INVARIANT-011

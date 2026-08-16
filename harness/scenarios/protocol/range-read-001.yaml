@@ -1,0 +1,39 @@
+apiVersion: harness.overmesh.io/v1
+id: RANGE-READ-001
+suite: protocol-contract
+environment:
+  providers:
+    - model
+seed: 6102
+initialState:
+  blob: absent
+operations:
+  - action: putBlob
+    blob: /protocol/range.txt
+    dataset: tiny/hello.txt
+    writeId: range-read-001
+  - action: getBlob
+    blob: /protocol/range.txt
+    range:
+      start: 1
+      endInclusive: 8
+faults: []
+expected:
+  clientOutcome:
+    class: success
+  visibleBlob:
+    present: true
+    mustNeverBePrepared: true
+  healthAfterOperations: HEALTHY
+  healthAfterReconciliation: HEALTHY
+  responses:
+    - operation: putBlob
+      status: 201
+    - operation: getBlob
+      status: 206
+      bodyHex: 7665726d65736820
+      contentRange: bytes 1-8/33
+invariants:
+  - INVARIANT-002
+  - INVARIANT-006
+  - INVARIANT-009

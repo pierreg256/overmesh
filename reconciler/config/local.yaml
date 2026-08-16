@@ -1,0 +1,35 @@
+ring:
+  documentPath: ../../harness/rings/ring-v1.yaml
+  signaturePath: ../../harness/rings/ring-v1.sig
+  keyId: test-ring-key-01
+  publicKeyPath: ../../harness/keys/test-ring-public.pem
+  notBeforeUnixMs: 1700000000000
+  notAfterUnixMs: 2000000000000
+  minimumVersion: 1
+backends:
+  - id: storage-a
+    endpoint: https://127.0.0.1:12100/devstoreaccount1
+    dangerAcceptInvalidCertificates: true
+  - id: storage-b
+    endpoint: https://127.0.0.1:12101/devstoreaccount1
+    dangerAcceptInvalidCertificates: true
+signing:
+  provider: localTest
+  keyId: test-blob-key-01
+  notBeforeUnixMs: 1700000000000
+  notAfterUnixMs: 2000000000000
+  allowTestSigner: true
+identity:
+  provider: localTest
+  testTokenPath: ../../.harness/reconciler-token.jwt
+  allowTestToken: true
+rbacPosture:
+  provider: disabled
+  allowDisabled: true
+intervalSeconds: 30
+physicalCollectionDelaySeconds: 0
+historyCompaction:
+  maxVersionsPerCycle: 64
+headDiscovery:
+  batchSize: 64
+  cursorPath: ./head-discovery-cursor.local.json

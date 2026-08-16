@@ -1,0 +1,106 @@
+schema_version = 1
+project_version = "0.7.0"
+active_generation = "V1"
+
+[[milestones]]
+version = "0.1.0"
+generation = "V1"
+name = "Development harness foundation"
+status = "completed"
+
+[[milestones]]
+version = "0.2.0"
+generation = "V1"
+name = "Gateway protocol and Microsoft Entra contract"
+status = "completed"
+
+[[milestones]]
+version = "0.3.0"
+generation = "V1"
+name = "Signed dual-write commit protocol"
+status = "completed"
+
+[[milestones]]
+version = "0.4.0"
+generation = "V1"
+name = "Reconciliation, repair, and quarantine"
+status = "completed"
+
+[[milestones]]
+version = "0.5.0"
+generation = "V1"
+name = "Identity-separated storage and replay safety"
+status = "completed"
+
+[[milestones]]
+version = "0.6.0"
+generation = "V1"
+name = "Validated HEAD and GET paths"
+status = "completed"
+
+[[milestones]]
+version = "0.7.0"
+generation = "V1"
+name = "DELETE, tombstones, retention, and garbage collection"
+status = "active"
+
+[[milestones]]
+version = "0.8.0"
+generation = "V1"
+name = "Listing, block APIs, and continuation tokens"
+status = "planned"
+
+[[milestones]]
+version = "0.9.0"
+generation = "V1"
+name = "ACA infrastructure, client compatibility, and live Azure conformance"
+status = "planned"
+deliverables = [
+  "Provision private Azure Container Apps environments for the Gateway and Reconciler before client conformance work.",
+  "Deploy managed-identity-only Gateway and Reconciler revisions with private Storage and Key Vault connectivity.",
+  "Integrate Azure Front Door with caching and content transformation disabled for Blob data-plane routes.",
+  "Validate Azure SDK .NET, Python, and JavaScript, Azure CLI, and AzCopy against the deployed surface.",
+  "Complete two-region live Azure conformance and retain signed deployment evidence."
+]
+
+[[milestones]]
+version = "0.10.0"
+generation = "V1"
+name = "Live performance baseline and historical comparison"
+status = "planned"
+deliverables = [
+  "Compare direct Azure Storage operations with the same operations through Overmesh.",
+  "Measure latency percentiles, throughput, backend round trips, signing latency, CPU, and memory.",
+  "Cover representative payload sizes, ranges, concurrency levels, and supported client operations.",
+  "Store signed machine-readable results with commit, Ring, deployment, API-version, and environment provenance."
+]
+
+[[milestones]]
+version = "0.11.0"
+generation = "V1"
+name = "Performance optimization and regression hardening"
+status = "planned"
+deliverables = [
+  "Profile bottlenecks demonstrated by the 0.10.0 baseline.",
+  "Reduce avoidable round trips, serialization, signing, buffering, and scheduling overhead without weakening invariants.",
+  "Re-run the identical live benchmark matrix and record before-and-after evidence.",
+  "Add performance regression budgets to release validation where measurements are stable."
+]
+
+[[milestones]]
+version = "1.0.0"
+generation = "V1"
+name = "Overmesh V1"
+status = "planned"
+
+[[milestones]]
+version = "2.0.0"
+generation = "V2"
+name = "Merkle Trees and incremental reconciliation"
+status = "planned"
+
+[[milestones]]
+version = "3.0.0"
+generation = "V3"
+name = "Content-addressable metadata"
+status = "planned"

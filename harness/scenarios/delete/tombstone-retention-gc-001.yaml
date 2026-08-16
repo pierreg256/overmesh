@@ -1,0 +1,55 @@
+apiVersion: harness.overmesh.io/v1
+id: TOMBSTONE-RETENTION-GC-001
+suite: delete-garbage-collection
+environment:
+  providers:
+    - model
+seed: 6401
+initialState:
+  blob: absent
+  retentionMs: 100
+operations:
+  - action: putBlob
+    blob: /delete/tombstone-retention.bin
+    dataset: tiny/hello.txt
+    writeId: tombstone-retention-source-001
+  - action: deleteBlob
+    blob: /delete/tombstone-retention.bin
+    writeId: tombstone-retention-delete-001
+  - action: collect
+    blob: /delete/tombstone-retention.bin
+  - action: advanceTime
+    blob: /delete/tombstone-retention.bin
+    milliseconds: 100
+  - action: collect
+    blob: /delete/tombstone-retention.bin
+faults: []
+expected:
+  clientOutcome:
+    class: success
+  visibleBlob:
+    present: false
+    mustNeverBePrepared: true
+  healthAfterOperations: HEALTHY
+  healthAfterReconciliation: HEALTHY
+  responses:
+    - operation: putBlob
+      status: 201
+    - operation: deleteBlob
+      status: 202
+  currentLogicalVersion: 2
+  physicalContentVersions: []
+  collectedVersions:
+    - 1
+  collectionRuns:
+    - atMs: 0
+      collectedVersions: []
+    - atMs: 100
+      collectedVersions:
+        - 1
+invariants:
+  - INVARIANT-006
+  - INVARIANT-007
+  - INVARIANT-009
+  - INVARIANT-010
+  - INVARIANT-011

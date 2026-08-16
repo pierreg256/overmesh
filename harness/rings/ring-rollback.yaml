@@ -1,0 +1,17 @@
+apiVersion: overmesh.io/v1
+ringVersion: 1
+root: true
+parentRingVersion: null
+parentRingHash: null
+replicationFactor: 2
+createdAt: 2026-08-15T10:00:00Z
+signedAtUnixMs: 1776000000000
+signingKeyId: test-ring-key-01
+ringHash: sha256:signed-but-below-minimum-trusted-version
+nodes:
+  - id: storage-a
+    region: local-a
+    weight: 100
+  - id: storage-b
+    region: local-b
+    weight: 100

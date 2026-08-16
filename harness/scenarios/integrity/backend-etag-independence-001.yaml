@@ -1,0 +1,33 @@
+apiVersion: harness.overmesh.io/v1
+id: BACKEND-ETAG-INDEPENDENCE-001
+suite: manifest-content-integrity
+environment:
+  providers:
+    - model
+seed: 6203
+initialState:
+  blob: absent
+operations:
+  - action: putBlob
+    blob: /integrity/backend-etags.bin
+    dataset: tiny/hello.txt
+    writeId: backend-etag-independence-001
+  - action: observeReplicaConsistency
+    blob: /integrity/backend-etags.bin
+faults: []
+expected:
+  clientOutcome:
+    class: success
+  visibleBlob:
+    present: true
+    mustNeverBePrepared: true
+  healthAfterOperations: HEALTHY
+  healthAfterReconciliation: HEALTHY
+  responses:
+    - operation: putBlob
+      status: 201
+invariants:
+  - INVARIANT-003
+  - INVARIANT-006
+  - INVARIANT-007
+  - INVARIANT-011

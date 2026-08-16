@@ -1,0 +1,40 @@
+apiVersion: harness.overmesh.io/v1
+id: TAMPERED-SOURCE-REFUSED-001
+suite: repair-and-quarantine
+environment:
+  providers:
+    - model
+seed: 6301
+initialState:
+  blob: absent
+operations:
+  - action: putBlob
+    blob: /repair/tampered-source.bin
+    dataset: tiny/hello.txt
+    writeId: tampered-source-refused-001
+  - action: tamperContent
+    blob: /repair/tampered-source.bin
+    replica: A
+  - action: removeReplica
+    blob: /repair/tampered-source.bin
+    replica: B
+  - action: attemptRepair
+    blob: /repair/tampered-source.bin
+    source: A
+    target: B
+faults: []
+expected:
+  clientOutcome:
+    class: failure
+  visibleBlob:
+    present: false
+    mustNeverBePrepared: true
+  healthAfterOperations: QUARANTINED
+  healthAfterReconciliation: QUARANTINED
+  responses:
+    - operation: putBlob
+      status: 201
+invariants:
+  - INVARIANT-008
+  - INVARIANT-009
+  - INVARIANT-012

@@ -1,0 +1,11 @@
+{
+  "blob": "/documents/report.pdf",
+  "write_id": "2f4d242f-0000-4000-8000-000000008001",
+  "logical_version": 2,
+  "previous_logical_etag": "\"om-v1-test\"",
+  "ring_version": 1,
+  "deleted_at": "2026-08-15T10:05:00Z",
+  "state": "TOMBSTONED",
+  "signing_key_id": "test-blob-key-01"
+}
+

@@ -1,0 +1,67 @@
+apiVersion: harness.overmesh.io/v1
+id: OVERWRITE-GC-001
+suite: delete-garbage-collection
+environment:
+  providers:
+    - model
+seed: 6402
+initialState:
+  blob: absent
+  retentionMs: 100
+operations:
+  - action: putBlob
+    blob: /delete/overwrite-gc.bin
+    dataset: tiny/hello.txt
+    writeId: overwrite-gc-v1
+  - action: collect
+    blob: /delete/overwrite-gc.bin
+  - action: advanceTime
+    blob: /delete/overwrite-gc.bin
+    milliseconds: 50
+  - action: putBlob
+    blob: /delete/overwrite-gc.bin
+    dataset: tiny/hello.txt
+    writeId: overwrite-gc-v2
+  - action: advanceTime
+    blob: /delete/overwrite-gc.bin
+    milliseconds: 99
+  - action: collect
+    blob: /delete/overwrite-gc.bin
+  - action: advanceTime
+    blob: /delete/overwrite-gc.bin
+    milliseconds: 1
+  - action: collect
+    blob: /delete/overwrite-gc.bin
+faults: []
+expected:
+  clientOutcome:
+    class: success
+  visibleBlob:
+    present: true
+    mustNeverBePrepared: true
+  healthAfterOperations: HEALTHY
+  healthAfterReconciliation: HEALTHY
+  responses:
+    - operation: putBlob
+      status: 201
+    - operation: putBlob
+      status: 201
+  currentLogicalVersion: 2
+  physicalContentVersions:
+    - 2
+  collectedVersions:
+    - 1
+  collectionRuns:
+    - atMs: 0
+      collectedVersions: []
+    - atMs: 149
+      collectedVersions: []
+    - atMs: 150
+      collectedVersions:
+        - 1
+invariants:
+  - INVARIANT-001
+  - INVARIANT-006
+  - INVARIANT-009
+  - INVARIANT-010
+  - INVARIANT-011

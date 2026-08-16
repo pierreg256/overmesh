@@ -1,0 +1,52 @@
+ring:
+  documentPath: /etc/overmesh/ring.yaml
+  signaturePath: /etc/overmesh/ring.sig
+  keyId: https://example.vault.azure.net/keys/overmesh-ring/current-version
+  publicKeyPath: /etc/overmesh/ring-public.pem
+  notBeforeUnixMs: 1776000000000
+  notAfterUnixMs: 1807536000000
+  trustedPublicKeys:
+    - keyId: https://example.vault.azure.net/keys/overmesh-ring/previous-version
+      publicKeyPath: /etc/overmesh/ring-public-previous.pem
+      notBeforeUnixMs: 1744464000000
+      notAfterUnixMs: 1776086400000
+  trustedPredecessor:
+    ringVersion: 41
+    ringHash: sha256:REPLACE_WITH_64_HEX_CHARACTERS
+  minimumVersion: 42
+backends:
+  - id: storage-a
+    endpoint: https://STORAGE_A.blob.core.windows.net
+    resourceId: /subscriptions/SUBSCRIPTION_ID/resourceGroups/RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/STORAGE_A
+  - id: storage-b
+    endpoint: https://STORAGE_B.blob.core.windows.net
+    resourceId: /subscriptions/SUBSCRIPTION_ID/resourceGroups/RESOURCE_GROUP/providers/Microsoft.Storage/storageAccounts/STORAGE_B
+signing:
+  provider: azureKeyVault
+  keyId: https://VAULT_NAME.vault.azure.net/keys/overmesh-manifests/KEY_VERSION
+  notBeforeUnixMs: 1776000000000
+  notAfterUnixMs: 1807536000000
+  vaultUrl: https://VAULT_NAME.vault.azure.net
+  keyName: overmesh-manifests
+  keyVersion: KEY_VERSION
+  publicKeyPath: /etc/overmesh/manifest-public.pem
+  trustedPublicKeys:
+    - keyId: https://example.vault.azure.net/keys/overmesh-manifests/previous-version
+      publicKeyPath: /etc/overmesh/manifest-public-previous.pem
+      notBeforeUnixMs: 1744464000000
+      notAfterUnixMs: 1776086400000
+  credential: workloadIdentity
+identity:
+  provider: workloadIdentity
+rbacPosture:
+  provider: azureArm
+  approvedSystemPrincipalIds:
+    - GATEWAY_MANAGED_IDENTITY_OBJECT_ID
+    - RECONCILER_MANAGED_IDENTITY_OBJECT_ID
+intervalSeconds: 300
+physicalCollectionDelaySeconds: 604800
+historyCompaction:
+  maxVersionsPerCycle: 256
+headDiscovery:
+  batchSize: 256
+  cursorPath: /var/lib/overmesh/head-discovery-cursor.json

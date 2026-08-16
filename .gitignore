@@ -1,0 +1,9 @@
+/target/
+/.harness/
+/.azure/
+/harness/reports/*.json
+/harness/artifacts/*
+/harness/traces/*
+!/harness/artifacts/README.md
+!/harness/traces/README.md
+.DS_Store

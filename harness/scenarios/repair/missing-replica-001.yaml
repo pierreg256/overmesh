@@ -1,0 +1,37 @@
+apiVersion: harness.overmesh.io/v1
+id: REPAIR-MISSING-001
+suite: repair-and-quarantine
+environment:
+  providers:
+    - model
+    - azurite
+    - azure
+seed: 9001
+initialState:
+  blob: absent
+operations:
+  - action: putBlob
+    blob: /repair/missing.bin
+    dataset: tiny/hello.txt
+    writeId: 2f4d242f-0000-4000-8000-000000009001
+  - action: removeReplica
+    blob: /repair/missing.bin
+    replica: B
+faults: []
+expected:
+  clientOutcome:
+    class: success
+  visibleBlob:
+    present: false
+    mustNeverBePrepared: true
+  healthAfterOperations: MISSING
+  healthAfterReconciliation: HEALTHY
+invariants:
+  - INVARIANT-002
+  - INVARIANT-003
+  - INVARIANT-004
+  - INVARIANT-005
+  - INVARIANT-006
+  - INVARIANT-007
+  - INVARIANT-009
+  - INVARIANT-012

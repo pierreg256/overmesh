@@ -1,0 +1,48 @@
+apiVersion: harness.overmesh.io/fault-registry/v1
+groups:
+  network:
+    - FAULT-NET-001
+    - FAULT-NET-002
+    - FAULT-NET-003
+    - FAULT-NET-004
+    - FAULT-NET-005
+    - FAULT-NET-006
+    - FAULT-NET-007
+    - FAULT-NET-008
+  ring:
+    - FAULT-RING-001
+    - FAULT-RING-002
+    - FAULT-RING-003
+    - FAULT-RING-004
+    - FAULT-RING-005
+    - FAULT-RING-006
+    - FAULT-RING-007
+  process:
+    - FAULT-PROC-001
+    - FAULT-PROC-002
+    - FAULT-PROC-003
+    - FAULT-PROC-004
+    - FAULT-PROC-005
+    - FAULT-PROC-006
+  commit:
+    - FAULT-COMMIT-001
+    - FAULT-COMMIT-002
+    - FAULT-COMMIT-003
+    - FAULT-COMMIT-004
+    - FAULT-COMMIT-005
+    - FAULT-COMMIT-006
+    - FAULT-COMMIT-007
+    - FAULT-COMMIT-008
+    - FAULT-COMMIT-009
+    - FAULT-COMMIT-010
+    - FAULT-COMMIT-011
+    - FAULT-COMMIT-012
+  concurrency:
+    - FAULT-RACE-001
+    - FAULT-RACE-002
+    - FAULT-RACE-003
+    - FAULT-RACE-004
+    - FAULT-RACE-005
+    - FAULT-RACE-006
+    - FAULT-RACE-007
+

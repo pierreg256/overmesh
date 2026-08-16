@@ -1,0 +1,38 @@
+apiVersion: harness.overmesh.io/v1
+id: INVALID-SIGNATURE-001
+suite: manifest-content-integrity
+environment:
+  providers:
+    - model
+seed: 6201
+initialState:
+  blob: absent
+operations:
+  - action: putBlob
+    blob: /integrity/invalid-signature.bin
+    dataset: tiny/hello.txt
+    writeId: invalid-signature-001
+  - action: invalidateSignature
+    blob: /integrity/invalid-signature.bin
+    replica: A
+  - action: head
+    blob: /integrity/invalid-signature.bin
+faults: []
+expected:
+  clientOutcome:
+    class: failure
+  visibleBlob:
+    present: false
+    mustNeverBePrepared: true
+  healthAfterOperations: QUARANTINED
+  healthAfterReconciliation: QUARANTINED
+  responses:
+    - operation: putBlob
+      status: 201
+    - operation: head
+      status: 409
+invariants:
+  - INVARIANT-006
+  - INVARIANT-007
+  - INVARIANT-009
+  - INVARIANT-012

@@ -1,0 +1,39 @@
+apiVersion: harness.overmesh.io/v1
+id: TOMBSTONE-SUCCESS-001
+suite: delete-garbage-collection
+environment:
+  providers:
+    - model
+    - azurite
+    - azure
+seed: 8001
+initialState:
+  blob: absent
+operations:
+  - action: putBlob
+    blob: /documents/report.pdf
+    dataset: tiny/hello.txt
+    writeId: 2f4d242f-0000-4000-8000-000000008000
+  - action: deleteBlob
+    blob: /documents/report.pdf
+    writeId: 2f4d242f-0000-4000-8000-000000008001
+faults: []
+expected:
+  clientOutcome:
+    class: success
+  visibleBlob:
+    present: false
+    mustNeverBePrepared: true
+  healthAfterOperations: HEALTHY
+  healthAfterReconciliation: HEALTHY
+invariants:
+  - INVARIANT-003
+  - INVARIANT-004
+  - INVARIANT-005
+  - INVARIANT-006
+  - INVARIANT-007
+  - INVARIANT-009
+  - INVARIANT-010
+  - INVARIANT-011
+  - INVARIANT-012
+

@@ -1,0 +1,14 @@
+{
+  "blob": "/images/photo.jpg",
+  "write_id": "2f4d242f-0000-4000-8000-000000000001",
+  "logical_version": 1,
+  "logical_etag": "\"om-v1-test\"",
+  "ring_version": 1,
+  "content_length": 32,
+  "content_sha256": "sha256:test-fixture",
+  "block_manifest_sha256": "sha256:test-block-fixture",
+  "committed_at": "2026-08-15T10:00:00Z",
+  "state": "COMMITTED",
+  "signing_key_id": "test-blob-key-01"
+}
+
