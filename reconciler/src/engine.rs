@@ -1,8 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    fs,
     future::Future,
-    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -51,10 +49,7 @@ pub struct ReconcilerEngine {
     physical_collection_delay: Duration,
     history_compaction_max_versions_per_cycle: usize,
     head_discovery_batch_size: usize,
-    head_discovery_cursor_path: PathBuf,
     staged_block_gc_max_records_per_cycle: usize,
-    staged_block_metadata_cursor_path: PathBuf,
-    staged_block_marker_cursor_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,14 +63,12 @@ pub struct ReconcilerOptions {
     pub physical_collection_delay: Duration,
     pub history_compaction_max_versions_per_cycle: usize,
     pub head_discovery_batch_size: usize,
-    pub head_discovery_cursor_path: PathBuf,
     pub staged_block_gc_max_records_per_cycle: usize,
-    pub staged_block_metadata_cursor_path: PathBuf,
-    pub staged_block_marker_cursor_path: PathBuf,
 }
 
 mod audit;
 mod catalog;
+mod cursor;
 mod discovery;
 mod gc;
 mod history;
@@ -121,25 +114,32 @@ struct HeadCandidate {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct HeadDiscoveryCursor {
+struct DiscoveryCursor {
     api_version: String,
     ring_version: u64,
+    sequence: u64,
     node_index: usize,
     backend_cursor: Option<String>,
+    signing_key_id: String,
+}
+
+#[derive(Debug, Clone)]
+struct CursorReplicaState {
+    backend_id: String,
+    etag: Option<String>,
+    exists: bool,
+}
+
+#[derive(Debug, Clone)]
+struct CursorPublication {
+    object_key: &'static str,
+    cursor: DiscoveryCursor,
+    replicas: Vec<CursorReplicaState>,
 }
 
 struct HeadDiscoveryBatch {
     candidates: Vec<HeadCandidate>,
-    next_cursor: Option<HeadDiscoveryCursor>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct StagedDiscoveryCursor {
-    api_version: String,
-    ring_version: u64,
-    node_index: usize,
-    backend_cursor: Option<String>,
+    next_cursor: Option<CursorPublication>,
 }
 
 #[derive(Debug)]

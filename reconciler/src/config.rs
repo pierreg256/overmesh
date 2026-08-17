@@ -14,9 +14,16 @@ use azure_identity::{
 };
 use overmesh_gateway::{
     backend::{HttpBlobBackend, SharedBackend},
-    config::{BackendConfig, RingConfig, SigningConfig, build_manifest_signer},
+    config::{
+        BackendConfig, RingConfig, SigningConfig, TopologyValidationConfig,
+        TopologyValidationProvider, build_manifest_signer,
+    },
     manifest::ManifestSigner,
     ring::{SignedRing, TrustedRingKey, TrustedRingPredecessor},
+    topology::{
+        AzureArmStorageTopologyValidator, DisabledStorageTopologyValidator,
+        SharedStorageTopologyValidator, StorageAccountBinding,
+    },
 };
 use serde::Deserialize;
 
@@ -34,6 +41,8 @@ pub struct ReconcilerConfig {
     pub signing: SigningConfig,
     pub identity: IdentityConfig,
     pub rbac_posture: RbacPostureConfig,
+    #[serde(default)]
+    pub topology_validation: TopologyValidationConfig,
     #[serde(default = "default_interval_seconds")]
     pub interval_seconds: u64,
     #[serde(default = "default_physical_collection_delay_seconds")]
@@ -51,18 +60,12 @@ pub struct ReconcilerConfig {
 pub struct StagedBlockGcConfig {
     #[serde(default = "default_staged_block_gc_max_records_per_cycle")]
     pub max_records_per_cycle: usize,
-    #[serde(default = "default_staged_block_metadata_cursor_path")]
-    pub metadata_cursor_path: PathBuf,
-    #[serde(default = "default_staged_block_marker_cursor_path")]
-    pub marker_cursor_path: PathBuf,
 }
 
 impl Default for StagedBlockGcConfig {
     fn default() -> Self {
         Self {
             max_records_per_cycle: default_staged_block_gc_max_records_per_cycle(),
-            metadata_cursor_path: default_staged_block_metadata_cursor_path(),
-            marker_cursor_path: default_staged_block_marker_cursor_path(),
         }
     }
 }
@@ -87,15 +90,12 @@ impl Default for HistoryCompactionConfig {
 pub struct HeadDiscoveryConfig {
     #[serde(default = "default_head_discovery_batch_size")]
     pub batch_size: usize,
-    #[serde(default = "default_head_discovery_cursor_path")]
-    pub cursor_path: PathBuf,
 }
 
 impl Default for HeadDiscoveryConfig {
     fn default() -> Self {
         Self {
             batch_size: default_head_discovery_batch_size(),
-            cursor_path: default_head_discovery_cursor_path(),
         }
     }
 }
@@ -144,14 +144,12 @@ pub struct ReconcilerRuntime {
     pub signer: Arc<dyn ManifestSigner>,
     pub token_provider: SharedTokenProvider,
     pub posture_auditor: SharedRbacPostureAuditor,
+    pub topology_validator: SharedStorageTopologyValidator,
     pub interval: Duration,
     pub physical_collection_delay: Duration,
     pub history_compaction_max_versions_per_cycle: usize,
     pub head_discovery_batch_size: usize,
-    pub head_discovery_cursor_path: PathBuf,
     pub staged_block_gc_max_records_per_cycle: usize,
-    pub staged_block_metadata_cursor_path: PathBuf,
-    pub staged_block_marker_cursor_path: PathBuf,
 }
 
 impl ReconcilerConfig {
@@ -181,11 +179,6 @@ impl ReconcilerConfig {
         if let Some(path) = config.identity.test_token_path.as_mut() {
             *path = resolve(base, path);
         }
-        config.head_discovery.cursor_path = resolve(base, &config.head_discovery.cursor_path);
-        config.staged_block_gc.metadata_cursor_path =
-            resolve(base, &config.staged_block_gc.metadata_cursor_path);
-        config.staged_block_gc.marker_cursor_path =
-            resolve(base, &config.staged_block_gc.marker_cursor_path);
         Ok(config)
     }
 
@@ -197,10 +190,6 @@ impl ReconcilerConfig {
         anyhow::ensure!(
             (1..=5_000).contains(&self.staged_block_gc.max_records_per_cycle),
             "stagedBlockGc.maxRecordsPerCycle must be between 1 and 5000"
-        );
-        anyhow::ensure!(
-            self.staged_block_gc.metadata_cursor_path != self.staged_block_gc.marker_cursor_path,
-            "stagedBlockGc metadataCursorPath and markerCursorPath must differ"
         );
         anyhow::ensure!(
             (1..=5_000).contains(&self.history_compaction.max_versions_per_cycle),
@@ -249,6 +238,34 @@ impl ReconcilerConfig {
                 })
             })
             .collect::<Result<Vec<_>>>();
+        let topology_bindings =
+            if self.topology_validation.provider == TopologyValidationProvider::AzureArm {
+                Some(
+                    ring.document
+                        .nodes
+                        .iter()
+                        .map(|node| {
+                            let backend = self
+                                .backends
+                                .iter()
+                                .find(|backend| backend.id == node.id)
+                                .with_context(|| {
+                                    format!("Ring node {} has no backend configuration", node.id)
+                                })?;
+                            Ok(StorageAccountBinding {
+                                backend_id: node.id.clone(),
+                                resource_id: required(
+                                    backend.resource_id.clone(),
+                                    &format!("backends[{}].resourceId", backend.id),
+                                )?,
+                                expected_region: node.region.clone(),
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                )
+            } else {
+                None
+            };
         let mut backends = HashMap::new();
         for backend in self.backends {
             let value: SharedBackend = Arc::new(HttpBlobBackend::new(
@@ -312,7 +329,7 @@ impl ReconcilerConfig {
         };
         let posture_auditor: SharedRbacPostureAuditor = match self.rbac_posture.provider {
             RbacPostureProvider::AzureArm => Arc::new(AzureArmRbacPostureAuditor::new(
-                azure_credential.context(
+                azure_credential.clone().context(
                     "Azure ARM RBAC posture auditing requires managed or workload identity",
                 )?,
                 &self.rbac_posture.management_endpoint,
@@ -328,22 +345,42 @@ impl ReconcilerConfig {
                 Arc::new(DisabledRbacPostureAuditor)
             }
         };
+        let topology_validator: SharedStorageTopologyValidator = match self
+            .topology_validation
+            .provider
+        {
+            TopologyValidationProvider::AzureArm => {
+                Arc::new(AzureArmStorageTopologyValidator::new(
+                    azure_credential.context(
+                        "Azure ARM topology validation requires managed or workload identity",
+                    )?,
+                    &self.topology_validation.management_endpoint,
+                    topology_bindings.context("Azure ARM topology bindings are missing")?,
+                )?)
+            }
+            TopologyValidationProvider::Disabled => {
+                anyhow::ensure!(
+                    self.topology_validation.allow_disabled
+                        && self.identity.provider == IdentityProvider::LocalTest,
+                    "topology validation may be disabled only for an explicitly allowed local test identity"
+                );
+                Arc::new(DisabledStorageTopologyValidator)
+            }
+        };
         Ok(ReconcilerRuntime {
             ring,
             backends,
             signer,
             token_provider,
             posture_auditor,
+            topology_validator,
             interval: Duration::from_secs(self.interval_seconds.max(1)),
             physical_collection_delay: Duration::from_secs(self.physical_collection_delay_seconds),
             history_compaction_max_versions_per_cycle: self
                 .history_compaction
                 .max_versions_per_cycle,
             head_discovery_batch_size: self.head_discovery.batch_size,
-            head_discovery_cursor_path: self.head_discovery.cursor_path,
             staged_block_gc_max_records_per_cycle: self.staged_block_gc.max_records_per_cycle,
-            staged_block_metadata_cursor_path: self.staged_block_gc.metadata_cursor_path,
-            staged_block_marker_cursor_path: self.staged_block_gc.marker_cursor_path,
         })
     }
 }
@@ -368,20 +405,8 @@ fn default_head_discovery_batch_size() -> usize {
     256
 }
 
-fn default_head_discovery_cursor_path() -> PathBuf {
-    PathBuf::from("reconciler-head-discovery-cursor.json")
-}
-
 const fn default_staged_block_gc_max_records_per_cycle() -> usize {
     256
-}
-
-fn default_staged_block_metadata_cursor_path() -> PathBuf {
-    PathBuf::from("reconciler-staged-block-metadata-cursor.json")
-}
-
-fn default_staged_block_marker_cursor_path() -> PathBuf {
-    PathBuf::from("reconciler-staged-block-marker-cursor.json")
 }
 
 fn default_management_endpoint() -> String {

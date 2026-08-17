@@ -8,6 +8,8 @@ authentication:
 controlIdentity:
   provider: managedIdentity
   managedIdentityClientId: 00000000-0000-0000-0000-000000000000
+topologyValidation:
+  provider: azureArm
 ring:
   documentPath: /etc/overmesh/ring.yaml
   signaturePath: /etc/overmesh/ring.sig

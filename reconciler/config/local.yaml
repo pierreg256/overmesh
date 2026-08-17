@@ -23,6 +23,9 @@ identity:
   provider: localTest
   testTokenPath: ../../.harness/reconciler-token.jwt
   allowTestToken: true
+topologyValidation:
+  provider: disabled
+  allowDisabled: true
 rbacPosture:
   provider: disabled
   allowDisabled: true
@@ -32,8 +35,5 @@ historyCompaction:
   maxVersionsPerCycle: 64
 headDiscovery:
   batchSize: 64
-  cursorPath: ./head-discovery-cursor.local.json
 stagedBlockGc:
   maxRecordsPerCycle: 256
-  metadataCursorPath: ./staged-block-metadata-cursor.local.json
-  markerCursorPath: ./staged-block-marker-cursor.local.json

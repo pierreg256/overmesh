@@ -13,6 +13,7 @@ pub mod manifest;
 pub mod read;
 pub mod resource;
 pub mod ring;
+pub mod topology;
 pub mod upload;
 
 pub use app::{AppState, SUPPORTED_STORAGE_VERSION, build_router};

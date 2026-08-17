@@ -19,10 +19,7 @@ impl ReconcilerEngine {
             history_compaction_max_versions_per_cycle: options
                 .history_compaction_max_versions_per_cycle,
             head_discovery_batch_size: options.head_discovery_batch_size,
-            head_discovery_cursor_path: options.head_discovery_cursor_path,
             staged_block_gc_max_records_per_cycle: options.staged_block_gc_max_records_per_cycle,
-            staged_block_metadata_cursor_path: options.staged_block_metadata_cursor_path,
-            staged_block_marker_cursor_path: options.staged_block_marker_cursor_path,
         }
     }
 
@@ -77,7 +74,7 @@ impl ReconcilerEngine {
             blobs.push(self.reconcile_head(&candidate, &token).await?);
         }
         if let Some(cursor) = discovery.next_cursor {
-            self.persist_discovery_cursor(&cursor)?;
+            self.persist_cursor(cursor, &token).await?;
         }
         Ok(CycleReport {
             api_version: "reconciler.overmesh.io/report/v1",

@@ -58,10 +58,11 @@ history deletion work per cycle. Compaction is never triggered by size alone:
 only versions already covered by identical signed GC evidence on both replicas
 can move below the signed fixed-name compaction floor.
 
-`headDiscovery.batchSize` bounds normal-cycle work. The local operational
-checkpoint at `headDiscovery.cursorPath` advances only after a successful
-cycle. Normal cycles scan one bounded page from one Ring node, then continue
-from the persisted cursor on the next cycle.
+`headDiscovery.batchSize` bounds normal-cycle work. Signed operational cursors
+are replicated under `overmesh-system/reconciler-cursors/` and advance only
+after successful work. Normal cycles scan one bounded page from one Ring node,
+then continue from the durable cursor on the next cycle. This survives
+scheduled ACA Job filesystem replacement and fails closed on cursor tampering.
 
 Staged blocks carry a signed expiry selected by the Gateway. The Reconciler
 does not treat an unsigned or tampered stage as a repair source and performs no
@@ -72,6 +73,10 @@ namespace guards, and backend ETags have been revalidated.
 stagedBlockGc:
   maxRecordsPerCycle: 256
 ```
+
+The staged metadata and marker cursors are separate signed control-plane
+objects, so persistent early records in one namespace cannot starve later
+records in the other.
 
 Run one complete cycle:
 

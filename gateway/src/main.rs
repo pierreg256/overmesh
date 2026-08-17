@@ -26,6 +26,8 @@ async fn main() -> Result<()> {
     let config = GatewayConfig::load(&cli.config)?;
     let authenticator = config.load_authenticator()?;
     let signed_ring = config.load_ring()?;
+    let topology = config.load_topology_validator(&signed_ring)?;
+    let topology_report = topology.validate().await?;
     let commit_service = config.load_commit_service(&signed_ring)?;
     commit_service.validate_control_plane().await?;
     let read_service = commit_service.read_service();
@@ -41,6 +43,7 @@ async fn main() -> Result<()> {
         address = %config.listen_address,
         version = env!("CARGO_PKG_VERSION"),
         ring_version = state.ring.ring_version,
+        storage_regions = topology_report.accounts.len(),
         "Overmesh gateway started"
     );
 

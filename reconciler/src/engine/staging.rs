@@ -9,13 +9,15 @@ pub(super) const STAGED_METADATA_CURSOR_API_VERSION: &str =
     "reconciler.overmesh.io/staged-metadata-cursor/v1";
 pub(super) const STAGED_MARKER_CURSOR_API_VERSION: &str =
     "reconciler.overmesh.io/staged-marker-cursor/v1";
+pub(super) const STAGED_METADATA_CURSOR_KEY: &str = "reconciler-cursors/staged-block-metadata.json";
+pub(super) const STAGED_MARKER_CURSOR_KEY: &str = "reconciler-cursors/staged-block-marker.json";
 
 impl ReconcilerEngine {
     pub(super) async fn reconcile_staged_blocks(&self, token: &ControlToken) -> Result<()> {
         let (keys, metadata_cursor) = self
             .discover_staged_page(
                 STAGED_BLOCK_PREFIX,
-                &self.staged_block_metadata_cursor_path,
+                STAGED_METADATA_CURSOR_KEY,
                 STAGED_METADATA_CURSOR_API_VERSION,
                 token,
             )
@@ -25,12 +27,12 @@ impl ReconcilerEngine {
                 warn!(object = key, error = %error, "staged block failed closed during reconciliation");
             }
         }
-        self.persist_staged_cursor(&self.staged_block_metadata_cursor_path, &metadata_cursor)?;
+        self.persist_cursor(metadata_cursor, token).await?;
 
         let (markers, marker_cursor) = self
             .discover_staged_page(
                 STAGED_BLOCK_GC_PREFIX,
-                &self.staged_block_marker_cursor_path,
+                STAGED_MARKER_CURSOR_KEY,
                 STAGED_MARKER_CURSOR_API_VERSION,
                 token,
             )
@@ -40,19 +42,20 @@ impl ReconcilerEngine {
                 warn!(object = marker, error = %error, "staged-block GC marker failed closed");
             }
         }
-        self.persist_staged_cursor(&self.staged_block_marker_cursor_path, &marker_cursor)?;
+        self.persist_cursor(marker_cursor, token).await?;
         Ok(())
     }
 
     pub(super) async fn discover_staged_page(
         &self,
         prefix: &str,
-        cursor_path: &Path,
+        cursor_key: &'static str,
         api_version: &str,
         token: &ControlToken,
-    ) -> Result<(Vec<String>, StagedDiscoveryCursor)> {
+    ) -> Result<(Vec<String>, CursorPublication)> {
         ensure!(!self.ring.nodes.is_empty(), "Ring contains no nodes");
-        let cursor = self.load_staged_cursor(cursor_path, api_version)?;
+        let loaded = self.load_cursor(cursor_key, api_version, token).await?;
+        let cursor = loaded.cursor.clone();
         let node = self
             .ring
             .nodes
@@ -73,74 +76,26 @@ impl ReconcilerEngine {
             "staged discovery cursor did not advance"
         );
         let next = match page.next_cursor {
-            Some(backend_cursor) => StagedDiscoveryCursor {
+            Some(backend_cursor) => DiscoveryCursor {
                 backend_cursor: Some(backend_cursor),
                 ..cursor
             },
-            None => StagedDiscoveryCursor {
+            None => DiscoveryCursor {
                 api_version: cursor.api_version,
                 ring_version: cursor.ring_version,
+                sequence: cursor.sequence,
                 node_index: (cursor.node_index + 1) % self.ring.nodes.len(),
                 backend_cursor: None,
+                signing_key_id: cursor.signing_key_id,
             },
         };
-        Ok((page.objects, next))
-    }
-
-    fn load_staged_cursor(&self, path: &Path, api_version: &str) -> Result<StagedDiscoveryCursor> {
-        let cursor = if path.exists() {
-            serde_json::from_slice::<StagedDiscoveryCursor>(
-                &fs::read(path)
-                    .with_context(|| format!("failed to read staged cursor {}", path.display()))?,
-            )
-            .with_context(|| format!("failed to parse staged cursor {}", path.display()))?
-        } else {
-            StagedDiscoveryCursor {
-                api_version: api_version.to_owned(),
-                ring_version: self.ring.ring_version,
-                node_index: 0,
-                backend_cursor: None,
-            }
-        };
-        ensure!(
-            cursor.api_version == api_version,
-            "unsupported staged discovery cursor apiVersion"
-        );
-        ensure!(
-            cursor.ring_version == self.ring.ring_version,
-            "staged discovery cursor Ring version mismatch"
-        );
-        ensure!(
-            cursor.node_index < self.ring.nodes.len(),
-            "staged discovery cursor node index is out of range"
-        );
-        Ok(cursor)
-    }
-
-    pub(super) fn persist_staged_cursor(
-        &self,
-        path: &Path,
-        cursor: &StagedDiscoveryCursor,
-    ) -> Result<()> {
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            fs::create_dir_all(parent).with_context(|| {
-                format!(
-                    "failed to create staged cursor directory {}",
-                    parent.display()
-                )
-            })?;
-        }
-        let temporary = staged_cursor_temporary_path(path);
-        fs::write(&temporary, serde_json::to_vec(cursor)?)
-            .with_context(|| format!("failed to write staged cursor {}", temporary.display()))?;
-        if let Err(error) = fs::rename(&temporary, path) {
-            let _ = fs::remove_file(&temporary);
-            return Err(error)
-                .with_context(|| format!("failed to publish staged cursor {}", path.display()));
-        }
-        Ok(())
+        Ok((
+            page.objects,
+            CursorPublication {
+                cursor: next,
+                ..loaded
+            },
+        ))
     }
 
     async fn reconcile_staged_block(&self, key: &str, token: &ControlToken) -> Result<()> {
@@ -676,12 +631,4 @@ fn staged_gc_marker_key(metadata_key: &str) -> Result<String> {
         .strip_prefix(STAGED_BLOCK_PREFIX)
         .context("invalid staged-block metadata namespace")?;
     Ok(format!("{STAGED_BLOCK_GC_PREFIX}{suffix}"))
-}
-
-fn staged_cursor_temporary_path(path: &Path) -> PathBuf {
-    let file_name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("staged-cursor");
-    path.with_file_name(format!(".{file_name}.next"))
 }

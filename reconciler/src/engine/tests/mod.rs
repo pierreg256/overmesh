@@ -1,6 +1,5 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
-    fs,
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
@@ -562,14 +561,7 @@ impl Fixture {
                 physical_collection_delay: delay,
                 history_compaction_max_versions_per_cycle,
                 head_discovery_batch_size: 10,
-                head_discovery_cursor_path: PathBuf::from("target/test-head-cursor-unused.json"),
                 staged_block_gc_max_records_per_cycle: 256,
-                staged_block_metadata_cursor_path: PathBuf::from(
-                    "target/test-staged-metadata-cursor-unused.json",
-                ),
-                staged_block_marker_cursor_path: PathBuf::from(
-                    "target/test-staged-marker-cursor-unused.json",
-                ),
             },
         );
         let blob = "/test-account/container/blob".to_owned();
