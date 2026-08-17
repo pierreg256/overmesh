@@ -93,9 +93,10 @@ milestone in `roadmap.toml`.
 
 ## Current milestone
 
-Project version `0.8.0` is the latest completed milestone for listing, block
-APIs, and signed continuation tokens. Milestone `0.9.0` remains planned and is
-not active yet. Milestone `0.7.0` completed signed tombstones,
+Project version `0.9.0` is the active milestone for private Azure Container
+Apps infrastructure, client compatibility, and live Azure conformance.
+Milestone `0.8.0` completed listing, block APIs, and signed continuation
+tokens. Milestone `0.7.0` completed signed tombstones,
 retention, validate-plan-execute garbage collection, overwrite collection,
 signed history compaction, streaming reconciliation, RF=2 placement across
 N-node Rings, key-validity windows, Ring lineage, and the hardened live Azure
