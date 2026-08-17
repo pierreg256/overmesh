@@ -99,6 +99,9 @@ module data './modules/data-v090.bicep' = {
     storageAccountAName: storageAccountAName
     storageAccountBName: storageAccountBName
     customerContainerName: 'live-v090'
+    retainedCustomerContainerNames: [
+      'live-v050'
+    ]
     tags: tags
   }
 }
@@ -242,6 +245,9 @@ module rbac './modules/rbac-v090.bicep' = {
     allowedCallerPrincipalId: allowedCallerIdentity.properties.principalId
     systemContainerName: 'overmesh-system'
     customerContainerName: 'live-v090'
+    retainedCustomerContainerNames: [
+      'live-v050'
+    ]
   }
 }
 

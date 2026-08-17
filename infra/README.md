@@ -29,8 +29,9 @@ and forwarded traffic remain disabled.
 
 The retained `0.5.0` deployment remains authoritative for the Gateway and
 Reconciler permissions on the two original `overmesh-system` containers and
-Key Vault. The `0.9.0` RBAC module adds only the new Storage C, `live-v090`,
-Storage ARM Reader, and ACR permissions.
+Key Vault. The `0.9.0` deployment mirrors retained customer-container
+definitions and permissions onto Storage C before reconciliation, and adds
+`live-v090`, Storage ARM Reader, and ACR permissions.
 
 ## Local validation
 

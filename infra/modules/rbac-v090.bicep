@@ -27,6 +27,9 @@ param systemContainerName string
 @description('Customer validation container name.')
 param customerContainerName string
 
+@description('Retained customer containers requiring symmetric access on Storage C.')
+param retainedCustomerContainerNames array
+
 var readerRoleId = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
   'acdd72a7-3385-48ef-bd42-f606fba81ae7'
@@ -86,6 +89,13 @@ resource customerContainerC 'Microsoft.Storage/storageAccounts/blobServices/cont
   parent: blobServiceC
   name: customerContainerName
 }
+
+resource retainedCustomerContainersC 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' existing = [
+  for containerName in retainedCustomerContainerNames: {
+    parent: blobServiceC
+    name: containerName
+  }
+]
 
 resource registry 'Microsoft.ContainerRegistry/registries@2025-04-01' existing = {
   name: containerRegistryName
@@ -230,6 +240,30 @@ resource callerCustomerC 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
     roleDefinitionId: blobContributorRoleId
   }
 }
+
+resource reconcilerRetainedCustomersC 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for (containerName, index) in retainedCustomerContainerNames: {
+    name: guid(retainedCustomerContainersC[index].id, reconcilerPrincipalId, blobContributorRoleId)
+    scope: retainedCustomerContainersC[index]
+    properties: {
+      principalId: reconcilerPrincipalId
+      principalType: 'ServicePrincipal'
+      roleDefinitionId: blobContributorRoleId
+    }
+  }
+]
+
+resource callerRetainedCustomersC 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for (containerName, index) in retainedCustomerContainerNames: {
+    name: guid(retainedCustomerContainersC[index].id, allowedCallerPrincipalId, blobContributorRoleId)
+    scope: retainedCustomerContainersC[index]
+    properties: {
+      principalId: allowedCallerPrincipalId
+      principalType: 'ServicePrincipal'
+      roleDefinitionId: blobContributorRoleId
+    }
+  }
+]
 
 resource gatewayAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(registry.id, gatewayPrincipalId, acrPullRoleId)

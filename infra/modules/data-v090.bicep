@@ -21,6 +21,9 @@ param storageAccountBName string
 @description('Customer container created on every replica.')
 param customerContainerName string
 
+@description('Retained customer containers copied to the new replica before reconciliation.')
+param retainedCustomerContainerNames array
+
 @description('Common resource tags.')
 param tags object
 
@@ -118,6 +121,16 @@ resource customerContainerC 'Microsoft.Storage/storageAccounts/blobServices/cont
     publicAccess: 'None'
   }
 }
+
+resource retainedCustomerContainersC 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = [
+  for containerName in retainedCustomerContainerNames: {
+    parent: blobServiceC
+    name: containerName
+    properties: {
+      publicAccess: 'None'
+    }
+  }
+]
 
 resource registry 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
   name: containerRegistryName
