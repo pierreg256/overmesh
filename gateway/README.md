@@ -138,6 +138,25 @@ cargo run --quiet -p overmesh-harness -- issue-token valid
 The local JWKS and signing keys are test-only fixtures and MUST NOT be accepted
 by a production deployment.
 
+## Ring builder
+
+`overmesh-ring-builder` finalizes the canonical Ring hash and signs the Ring
+with a pinned, non-exportable Azure Key Vault P-256 key. The public key and
+detached signature are emitted without exporting private key material:
+
+```bash
+cargo run --quiet -p overmesh-gateway --bin overmesh-ring-builder -- \
+  finalize --input ring-draft.yaml --output ring.yaml
+
+cargo run --quiet -p overmesh-gateway --bin overmesh-ring-builder -- \
+  sign \
+  --ring ring.yaml \
+  --signature ring.sig \
+  --public-key ring-public.pem \
+  --key-id https://VAULT.vault.azure.net/keys/overmesh-ring/KEY_VERSION \
+  --managed-identity-client-id MANAGED_IDENTITY_CLIENT_ID
+```
+
 ## Production manifest signing
 
 Production configuration uses a pinned, non-exportable P-256 Key Vault key:

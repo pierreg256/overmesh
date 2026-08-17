@@ -16,8 +16,9 @@ The `0.9.0` deployment is intentionally phased:
 
 The foundation phase creates the third Storage Account, geo-replicated Premium
 ACR, regional networks, Private Endpoints, monitoring, ACA environments, and
-least-privilege role assignments. It does not create an application revision
-before its image exists.
+least-privilege role assignments. It also creates the dedicated non-exportable
+P-256 `overmesh-ring-v090` Key Vault signing key. It does not create an
+application revision before its image exists.
 
 The retained `0.5.0` deployment remains authoritative for the Gateway and
 Reconciler permissions on the two original `overmesh-system` containers and

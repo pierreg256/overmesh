@@ -21,6 +21,9 @@ param storageAccountBName string = 'stomv050b8152352'
 @description('Existing Key Vault name.')
 param keyVaultName string = 'kv-overmesh-v050-8152352'
 
+@description('Dedicated non-exportable Ring signing key.')
+param ringKeyName string = 'overmesh-ring-v090'
+
 @description('Existing Gateway user-assigned managed identity name.')
 param gatewayIdentityName string = 'id-overmesh-gateway-v050'
 
@@ -85,6 +88,14 @@ module data './modules/data-v090.bicep' = {
     storageAccountBName: storageAccountBName
     customerContainerName: 'live-v090'
     tags: tags
+  }
+}
+
+module ringKey './modules/ring-key-v090.bicep' = {
+  name: 'overmesh-v090-ring-key'
+  params: {
+    keyVaultName: keyVaultName
+    ringKeyName: ringKeyName
   }
 }
 
@@ -235,3 +246,4 @@ output primaryGatewayFqdn string = deployRuntime ? primaryRuntime.outputs.gatewa
 output secondaryGatewayFqdn string = deployRuntime ? secondaryRuntime.outputs.gatewayFqdn : ''
 output frontDoorEndpointHostName string = frontDoor.?outputs.endpointHostName ?? ''
 output storageAccountCName string = data.outputs.storageAccountCName
+output ringKeyId string = ringKey.outputs.keyUriWithVersion
