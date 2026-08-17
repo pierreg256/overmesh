@@ -1,7 +1,9 @@
 use std::{
     collections::HashSet,
     fs,
+    ops::Deref,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::{Context, Result, bail};
@@ -13,7 +15,10 @@ use p256::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::resource::LogicalBlobId;
+
 const RING_SIGNATURE_DOMAIN: &[u8] = b"overmesh:ring:v1\0";
+const FIXED_VIRTUAL_NODES_PER_NODE: usize = 100;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -43,6 +48,7 @@ pub struct RingNode {
 pub struct SignedRing {
     pub document: RingDocument,
     pub document_path: PathBuf,
+    placement: RingPlacement,
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +78,78 @@ struct RingHashPayload<'a> {
     signed_at_unix_ms: u64,
     signing_key_id: &'a str,
     nodes: &'a [RingNode],
+}
+
+#[derive(Debug, Clone)]
+struct RingPlacement {
+    points: Arc<[RingPlacementPoint]>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RingPlacementPoint {
+    position: u64,
+    node_index: usize,
+}
+
+impl RingPlacement {
+    fn build(document: &RingDocument) -> Result<Self> {
+        validate_uniform_weights(&document.nodes)?;
+        let capacity = document
+            .nodes
+            .len()
+            .checked_mul(FIXED_VIRTUAL_NODES_PER_NODE)
+            .context("Ring virtual-node circle exceeds the supported size")?;
+        let mut points = Vec::with_capacity(capacity);
+        for (node_index, node) in document.nodes.iter().enumerate() {
+            for virtual_node in 0..FIXED_VIRTUAL_NODES_PER_NODE {
+                let digest = Sha256::digest(format!("{}\0{virtual_node}", node.id).as_bytes());
+                let position =
+                    u64::from_be_bytes(digest[..8].try_into().expect("SHA-256 prefix length"));
+                points.push(RingPlacementPoint {
+                    position,
+                    node_index,
+                });
+            }
+        }
+        points.sort_by_key(|point| point.position);
+        Ok(Self {
+            points: points.into(),
+        })
+    }
+
+    fn replicas_for<'a>(
+        &self,
+        document: &'a RingDocument,
+        logical_blob: &LogicalBlobId,
+    ) -> Result<Vec<&'a RingNode>> {
+        if self.points.is_empty() {
+            bail!("Ring does not contain any virtual nodes");
+        }
+        let blob_digest = Sha256::digest(logical_blob.canonical().as_bytes());
+        let blob_position =
+            u64::from_be_bytes(blob_digest[..8].try_into().expect("SHA-256 prefix length"));
+        let start = self
+            .points
+            .partition_point(|point| point.position < blob_position)
+            % self.points.len();
+        let mut selected = Vec::new();
+        let mut node_ids = HashSet::new();
+        let mut regions = HashSet::new();
+        for offset in 0..self.points.len() {
+            let node =
+                &document.nodes[self.points[(start + offset) % self.points.len()].node_index];
+            if node_ids.contains(node.id.as_str()) || regions.contains(node.region.as_str()) {
+                continue;
+            }
+            node_ids.insert(node.id.as_str());
+            regions.insert(node.region.as_str());
+            selected.push(node);
+            if selected.len() == usize::from(document.replication_factor) {
+                return Ok(selected);
+            }
+        }
+        bail!("Ring cannot place two replicas in distinct regions")
+    }
 }
 
 impl RingDocument {
@@ -171,6 +249,7 @@ impl RingDocument {
             }
             regions.insert(node.region.as_str());
         }
+        validate_uniform_weights(&self.nodes)?;
         if regions.len() < 2 {
             bail!("V1 replicas must span at least two distinct regions");
         }
@@ -185,42 +264,24 @@ impl RingDocument {
         Ok(())
     }
 
-    pub fn replicas_for(&self, logical_blob: &str) -> Result<Vec<&RingNode>> {
-        let mut points = Vec::new();
-        for node in &self.nodes {
-            for virtual_node in 0..node.weight {
-                let digest = Sha256::digest(format!("{}\0{virtual_node}", node.id).as_bytes());
-                let position =
-                    u64::from_be_bytes(digest[..8].try_into().expect("SHA-256 prefix length"));
-                points.push((position, node));
-            }
-        }
-        points.sort_by_key(|(position, _)| *position);
-        let blob_digest = Sha256::digest(logical_blob.as_bytes());
-        let blob_position =
-            u64::from_be_bytes(blob_digest[..8].try_into().expect("SHA-256 prefix length"));
-        let start =
-            points.partition_point(|(position, _)| *position < blob_position) % points.len();
-        let mut selected = Vec::new();
-        let mut node_ids = HashSet::new();
-        let mut regions = HashSet::new();
-        for offset in 0..points.len() {
-            let node = points[(start + offset) % points.len()].1;
-            if node_ids.contains(node.id.as_str()) || regions.contains(node.region.as_str()) {
-                continue;
-            }
-            node_ids.insert(node.id.as_str());
-            regions.insert(node.region.as_str());
-            selected.push(node);
-            if selected.len() == usize::from(self.replication_factor) {
-                return Ok(selected);
-            }
-        }
-        bail!("Ring cannot place two replicas in distinct regions")
+    pub fn replicas_for(&self, logical_blob: &LogicalBlobId) -> Result<Vec<&RingNode>> {
+        RingPlacement::build(self)?.replicas_for(self, logical_blob)
     }
 }
 
 impl SignedRing {
+    pub fn from_document(document: RingDocument) -> Result<Self> {
+        Self::with_placement(document, PathBuf::new())
+    }
+
+    fn with_placement(document: RingDocument, document_path: PathBuf) -> Result<Self> {
+        Ok(Self {
+            placement: RingPlacement::build(&document)?,
+            document,
+            document_path,
+        })
+    }
+
     pub fn load(
         document_path: &Path,
         signature_path: &Path,
@@ -277,10 +338,19 @@ impl SignedRing {
             .verify(&ring_signature_input(&document)?, &signature)
             .context("Ring signature verification failed")?;
 
-        Ok(Self {
-            document,
-            document_path: document_path.to_path_buf(),
-        })
+        Self::with_placement(document, document_path.to_path_buf())
+    }
+
+    pub fn replicas_for(&self, logical_blob: &LogicalBlobId) -> Result<Vec<&RingNode>> {
+        self.placement.replicas_for(&self.document, logical_blob)
+    }
+}
+
+impl Deref for SignedRing {
+    type Target = RingDocument;
+
+    fn deref(&self) -> &Self::Target {
+        &self.document
     }
 }
 
@@ -298,6 +368,16 @@ fn valid_sha256(value: &str) -> bool {
     })
 }
 
+fn validate_uniform_weights(nodes: &[RingNode]) -> Result<()> {
+    let Some(first_weight) = nodes.first().map(|node| node.weight) else {
+        return Ok(());
+    };
+    if nodes.iter().any(|node| node.weight != first_weight) {
+        bail!("Ring node weights are reserved and must all be equal");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, path::Path};
@@ -312,6 +392,10 @@ mod tests {
     use super::*;
 
     const SIGNED_AT: u64 = 1_776_000_000_000;
+
+    fn logical_blob(path: &str) -> LogicalBlobId {
+        LogicalBlobId::parse("test-account", path).expect("logical blob")
+    }
 
     fn root_ring() -> RingDocument {
         let mut ring = RingDocument {
@@ -355,6 +439,40 @@ mod tests {
             signing_key_id: "test-ring-key-02".to_owned(),
             ring_hash: String::new(),
             nodes: parent.nodes.clone(),
+        };
+        ring.ring_hash = ring.computed_hash().expect("ring hash");
+        ring
+    }
+
+    fn balanced_three_node_ring(weight: u32) -> RingDocument {
+        let mut ring = RingDocument {
+            api_version: "overmesh.io/v1".to_owned(),
+            ring_version: 1,
+            root: true,
+            parent_ring_version: None,
+            parent_ring_hash: None,
+            replication_factor: 2,
+            created_at: "2026-04-13T00:00:00Z".to_owned(),
+            signed_at_unix_ms: SIGNED_AT,
+            signing_key_id: "test-ring-key-01".to_owned(),
+            ring_hash: String::new(),
+            nodes: vec![
+                RingNode {
+                    id: "storage-a".to_owned(),
+                    region: "local-a".to_owned(),
+                    weight,
+                },
+                RingNode {
+                    id: "storage-b".to_owned(),
+                    region: "local-b".to_owned(),
+                    weight,
+                },
+                RingNode {
+                    id: "storage-c".to_owned(),
+                    region: "local-c".to_owned(),
+                    weight,
+                },
+            ],
         };
         ring.ring_hash = ring.computed_hash().expect("ring hash");
         ring
@@ -556,10 +674,54 @@ mod tests {
     }
 
     #[test]
-    fn placement_is_deterministic_and_cross_region() {
-        let ring = root_ring();
-        let first = ring.replicas_for("/container/blob").expect("placement");
-        let second = ring.replicas_for("/container/blob").expect("placement");
+    fn rejects_non_uniform_reserved_weights() {
+        let mut ring = balanced_three_node_ring(100);
+        ring.nodes[2].weight = 101;
+        ring.ring_hash = ring.computed_hash().expect("ring hash");
+        let error = ring
+            .validate(1, None)
+            .expect_err("non-uniform weights must fail");
+        assert!(error.to_string().contains("reserved"));
+        assert!(SignedRing::from_document(ring).is_err());
+    }
+
+    #[test]
+    fn placement_ignores_uniform_reserved_weight_values() {
+        let baseline = balanced_three_node_ring(100);
+        let reserved = balanced_three_node_ring(7);
+        for blob in [
+            "/container/blob-a",
+            "/container/blob-b",
+            "/container/blob-c",
+            "/container/blob-d",
+        ] {
+            let blob = logical_blob(blob);
+            let baseline_ids = baseline
+                .replicas_for(&blob)
+                .expect("baseline placement")
+                .into_iter()
+                .map(|node| node.id.clone())
+                .collect::<Vec<_>>();
+            let reserved_ids = reserved
+                .replicas_for(&blob)
+                .expect("reserved placement")
+                .into_iter()
+                .map(|node| node.id.clone())
+                .collect::<Vec<_>>();
+            assert_eq!(reserved_ids, baseline_ids);
+        }
+    }
+
+    #[test]
+    fn cached_signed_ring_placement_is_deterministic_and_cross_region() {
+        let ring = SignedRing::from_document(balanced_three_node_ring(7)).expect("signed ring");
+        assert_eq!(
+            ring.placement.points.len(),
+            ring.document.nodes.len() * FIXED_VIRTUAL_NODES_PER_NODE
+        );
+        let blob = logical_blob("/container/blob");
+        let first = ring.replicas_for(&blob).expect("placement");
+        let second = ring.replicas_for(&blob).expect("placement");
         assert_eq!(first[0].id, second[0].id);
         assert_eq!(first[1].id, second[1].id);
         assert_ne!(first[0].region, first[1].region);

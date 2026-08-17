@@ -6,7 +6,9 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
-use overmesh_gateway::{AppState, Authenticator, RingDocument, build_router, ring::RingNode};
+use overmesh_gateway::{
+    AppState, Authenticator, RingDocument, SignedRing, build_router, ring::RingNode,
+};
 use p256::{
     ecdsa::SigningKey,
     pkcs8::{EncodePrivateKey, LineEnding},
@@ -232,7 +234,7 @@ async fn executes_declarative_gateway_authentication_contract() {
     let app = build_router(AppState {
         authenticator: identity.authenticator.clone(),
         logical_account: "test-account".to_owned(),
-        ring: std::sync::Arc::new(test_ring()),
+        ring: std::sync::Arc::new(SignedRing::from_document(test_ring()).expect("ring")),
         commit_service: None,
         read_service: None,
     });
@@ -293,7 +295,7 @@ async fn health_endpoint_does_not_require_client_authentication() {
     let app = build_router(AppState {
         authenticator: identity.authenticator,
         logical_account: "test-account".to_owned(),
-        ring: std::sync::Arc::new(test_ring()),
+        ring: std::sync::Arc::new(SignedRing::from_document(test_ring()).expect("ring")),
         commit_service: None,
         read_service: None,
     });

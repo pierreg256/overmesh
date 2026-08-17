@@ -366,7 +366,7 @@ async fn execute() -> Result<()> {
                 let path = format!("/{container}/placement-{index:05}");
                 let logical_blob = LogicalBlobId::parse(&logical_account, &path)?;
                 let mut selected = document
-                    .replicas_for(logical_blob.canonical())?
+                    .replicas_for(&logical_blob)?
                     .into_iter()
                     .map(|node| node.id.as_str())
                     .collect::<Vec<_>>();

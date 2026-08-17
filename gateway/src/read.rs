@@ -9,7 +9,7 @@ use futures_util::stream;
 use thiserror::Error;
 
 use crate::{
-    RingDocument,
+    SignedRing,
     auth::AuthenticatedPrincipal,
     backend::{BackendError, SharedBackend},
     commit::{
@@ -77,7 +77,7 @@ pub enum ReadError {
 
 #[derive(Clone)]
 pub struct ReadService {
-    ring: Arc<RingDocument>,
+    ring: Arc<SignedRing>,
     backends: HashMap<String, SharedBackend>,
     signer: Arc<dyn ManifestSigner>,
     control_tokens: SharedControlTokenProvider,
@@ -123,7 +123,7 @@ struct ReadStreamState {
 
 impl ReadService {
     pub fn new(
-        ring: Arc<RingDocument>,
+        ring: Arc<SignedRing>,
         backends: HashMap<String, SharedBackend>,
         signer: Arc<dyn ManifestSigner>,
         control_tokens: SharedControlTokenProvider,
@@ -258,7 +258,7 @@ impl ReadService {
             .map_err(|error| BackendError::InvalidResponse(error.to_string()))?;
         let replicas = self
             .ring
-            .replicas_for(logical_blob.canonical())
+            .replicas_for(logical_blob)
             .map_err(|_| ReadError::ReplicaDrift)?;
         let primary = self
             .backends

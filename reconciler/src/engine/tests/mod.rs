@@ -21,7 +21,7 @@ use overmesh_gateway::{
         logical_etag, sha256_bytes,
     },
     resource::{LogicalBlobId, stable_component},
-    ring::{RingDocument, RingNode},
+    ring::{RingDocument, RingNode, SignedRing},
 };
 
 use super::*;
@@ -519,6 +519,7 @@ struct Fixture {
     first: TestBackend,
     second: TestBackend,
     signer: Arc<LocalTestManifestSigner>,
+    logical_blob: LogicalBlobId,
     blob: String,
     head_object: String,
     history: Vec<ValidatedHistoryEntry>,
@@ -544,7 +545,7 @@ impl Fixture {
             )
             .expect("test signer"),
         );
-        let ring = Arc::new(test_ring(&["storage-a", "storage-b"]));
+        let ring = signed_test_ring(&["storage-a", "storage-b"]);
         let first = TestBackend::new("storage-a");
         let second = TestBackend::new("storage-b");
         let backends = HashMap::from([
@@ -564,9 +565,11 @@ impl Fixture {
                 staged_block_gc_max_records_per_cycle: 256,
             },
         );
-        let blob = "/test-account/container/blob".to_owned();
-        let head_object = head_object_key(&blob);
-        let path_hash = logical_path_hash(&blob);
+        let logical_blob =
+            LogicalBlobId::parse_canonical("/test-account/container/blob").expect("logical blob");
+        let blob = logical_blob.canonical().to_owned();
+        let head_object = head_object_key(&logical_blob);
+        let path_hash = logical_blob.path_hash();
         let mut previous = None;
         let mut history = Vec::new();
         for (index, state) in states.iter().enumerate() {
@@ -615,6 +618,7 @@ impl Fixture {
             }
             previous = Some(signed.payload.logical_etag.clone());
             history.push(ValidatedHistoryEntry {
+                logical_blob: logical_blob.clone(),
                 signed,
                 bytes,
                 object_key: history_key,
@@ -627,6 +631,7 @@ impl Fixture {
             first,
             second,
             signer,
+            logical_blob,
             blob,
             head_object,
             history,
@@ -637,6 +642,7 @@ impl Fixture {
         let active = self.history.last().expect("active history");
         let replica = || ValidatedReplica {
             head: ValidatedHead {
+                logical_blob: active.logical_blob.clone(),
                 signed: active.signed.clone(),
                 bytes: active.bytes.clone(),
                 backend_etag: Some("\"head\"".to_owned()),
@@ -651,7 +657,7 @@ impl Fixture {
 
     fn replace_history(&self, version: usize, first: bool, second: bool, bytes: Vec<u8>) {
         let original = &self.history[version - 1];
-        let key = high_water_history_key(&logical_path_hash(&self.blob), &original.signed.payload);
+        let key = high_water_history_key(&self.logical_blob.path_hash(), &original.signed.payload);
         if first {
             self.first.put_control(&key, bytes.clone());
         }
@@ -681,29 +687,28 @@ impl Fixture {
 
     fn marker(&self, through: u64) -> Option<ObjectValue> {
         self.first.control(&garbage_collection_marker_key(
-            &logical_path_hash(&self.blob),
+            &self.logical_blob.path_hash(),
             through,
         ))
     }
 
     fn checkpoint(&self) -> Option<ObjectValue> {
-        self.first
-            .control(&history_compaction_checkpoint_key(&logical_path_hash(
-                &self.blob,
-            )))
+        self.first.control(&history_compaction_checkpoint_key(
+            &self.logical_blob.path_hash(),
+        ))
     }
 
     fn history_keys(&self) -> Vec<String> {
         self.first.control_keys(&format!(
             "high-water/{}/history/",
-            logical_path_hash(&self.blob)
+            self.logical_blob.path_hash()
         ))
     }
 
     fn marker_keys(&self) -> Vec<String> {
         self.first.control_keys(&format!(
             "garbage-collection/{}/",
-            logical_path_hash(&self.blob)
+            self.logical_blob.path_hash()
         ))
     }
 
@@ -752,7 +757,7 @@ impl Fixture {
             HistoryCompactionCheckpoint {
                 api_version: HISTORY_COMPACTION_API_VERSION.to_owned(),
                 blob: self.blob.clone(),
-                path_hash: logical_path_hash(&self.blob),
+                path_hash: self.logical_blob.path_hash(),
                 head_object: self.head_object.clone(),
                 ring_version: 1,
                 checkpoint_version,
@@ -767,7 +772,7 @@ impl Fixture {
                 previous_checkpoint_sha256: previous.map(|(_, bytes)| sha256_bytes(bytes)),
                 previous_checkpoint_version: previous.map(|(version, _)| version),
                 garbage_collection_marker_object: garbage_collection_marker_key(
-                    &logical_path_hash(&self.blob),
+                    &self.logical_blob.path_hash(),
                     marker.payload.collected_through_logical_version,
                 ),
                 garbage_collection_marker_sha256: sha256_bytes(marker_bytes),
@@ -914,6 +919,10 @@ fn test_ring(ids: &[&str]) -> RingDocument {
             })
             .collect(),
     }
+}
+
+fn signed_test_ring(ids: &[&str]) -> Arc<SignedRing> {
+    Arc::new(SignedRing::from_document(test_ring(ids)).expect("ring"))
 }
 
 fn test_token_provider() -> LocalControlTokenProvider {

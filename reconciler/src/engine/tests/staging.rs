@@ -12,6 +12,7 @@ struct StageFixture {
     engine: ReconcilerEngine,
     first: TestBackend,
     second: TestBackend,
+    logical_blob: LogicalBlobId,
     metadata_key: String,
     container: String,
     content_key: String,
@@ -19,7 +20,7 @@ struct StageFixture {
 }
 
 async fn stage_fixture(expires_at_unix_ms: u64) -> StageFixture {
-    let ring = Arc::new(test_ring(&["storage-a", "storage-b"]));
+    let ring = signed_test_ring(&["storage-a", "storage-b"]);
     let first = TestBackend::new("storage-a");
     let second = TestBackend::new("storage-b");
     let backends = HashMap::from([
@@ -48,9 +49,10 @@ async fn stage_fixture(expires_at_unix_ms: u64) -> StageFixture {
         },
     );
     let blob = "/test-account/container/staged";
+    let logical_blob = LogicalBlobId::parse_canonical(blob).expect("logical blob");
     let upload_id = "upload-1";
     let block_id = "YmxvY2stMDAwMQ==";
-    let path_hash = logical_path_hash(blob);
+    let path_hash = logical_blob.path_hash();
     let metadata_key = format!(
         "staged-blocks/{}/{}/{}.json",
         path_hash,
@@ -64,11 +66,11 @@ async fn stage_fixture(expires_at_unix_ms: u64) -> StageFixture {
         stable_component(upload_id)
     );
     let content = b"staged content".to_vec();
-    let replicas = engine.ring.replicas_for(blob).expect("placement");
+    let replicas = engine.ring.replicas_for(&logical_blob).expect("placement");
     let signed = SignedDocument::create(
         StagedBlock {
             api_version: "overmesh.io/staged-block/v1".to_owned(),
-            blob: blob.to_owned(),
+            blob: logical_blob.canonical().to_owned(),
             upload_id: upload_id.to_owned(),
             write_id: upload_id.to_owned(),
             block_id: block_id.to_owned(),
@@ -106,6 +108,7 @@ async fn stage_fixture(expires_at_unix_ms: u64) -> StageFixture {
         engine,
         first,
         second,
+        logical_blob,
         metadata_key,
         container,
         content_key,
@@ -149,10 +152,7 @@ async fn performs_zero_deletes_when_stage_content_is_tampered() {
         .expect("reconcile");
     assert_eq!(fixture.first.delete_calls(), 0);
     assert_eq!(fixture.second.delete_calls(), 0);
-    let quarantine_key = format!(
-        "quarantine/{}.json",
-        logical_path_hash("/test-account/container/staged")
-    );
+    let quarantine_key = format!("quarantine/{}.json", fixture.logical_blob.path_hash());
     assert!(fixture.first.control(&quarantine_key).is_some());
     assert!(fixture.second.control(&quarantine_key).is_some());
 }

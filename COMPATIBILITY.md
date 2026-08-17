@@ -14,6 +14,61 @@ Storage API versions from `2017-11-09` through `2025-11-05`.
 | Container create/delete | Explicitly unsupported |
 | Snapshots, versions, tags, leases, copy, tiers | Explicitly unsupported |
 
+## Blob and container naming
+
+Container names follow Azure's own rules: 3 to 63 characters, lowercase
+letters, digits and hyphens, no leading or trailing hyphen, no consecutive
+hyphens.
+
+Blob names are percent-decoded before validation and re-encoded into a single
+canonical form. Upper and lower case escapes are equivalent, and `a%2Fb`
+denotes the same blob as `a/b`, matching Azure. Empty path segments such as
+`a//b` and `a/b/` are accepted. **No Unicode normalisation is applied**: `é` as
+U+00E9 and as `e` followed by U+0301 are distinct blobs, as they are in Azure.
+
+`.overmesh` is a reserved prefix for internal objects. Logical names in that
+namespace are refused, and internal physical objects are excluded from listings.
+
+Two deviations from Azure:
+
+**Control characters are refused** in blob names. Azure tolerates them; the
+restriction is deliberate and permanent.
+
+**Usable name length is shorter than Azure's 1,024 characters.** Overmesh
+derives a catalogue key that encodes the name at two characters per UTF-8 byte,
+and that key is bound by the same 1,024-character backend limit. The usable
+budget therefore depends on the script the name is written in:
+
+| Name content | Bytes per character | Overmesh limit | Share of Azure's 1,024 |
+|---|---|---|---|
+| ASCII | 1 | ~493 characters | 48% |
+| Latin with accents | 2 | ~246 characters | 24% |
+| CJK, Cyrillic, Greek | 3 | ~164 characters | 16% |
+| Emoji, rare planes | 4 | ~123 characters | 12% |
+
+Figures assume a ten-byte container name; a maximum-length 63-byte container
+costs a further 53 characters of budget. The limit is enforced during request
+validation with `400 InvalidRequest`, before any backend object is written.
+
+## Authorization granularity
+
+Caller authorization is Azure RBAC on the customer container. Role assignments
+scoped at container level are honoured exactly as they are by Blob Storage.
+
+**Role assignment conditions whose predicate depends on the blob path are not
+supported on customer containers.** Overmesh checks reads, `HEAD` and deletes
+against the logical blob path, but writes reach Azure on a derived content
+object under `.overmesh/objects/`, which no path predicate can match. Such a
+condition would be enforced on read and silently bypassed on write, so it is
+refused rather than partially applied. The reconciler's RBAC posture audit
+fails closed on such a condition effective on a customer container, including
+one inherited from a higher scope.
+
+Path-independent conditions are unaffected. `@Environment` predicates — private
+endpoint, subnet, time — and `@Principal` predicates compose normally. Because
+logical containers map one-to-one onto backend containers, separation by
+container works with full fidelity.
+
 Every write requires `x-overmesh-write-id` or `x-ms-client-request-id`.
 Applications may send `x-overmesh-upload-id` to isolate a multi-request block
 generation. Standard clients that omit it use an implicit caller/blob/base

@@ -11,7 +11,7 @@ async fn incremental_discovery_is_bounded_and_n_node_reconciliation_uses_selecte
         )
         .expect("test signer"),
     );
-    let ring = Arc::new(test_ring(&["storage-a", "storage-b", "storage-c"]));
+    let ring = signed_test_ring(&["storage-a", "storage-b", "storage-c"]);
     let backends = ["storage-a", "storage-b", "storage-c"]
         .into_iter()
         .map(|id| {
@@ -76,15 +76,16 @@ async fn incremental_discovery_is_bounded_and_n_node_reconciliation_uses_selecte
     assert_eq!(backends[2].1.state.list_calls.load(Ordering::SeqCst), 1);
 
     let blob = "/test-account/container/routed";
-    let head = head_object_key(blob);
-    let selected = ring.replicas_for(blob).expect("placement");
+    let logical_blob = LogicalBlobId::parse_canonical(blob).expect("logical blob");
+    let head = head_object_key(&logical_blob);
+    let selected = ring.replicas_for(&logical_blob).expect("placement");
     let selected_ids = selected
         .iter()
         .map(|node| node.id.clone())
         .collect::<HashSet<_>>();
     let discovered_on = selected[0].id.clone();
     let report = engine
-        .reconcile_head_locked(&head, Some(blob), &discovered_on, &token)
+        .reconcile_head_locked(&head, Some(&logical_blob), &discovered_on, &token)
         .await
         .expect("selected RF2 reconciliation");
     assert_eq!(report.health_after, HealthState::Absent);
@@ -125,4 +126,64 @@ async fn incremental_discovery_is_bounded_and_n_node_reconciliation_uses_selecte
             .is_err(),
         "tampered cursor must fail closed"
     );
+}
+
+#[tokio::test]
+async fn noncanonical_head_blob_is_quarantined_fail_closed() {
+    let signer = Arc::new(
+        LocalTestManifestSigner::new(
+            "test-blob-key-01",
+            true,
+            overmesh_gateway::manifest::KeyValidity::new(0, u64::MAX).expect("validity"),
+        )
+        .expect("test signer"),
+    );
+    let ring = signed_test_ring(&["storage-a", "storage-b"]);
+    let first = TestBackend::new("storage-a");
+    let second = TestBackend::new("storage-b");
+    let engine = ReconcilerEngine::new(
+        ring,
+        HashMap::from([
+            (first.id.clone(), Arc::new(first.clone()) as SharedBackend),
+            (second.id.clone(), Arc::new(second.clone()) as SharedBackend),
+        ]),
+        signer.clone(),
+        Arc::new(test_token_provider()),
+        Arc::new(DisabledRbacPostureAuditor),
+        ReconcilerOptions {
+            physical_collection_delay: Duration::ZERO,
+            history_compaction_max_versions_per_cycle: 64,
+            head_discovery_batch_size: 2,
+            staged_block_gc_max_records_per_cycle: 256,
+        },
+    );
+    let blob = "/test-account/container/%62lob";
+    let path_hash = logical_path_hash(blob);
+    let head_object = format!("heads/{path_hash}.json");
+    let signed = signed_manifest(ManifestFixtureInput {
+        blob,
+        path_hash: &path_hash,
+        version: 1,
+        state: ManifestState::Committed,
+        previous: None,
+        committed_at: 1,
+        signer: signer.as_ref(),
+        replicas: &["storage-a", "storage-b"],
+    })
+    .await;
+    first.put_control(
+        &head_object,
+        signed.canonical_bytes().expect("canonical head bytes"),
+    );
+
+    let report = engine
+        .reconcile_head_locked(&head_object, None, first.id(), &test_token().await)
+        .await
+        .expect("quarantine");
+    assert_eq!(report.health_after, HealthState::Quarantined);
+    let quarantine_key = format!("quarantine/{path_hash}.json");
+    assert!(first.control(&quarantine_key).is_some());
+    assert!(second.control(&quarantine_key).is_some());
+    assert_eq!(first.delete_calls(), 0);
+    assert_eq!(second.delete_calls(), 0);
 }

@@ -77,7 +77,9 @@ make reconciler-smoke
 ```
 
 Release validation fails closed until `HARNESS_LIVE_AZURE_COMMAND` is
-configured to execute the live Azure conformance provider.
+configured to execute the live Azure conformance provider. The bundled live
+gate entry point is `make test-live-azure`, with focused
+`test-live-azure-storage` and `test-live-azure-gateway` subtargets.
 
 ## Versioning
 

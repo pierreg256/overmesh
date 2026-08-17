@@ -11,7 +11,6 @@ use overmesh_gateway::{
         BackendError, BackendLease, DataObjectValidation, ObjectValue, PutCondition,
         ReplicaBackend, SharedBackend,
     },
-    commit::logical_path_hash,
     identity::ControlToken,
     manifest::{
         BlockDescriptor, BlockManifest, BlockManifestPage, CommitManifest, GarbageCollectionMarker,
@@ -20,8 +19,8 @@ use overmesh_gateway::{
         commit_manifest_object_prefix, logical_etag, sha256_bytes, validate_block_manifest_link,
         validate_block_manifest_page,
     },
-    resource::stable_component,
-    ring::RingDocument,
+    resource::{LogicalBlobId, stable_component},
+    ring::SignedRing,
 };
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
@@ -41,7 +40,7 @@ const HISTORY_COMPACTION_API_VERSION: &str = "overmesh.io/history-compaction-che
 
 #[derive(Clone)]
 pub struct ReconcilerEngine {
-    ring: Arc<RingDocument>,
+    ring: Arc<SignedRing>,
     backends: HashMap<String, SharedBackend>,
     signer: Arc<dyn ManifestSigner>,
     token_provider: SharedTokenProvider,
@@ -91,8 +90,11 @@ use storage::*;
 use history::high_water_history_key;
 #[cfg(test)]
 use orchestration::authoritative_over;
+#[cfg(test)]
+use overmesh_gateway::commit::logical_path_hash;
 
 struct ValidatedHead {
+    logical_blob: LogicalBlobId,
     signed: SignedDocument<CommitManifest>,
     bytes: Vec<u8>,
     backend_etag: Option<String>,
@@ -144,7 +146,7 @@ struct HeadDiscoveryBatch {
 
 #[derive(Debug)]
 struct GarbageCollectionPlan {
-    blob: String,
+    logical_blob: LogicalBlobId,
     health: HealthState,
     marker_repairs: Vec<MarkerRepair>,
     data_deletes: Vec<DataDelete>,
@@ -191,6 +193,7 @@ struct ValidatedHistory {
 }
 
 struct ValidatedHistoryEntry {
+    logical_blob: LogicalBlobId,
     signed: SignedDocument<CommitManifest>,
     bytes: Vec<u8>,
     object_key: String,
@@ -240,7 +243,7 @@ enum ReplicaValidation {
     },
     Valid(ValidatedReplica),
     Tampered {
-        blob: Option<String>,
+        blob: Option<LogicalBlobId>,
         reason: String,
     },
     Unavailable {
@@ -249,12 +252,13 @@ enum ReplicaValidation {
 }
 
 impl ReplicaValidation {
-    fn blob(&self) -> Option<&str> {
+    fn blob(&self) -> Option<&LogicalBlobId> {
         match self {
-            Self::Incomplete { head, .. } => Some(&head.signed.payload.blob),
-            Self::RecoverableTombstone { replica, .. } => Some(&replica.head.signed.payload.blob),
-            Self::Valid(replica) => Some(&replica.head.signed.payload.blob),
-            Self::Tampered { blob, .. } => blob.as_deref(),
+            Self::Incomplete { head, .. } => Some(&head.logical_blob),
+            Self::RecoverableTombstone { replica, .. } | Self::Valid(replica) => {
+                Some(&replica.head.logical_blob)
+            }
+            Self::Tampered { blob, .. } => blob.as_ref(),
             Self::MissingHead | Self::Unavailable { .. } => None,
         }
     }
@@ -278,8 +282,13 @@ fn committed_manifest_object(manifest: &CommitManifest) -> Result<String> {
     Ok(format!("{prefix}/committed.json"))
 }
 
-fn head_object_key(blob: &str) -> String {
-    format!("{HEAD_PREFIX}{}.json", logical_path_hash(blob))
+fn head_object_key(logical_blob: &LogicalBlobId) -> String {
+    format!("{HEAD_PREFIX}{}.json", logical_blob.path_hash())
+}
+
+fn parse_signed_logical_blob(canonical: &str, document_kind: &str) -> Result<LogicalBlobId> {
+    LogicalBlobId::parse_canonical(canonical)
+        .with_context(|| format!("{document_kind} blob path is malformed or non-canonical"))
 }
 
 fn head_hash(head_object: &str) -> Result<&str> {

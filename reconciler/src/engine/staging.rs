@@ -12,6 +12,11 @@ pub(super) const STAGED_MARKER_CURSOR_API_VERSION: &str =
 pub(super) const STAGED_METADATA_CURSOR_KEY: &str = "reconciler-cursors/staged-block-metadata.json";
 pub(super) const STAGED_MARKER_CURSOR_KEY: &str = "reconciler-cursors/staged-block-marker.json";
 
+struct LoadedStagedGcMarker {
+    signed: SignedDocument<StagedBlockGcMarker>,
+    logical_blob: LogicalBlobId,
+}
+
 impl ReconcilerEngine {
     pub(super) async fn reconcile_staged_blocks(&self, token: &ControlToken) -> Result<()> {
         let (keys, metadata_cursor) = self
@@ -121,7 +126,8 @@ impl ReconcilerEngine {
             signed.canonical_bytes()? == first.1.bytes,
             "staged block metadata is not canonically encoded"
         );
-        self.validate_staged_block(key, &signed.payload)?;
+        let logical_blob = parse_signed_logical_blob(&signed.payload.blob, "staged block")?;
+        self.validate_staged_block(key, &signed.payload, &logical_blob)?;
         let gc_marker_key = staged_gc_marker_key(key)?;
         if self
             .load_staged_gc_marker(&gc_marker_key, token)
@@ -132,7 +138,7 @@ impl ReconcilerEngine {
                 .await?;
             return Ok(());
         }
-        let replicas = self.ring.replicas_for(&signed.payload.blob)?;
+        let replicas = self.ring.replicas_for(&logical_blob)?;
         let first_backend = self.backend(&replicas[0].id)?;
         let second_backend = self.backend(&replicas[1].id)?;
         let (first_metadata, second_metadata) = tokio::try_join!(
@@ -144,8 +150,8 @@ impl ReconcilerEngine {
             (Some(first), Some(second)) => {
                 if first.bytes != second.bytes || first.bytes != signed.canonical_bytes()? {
                     self.quarantine(
-                        Some(signed.payload.blob.clone()),
-                        &head_object_key(&signed.payload.blob),
+                        Some(&logical_blob),
+                        &head_object_key(&logical_blob),
                         "signed staged-block metadata diverges across active replicas".to_owned(),
                         token,
                     )
@@ -245,8 +251,8 @@ impl ReconcilerEngine {
             (Ok(None), Ok(None)) => {}
             _ => {
                 self.quarantine(
-                    Some(signed.payload.blob.clone()),
-                    &head_object_key(&signed.payload.blob),
+                    Some(&logical_blob),
+                    &head_object_key(&logical_blob),
                     "signed staged-block physical content is missing, tampered, or divergent"
                         .to_owned(),
                     token,
@@ -295,7 +301,7 @@ impl ReconcilerEngine {
         let marker = SignedDocument::create(
             StagedBlockGcMarker {
                 api_version: STAGED_BLOCK_GC_API_VERSION.to_owned(),
-                blob: signed.payload.blob.clone(),
+                blob: logical_blob.canonical().to_owned(),
                 metadata_object: key.to_owned(),
                 metadata_sha256: sha256_bytes(&authoritative),
                 content_container: signed.payload.content_container.clone(),
@@ -347,7 +353,7 @@ impl ReconcilerEngine {
         &self,
         marker_key: &str,
         token: &ControlToken,
-    ) -> Result<Option<SignedDocument<StagedBlockGcMarker>>> {
+    ) -> Result<Option<LoadedStagedGcMarker>> {
         for backend in self.backends.values() {
             let Some(value) = backend.control_get_object(marker_key, token).await? else {
                 continue;
@@ -365,8 +371,13 @@ impl ReconcilerEngine {
                     self.signer.as_ref(),
                 )
                 .context("staged-block GC marker signature validation failed")?;
-            self.validate_staged_gc_marker(marker_key, &signed.payload)?;
-            return Ok(Some(signed));
+            let logical_blob =
+                parse_signed_logical_blob(&signed.payload.blob, "staged-block GC marker")?;
+            self.validate_staged_gc_marker(marker_key, &signed.payload, &logical_blob)?;
+            return Ok(Some(LoadedStagedGcMarker {
+                signed,
+                logical_blob,
+            }));
         }
         Ok(None)
     }
@@ -380,8 +391,9 @@ impl ReconcilerEngine {
             .load_staged_gc_marker(marker_key, token)
             .await?
             .context("staged-block GC marker disappeared during reconciliation")?;
-        let marker_bytes = marker.canonical_bytes()?;
-        let replicas = self.ring.replicas_for(&marker.payload.blob)?;
+        let payload = &marker.signed.payload;
+        let marker_bytes = marker.signed.canonical_bytes()?;
+        let replicas = self.ring.replicas_for(&marker.logical_blob)?;
         let first = self.backend(&replicas[0].id)?;
         let second = self.backend(&replicas[1].id)?;
         let (first_marker, second_marker) = tokio::try_join!(
@@ -425,29 +437,29 @@ impl ReconcilerEngine {
         .await?;
 
         let (first_metadata, second_metadata, first_data, second_data) = tokio::try_join!(
-            first.control_get_object(&marker.payload.metadata_object, token),
-            second.control_get_object(&marker.payload.metadata_object, token),
+            first.control_get_object(&payload.metadata_object, token),
+            second.control_get_object(&payload.metadata_object, token),
             first.service_get_data_object(
-                &marker.payload.content_container,
-                &marker.payload.content_object,
+                &payload.content_container,
+                &payload.content_object,
                 token
             ),
             second.service_get_data_object(
-                &marker.payload.content_container,
-                &marker.payload.content_object,
+                &payload.content_container,
+                &payload.content_object,
                 token
             )
         )?;
         for metadata in [&first_metadata, &second_metadata].into_iter().flatten() {
             ensure!(
-                sha256_bytes(&metadata.bytes) == marker.payload.metadata_sha256,
+                sha256_bytes(&metadata.bytes) == payload.metadata_sha256,
                 "staged metadata changed after GC marker publication"
             );
         }
         for data in [&first_data, &second_data].into_iter().flatten() {
             ensure!(
-                u64::try_from(data.bytes.len())? == marker.payload.content_length
-                    && sha256_bytes(&data.bytes) == marker.payload.content_sha256,
+                u64::try_from(data.bytes.len())? == payload.content_length
+                    && sha256_bytes(&data.bytes) == payload.content_sha256,
                 "staged data changed after GC marker publication"
             );
         }
@@ -455,8 +467,8 @@ impl ReconcilerEngine {
         if let Some(value) = first_data {
             first
                 .service_delete_data_object(
-                    &marker.payload.content_container,
-                    &marker.payload.content_object,
+                    &payload.content_container,
+                    &payload.content_object,
                     value.etag.as_deref(),
                     token,
                 )
@@ -465,8 +477,8 @@ impl ReconcilerEngine {
         if let Some(value) = second_data {
             second
                 .service_delete_data_object(
-                    &marker.payload.content_container,
-                    &marker.payload.content_object,
+                    &payload.content_container,
+                    &payload.content_object,
                     value.etag.as_deref(),
                     token,
                 )
@@ -474,20 +486,12 @@ impl ReconcilerEngine {
         }
         if let Some(value) = first_metadata {
             first
-                .control_delete_object(
-                    &marker.payload.metadata_object,
-                    value.etag.as_deref(),
-                    token,
-                )
+                .control_delete_object(&payload.metadata_object, value.etag.as_deref(), token)
                 .await?;
         }
         if let Some(value) = second_metadata {
             second
-                .control_delete_object(
-                    &marker.payload.metadata_object,
-                    value.etag.as_deref(),
-                    token,
-                )
+                .control_delete_object(&payload.metadata_object, value.etag.as_deref(), token)
                 .await?;
         }
         let marker_sha256 = sha256_bytes(&marker_bytes);
@@ -495,8 +499,8 @@ impl ReconcilerEngine {
             "completed staged-block GC marker {marker_key} with signed marker hash {marker_sha256}"
         );
         self.write_audit(
-            Some(&marker.payload.blob),
-            &head_object_key(&marker.payload.blob),
+            Some(&marker.logical_blob),
+            &head_object_key(&marker.logical_blob),
             ReconciliationClassification::Drifted,
             ReconciliationRecordAction::GarbageCollected,
             &audit_reason,
@@ -541,8 +545,13 @@ impl ReconcilerEngine {
         Ok(value.bytes)
     }
 
-    fn validate_staged_block(&self, key: &str, staged: &StagedBlock) -> Result<()> {
-        let path_hash = logical_path_hash(&staged.blob);
+    fn validate_staged_block(
+        &self,
+        key: &str,
+        staged: &StagedBlock,
+        logical_blob: &LogicalBlobId,
+    ) -> Result<()> {
+        let path_hash = logical_blob.path_hash();
         let expected_key = format!(
             "staged-blocks/{}/{}/{}.json",
             path_hash,
@@ -556,17 +565,18 @@ impl ReconcilerEngine {
         );
         ensure!(
             staged.api_version == STAGED_BLOCK_API_VERSION
+                && staged.blob == logical_blob.canonical()
                 && staged.ring_version == self.ring.ring_version
                 && staged.prepared_replicas.len() == 2
                 && key == expected_key
                 && staged.content_object.starts_with(&expected_data_prefix)
-                && !staged.content_container.is_empty()
+                && staged.content_container == logical_blob.container()
                 && staged.content_length <= overmesh_gateway::block::MAX_BLOCK_SIZE
                 && staged.created_at_unix_ms <= staged.expires_at_unix_ms
                 && (staged.base_logical_version > 0) == staged.base_logical_etag.is_some(),
             "staged block signed structure is invalid"
         );
-        let replicas = self.ring.replicas_for(&staged.blob)?;
+        let replicas = self.ring.replicas_for(logical_blob)?;
         ensure!(
             staged.prepared_replicas == [replicas[0].id.as_str(), replicas[1].id.as_str()],
             "staged block replica binding does not match active Ring placement"
@@ -578,8 +588,9 @@ impl ReconcilerEngine {
         &self,
         marker_key: &str,
         marker: &StagedBlockGcMarker,
+        logical_blob: &LogicalBlobId,
     ) -> Result<()> {
-        let path_hash = logical_path_hash(&marker.blob);
+        let path_hash = logical_blob.path_hash();
         let valid_sha256 = |value: &str| {
             value.strip_prefix("sha256:").is_some_and(|digest| {
                 digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -587,6 +598,7 @@ impl ReconcilerEngine {
         };
         ensure!(
             marker.api_version == STAGED_BLOCK_GC_API_VERSION
+                && marker.blob == logical_blob.canonical()
                 && marker.ring_version == self.ring.ring_version
                 && marker_key == staged_gc_marker_key(&marker.metadata_object)?
                 && marker
@@ -595,6 +607,7 @@ impl ReconcilerEngine {
                 && marker
                     .content_object
                     .starts_with(&format!(".overmesh/staged/{path_hash}/"))
+                && marker.content_container == logical_blob.container()
                 && valid_sha256(&marker.metadata_sha256)
                 && valid_sha256(&marker.content_sha256)
                 && marker.content_length <= overmesh_gateway::block::MAX_BLOCK_SIZE
@@ -602,7 +615,7 @@ impl ReconcilerEngine {
                 && marker.replicas.len() == 2,
             "staged-block GC marker structure is invalid"
         );
-        let replicas = self.ring.replicas_for(&marker.blob)?;
+        let replicas = self.ring.replicas_for(logical_blob)?;
         ensure!(
             marker.replicas == [replicas[0].id.as_str(), replicas[1].id.as_str()],
             "staged-block GC marker replica binding is invalid"

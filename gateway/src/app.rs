@@ -27,7 +27,7 @@ use crate::{
     listing::{ListRequest, ListingError},
     read::{BlobMetadata, ReadError, ReadService},
     resource::LogicalBlobId,
-    ring::RingDocument,
+    ring::SignedRing,
     upload::{DEFAULT_BLOCK_SIZE, SpoolBodyError, spool_body, spool_body_limited},
 };
 
@@ -39,7 +39,7 @@ const MAX_BLOCK_LIST_XML_SIZE: usize = 16 * 1024 * 1024;
 pub struct AppState {
     pub authenticator: Authenticator,
     pub logical_account: String,
-    pub ring: Arc<RingDocument>,
+    pub ring: Arc<SignedRing>,
     pub commit_service: Option<Arc<CommitService>>,
     pub read_service: Option<Arc<ReadService>>,
 }

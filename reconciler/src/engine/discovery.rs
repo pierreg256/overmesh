@@ -82,7 +82,7 @@ impl ReconcilerEngine {
         &self,
         head_object: &str,
         token: &ControlToken,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<LogicalBlobId>> {
         let expected_hash = head_hash(head_object)?;
         let mut discovered = None;
         for backend in self.backends.values() {
@@ -100,17 +100,23 @@ impl ReconcilerEngine {
                 )
                 .is_err()
                 || head.payload.ring_version != self.ring.ring_version
-                || logical_path_hash(&head.payload.blob) != expected_hash
             {
+                continue;
+            }
+            let Ok(logical_blob) = parse_signed_logical_blob(&head.payload.blob, "committed head")
+            else {
+                continue;
+            };
+            if logical_blob.path_hash() != expected_hash {
                 continue;
             }
             if let Some(existing) = &discovered {
                 ensure!(
-                    existing == &head.payload.blob,
+                    existing == &logical_blob,
                     "head hash resolves to conflicting signed blob paths"
                 );
             } else {
-                discovered = Some(head.payload.blob);
+                discovered = Some(logical_blob);
             }
         }
         Ok(discovered)

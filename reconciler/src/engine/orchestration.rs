@@ -2,7 +2,7 @@ use super::*;
 
 impl ReconcilerEngine {
     pub fn new(
-        ring: Arc<RingDocument>,
+        ring: Arc<SignedRing>,
         backends: HashMap<String, SharedBackend>,
         signer: Arc<dyn ManifestSigner>,
         token_provider: SharedTokenProvider,
@@ -86,36 +86,45 @@ impl ReconcilerEngine {
         })
     }
 
-    pub async fn recover(&self, blob: &str, source_replica: &str) -> Result<BlobReport> {
+    pub async fn recover(
+        &self,
+        logical_blob: &LogicalBlobId,
+        source_replica: &str,
+    ) -> Result<BlobReport> {
         self.audit_rbac_posture().await?;
         let token = self.token_provider.token().await?;
-        let replicas = self.ring.replicas_for(blob)?;
+        let replicas = self.ring.replicas_for(logical_blob)?;
         let primary = self.backend(&replicas[0].id)?;
-        let lock_key = format!("locks/{}", logical_path_hash(blob));
+        let lock_key = format!("locks/{}", logical_blob.path_hash());
         self.with_lease(
             primary,
             &lock_key,
             &token,
-            self.recover_locked(blob, source_replica, &token),
+            self.recover_locked(logical_blob, source_replica, &token),
         )
         .await
     }
 
     async fn recover_locked(
         &self,
-        blob: &str,
+        logical_blob: &LogicalBlobId,
         source_replica: &str,
         token: &ControlToken,
     ) -> Result<BlobReport> {
-        let replicas = self.ring.replicas_for(blob)?;
+        let replicas = self.ring.replicas_for(logical_blob)?;
         let source_index = replicas
             .iter()
             .position(|replica| replica.id == source_replica)
-            .with_context(|| format!("replica {source_replica} is not assigned to {blob}"))?;
+            .with_context(|| {
+                format!(
+                    "replica {source_replica} is not assigned to {}",
+                    logical_blob.canonical()
+                )
+            })?;
         let target_index = 1_usize.saturating_sub(source_index);
         let source = self.backend(&replicas[source_index].id)?;
         let target = self.backend(&replicas[target_index].id)?;
-        let head_object = head_object_key(blob);
+        let head_object = head_object_key(logical_blob);
         let source_validation = self
             .validate_replica(source.as_ref(), &head_object, token)
             .await;
@@ -161,18 +170,24 @@ impl ReconcilerEngine {
             "administrator-authorized recovery did not produce an identical valid replica"
         );
         match self
-            .reconcile_catalog_current(blob, &head_object, source.as_ref(), target.as_ref(), token)
+            .reconcile_catalog_current(
+                logical_blob,
+                &head_object,
+                source.as_ref(),
+                target.as_ref(),
+                token,
+            )
             .await?
         {
             CatalogReconciliation::Current | CatalogReconciliation::Repaired => {}
             CatalogReconciliation::Conflict(reason) => {
                 return self
-                    .quarantine(Some(blob.to_owned()), &head_object, reason, token)
+                    .quarantine(Some(logical_blob), &head_object, reason, token)
                     .await;
             }
         }
         self.write_audit(
-            Some(blob),
+            Some(logical_blob),
             &head_object,
             ReconciliationClassification::Quarantined,
             ReconciliationRecordAction::Recovered,
@@ -182,15 +197,15 @@ impl ReconcilerEngine {
             token,
         )
         .await?;
-        self.clear_quarantine(blob, token).await?;
+        self.clear_quarantine(logical_blob, token).await?;
         info!(
-            blob,
+            blob = logical_blob.canonical(),
             source = source.id(),
             target = target.id(),
             "blob recovered"
         );
         Ok(BlobReport {
-            blob: Some(blob.to_owned()),
+            blob: Some(logical_blob.canonical().to_owned()),
             head_object,
             health_before: HealthState::Quarantined,
             health_after: HealthState::Healthy,
@@ -209,7 +224,7 @@ impl ReconcilerEngine {
         let head_object = &candidate.object_key;
         let path_hash = head_hash(head_object)?;
         let blob = self.discover_blob_path(head_object, token).await?;
-        let lock_backend = if let Some(blob) = blob.as_deref() {
+        let lock_backend = if let Some(blob) = blob.as_ref() {
             let replicas = self.ring.replicas_for(blob)?;
             ensure!(
                 replicas
@@ -226,12 +241,7 @@ impl ReconcilerEngine {
             lock_backend,
             &lock_key,
             token,
-            self.reconcile_head_locked(
-                head_object,
-                blob.as_deref(),
-                &candidate.discovered_on,
-                token,
-            ),
+            self.reconcile_head_locked(head_object, blob.as_ref(), &candidate.discovered_on, token),
         )
         .await
     }
@@ -239,7 +249,7 @@ impl ReconcilerEngine {
     pub(super) async fn reconcile_head_locked(
         &self,
         head_object: &str,
-        blob: Option<&str>,
+        blob: Option<&LogicalBlobId>,
         discovered_on: &str,
         token: &ControlToken,
     ) -> Result<BlobReport> {
@@ -267,7 +277,8 @@ impl ReconcilerEngine {
                 .await
             {
                 ReplicaValidation::Tampered { blob, reason } => {
-                    self.quarantine(blob, head_object, reason, token).await
+                    self.quarantine(blob.as_ref(), head_object, reason, token)
+                        .await
                 }
                 ReplicaValidation::Unavailable { reason } => {
                     bail!("replica {} is unavailable: {reason}", backend.id())
@@ -318,7 +329,7 @@ impl ReconcilerEngine {
                 CatalogReconciliation::Current | CatalogReconciliation::Repaired => {}
                 CatalogReconciliation::Conflict(reason) => {
                     return self
-                        .quarantine(Some(blob.to_owned()), head_object, reason, token)
+                        .quarantine(Some(blob), head_object, reason, token)
                         .await;
                 }
             }
@@ -350,7 +361,7 @@ impl ReconcilerEngine {
                 CatalogReconciliation::Current | CatalogReconciliation::Repaired => {}
                 CatalogReconciliation::Conflict(reason) => {
                     return self
-                        .quarantine(Some(blob.to_owned()), head_object, reason, token)
+                        .quarantine(Some(blob), head_object, reason, token)
                         .await;
                 }
             }
@@ -397,8 +408,7 @@ impl ReconcilerEngine {
         if let ReplicaValidation::Tampered { blob, reason } = &first {
             return self
                 .quarantine(
-                    blob.clone()
-                        .or_else(|| second.blob().map(ToOwned::to_owned)),
+                    blob.as_ref().or_else(|| second.blob()),
                     head_object,
                     format!("{}: {reason}", first_backend.id()),
                     token,
@@ -408,7 +418,7 @@ impl ReconcilerEngine {
         if let ReplicaValidation::Tampered { blob, reason } = &second {
             return self
                 .quarantine(
-                    blob.clone().or_else(|| first.blob().map(ToOwned::to_owned)),
+                    blob.as_ref().or_else(|| first.blob()),
                     head_object,
                     format!("{}: {reason}", second_backend.id()),
                     token,
@@ -444,7 +454,7 @@ impl ReconcilerEngine {
                 },
             ) if first.head.bytes == second.head.bytes => {
                 warn!(
-                    blob = first.head.signed.payload.blob,
+                    blob = first.head.logical_blob.canonical(),
                     first_reason, second_reason, "finalizing tombstone high-water checkpoints"
                 );
                 self.repair_high_water_checkpoint(first, first_backend, token)
@@ -645,7 +655,7 @@ impl ReconcilerEngine {
                     .await
                 } else {
                     self.quarantine(
-                        Some(first_value.head.signed.payload.blob.clone()),
+                        Some(&first_value.head.logical_blob),
                         head_object,
                         "different valid heads have no provable unique authority".to_owned(),
                         token,
@@ -663,7 +673,7 @@ impl ReconcilerEngine {
                 || authoritative_over(&source.head, target_head) =>
             {
                 warn!(
-                    blob = source.head.signed.payload.blob,
+                    blob = source.head.logical_blob.canonical(),
                     target = second_backend.id(),
                     reason,
                     "repairing incomplete replica"
@@ -693,7 +703,7 @@ impl ReconcilerEngine {
                 || authoritative_over(&source.head, target_head) =>
             {
                 warn!(
-                    blob = source.head.signed.payload.blob,
+                    blob = source.head.logical_blob.canonical(),
                     target = first_backend.id(),
                     reason,
                     "repairing incomplete replica"
@@ -716,7 +726,7 @@ impl ReconcilerEngine {
             (ReplicaValidation::Incomplete { head, reason }, ReplicaValidation::MissingHead)
             | (ReplicaValidation::MissingHead, ReplicaValidation::Incomplete { head, reason }) => {
                 Ok(BlobReport {
-                    blob: Some(head.signed.payload.blob.clone()),
+                    blob: Some(head.logical_blob.canonical().to_owned()),
                     head_object: head_object.to_owned(),
                     health_before: HealthState::Missing,
                     health_after: HealthState::Missing,
@@ -728,7 +738,7 @@ impl ReconcilerEngine {
             }
             (ReplicaValidation::Incomplete { head, .. }, ReplicaValidation::Incomplete { .. }) => {
                 Ok(BlobReport {
-                    blob: Some(head.signed.payload.blob.clone()),
+                    blob: Some(head.logical_blob.canonical().to_owned()),
                     head_object: head_object.to_owned(),
                     health_before: HealthState::Missing,
                     health_after: HealthState::Missing,
@@ -740,10 +750,7 @@ impl ReconcilerEngine {
             }
             _ => {
                 self.quarantine(
-                    first
-                        .blob()
-                        .or_else(|| second.blob())
-                        .map(ToOwned::to_owned),
+                    first.blob().or_else(|| second.blob()),
                     head_object,
                     "replica state is inconsistent and no safe repair transition exists".to_owned(),
                     token,
@@ -760,7 +767,10 @@ impl ReconcilerEngine {
             .with_context(|| format!("Ring node {id} has no configured backend"))
     }
 
-    pub(super) fn target_backends(&self, blob: Option<&str>) -> Result<Vec<SharedBackend>> {
+    pub(super) fn target_backends(
+        &self,
+        blob: Option<&LogicalBlobId>,
+    ) -> Result<Vec<SharedBackend>> {
         match blob {
             Some(blob) => self
                 .ring

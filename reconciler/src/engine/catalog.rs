@@ -1,5 +1,5 @@
 use super::*;
-use overmesh_gateway::catalog::{catalog_key_from_canonical, validate_catalog_entry_for_blob};
+use overmesh_gateway::catalog::{catalog_key, validate_catalog_entry_for_logical_blob};
 
 pub(super) enum CatalogReconciliation {
     Current,
@@ -10,7 +10,7 @@ pub(super) enum CatalogReconciliation {
 impl ReconcilerEngine {
     pub(super) async fn reconcile_catalog_current(
         &self,
-        blob: &str,
+        logical_blob: &LogicalBlobId,
         head_object: &str,
         first: &dyn ReplicaBackend,
         second: &dyn ReplicaBackend,
@@ -27,12 +27,12 @@ impl ReconcilerEngine {
             first_head.bytes == second_head.bytes,
             "catalog reconciliation requires identical W=2 current heads"
         );
-        let replicas = self.ring.replicas_for(blob)?;
+        let replicas = self.ring.replicas_for(logical_blob)?;
         ensure!(replicas.len() == 2, "catalog reconciliation requires W=2");
         let replica_ids = [replicas[0].id.as_str(), replicas[1].id.as_str()];
-        let object_key = catalog_key_from_canonical(blob)?;
-        let expected = validate_catalog_entry_for_blob(
-            blob,
+        let object_key = catalog_key(logical_blob);
+        let expected = validate_catalog_entry_for_logical_blob(
+            logical_blob,
             &object_key,
             &first_head.bytes,
             self.ring.ring_version,
@@ -41,7 +41,7 @@ impl ReconcilerEngine {
         )
         .context("current head is not valid catalog truth")?;
         ensure!(
-            expected.signed_head.payload.blob == blob,
+            expected.signed_head.payload.blob == logical_blob.canonical(),
             "catalog head blob mismatch"
         );
 
@@ -60,8 +60,8 @@ impl ReconcilerEngine {
             if value.bytes == first_head.bytes {
                 continue;
             }
-            let existing = match validate_catalog_entry_for_blob(
-                blob,
+            let existing = match validate_catalog_entry_for_logical_blob(
+                logical_blob,
                 &object_key,
                 &value.bytes,
                 self.ring.ring_version,

@@ -67,15 +67,25 @@ impl CommitCoordinator {
             control_token,
         )
         .await?;
+        publish_catalog_current(
+            self.primary.as_ref(),
+            self.secondary.as_ref(),
+            logical_blob,
+            &committed.signed,
+            &committed.bytes,
+            control_token,
+            self.signer.as_ref(),
+        )
+        .await?;
         tokio::try_join!(
-            put_file_idempotent(
+            caller_put_file_idempotent(
                 self.primary.as_ref(),
                 &committed.signed.payload.content_container,
                 &committed.signed.payload.content_object,
                 content,
                 &principal.access_token
             ),
-            put_file_idempotent(
+            caller_put_file_idempotent(
                 self.secondary.as_ref(),
                 &committed.signed.payload.content_container,
                 &committed.signed.payload.content_object,
@@ -112,16 +122,6 @@ impl CommitCoordinator {
             self.primary.as_ref(),
             self.secondary.as_ref(),
             &path_hash,
-            &committed.signed,
-            &committed.bytes,
-            control_token,
-            self.signer.as_ref(),
-        )
-        .await?;
-        publish_catalog_current(
-            self.primary.as_ref(),
-            self.secondary.as_ref(),
-            logical_blob,
             &committed.signed,
             &committed.bytes,
             control_token,
@@ -182,6 +182,16 @@ impl CommitCoordinator {
         {
             return Err(CommitError::VerificationFailed);
         }
+        publish_catalog_current(
+            self.primary.as_ref(),
+            self.secondary.as_ref(),
+            logical_blob,
+            &tombstone.signed,
+            &tombstone.bytes,
+            control_token,
+            self.signer.as_ref(),
+        )
+        .await?;
         lagging_backend
             .control_put_bytes(
                 head_key,
@@ -199,20 +209,11 @@ impl CommitCoordinator {
             control_token,
         )
         .await?;
+        let path_hash = logical_blob.path_hash();
         Self::publish_high_water(
             self.primary.as_ref(),
             self.secondary.as_ref(),
-            &logical_path_hash(&tombstone.signed.payload.blob),
-            &tombstone.signed,
-            &tombstone.bytes,
-            control_token,
-            self.signer.as_ref(),
-        )
-        .await?;
-        publish_catalog_current(
-            self.primary.as_ref(),
-            self.secondary.as_ref(),
-            logical_blob,
+            &path_hash,
             &tombstone.signed,
             &tombstone.bytes,
             control_token,

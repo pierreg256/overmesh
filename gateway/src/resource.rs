@@ -3,12 +3,16 @@ use std::fmt;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::namespace::{MAX_BACKEND_OBJECT_NAME_LENGTH, catalog_key_length};
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum LogicalResourceError {
     #[error("the logical account name is empty")]
     EmptyAccount,
     #[error("the request path must identify a container and blob")]
     MissingBlob,
+    #[error("the canonical logical blob path is malformed or non-canonical")]
+    NonCanonical,
     #[error("the request path contains an invalid percent escape")]
     InvalidPercentEscape,
     #[error("the request path is not valid UTF-8 after percent decoding")]
@@ -46,7 +50,11 @@ impl LogicalBlobId {
         if !valid_container_name(&container) {
             return Err(LogicalResourceError::InvalidContainer);
         }
-        if blob.is_empty() || blob.chars().count() > 1_024 || blob.chars().any(char::is_control) {
+        if blob.is_empty()
+            || blob.chars().any(char::is_control)
+            || is_reserved_blob_name(&blob)
+            || catalog_key_length(&container, &blob) > MAX_BACKEND_OBJECT_NAME_LENGTH
+        {
             return Err(LogicalResourceError::InvalidBlob);
         }
         let canonical = format!(
@@ -63,13 +71,33 @@ impl LogicalBlobId {
         })
     }
 
+    pub fn parse_canonical(canonical: &str) -> Result<Self, LogicalResourceError> {
+        let encoded_account = canonical
+            .strip_prefix('/')
+            .and_then(|value| value.split_once('/'))
+            .map(|(account, _)| account)
+            .ok_or(LogicalResourceError::MissingBlob)?;
+        if encoded_account.is_empty() {
+            return Err(LogicalResourceError::EmptyAccount);
+        }
+        let account = percent_decode(encoded_account)?;
+        Self::from_canonical(&account, canonical)
+    }
+
     pub fn from_canonical(account: &str, canonical: &str) -> Result<Self, LogicalResourceError> {
+        if account.is_empty() {
+            return Err(LogicalResourceError::EmptyAccount);
+        }
         let account_prefix = format!("/{}", encode_path_component(account));
         let path = canonical
             .strip_prefix(&account_prefix)
             .filter(|value| value.starts_with('/'))
-            .ok_or(LogicalResourceError::EmptyAccount)?;
-        Self::parse(account, path)
+            .ok_or(LogicalResourceError::NonCanonical)?;
+        let logical_blob = Self::parse(account, path)?;
+        if logical_blob.canonical != canonical {
+            return Err(LogicalResourceError::NonCanonical);
+        }
+        Ok(logical_blob)
     }
 
     pub fn account(&self) -> &str {
@@ -109,6 +137,10 @@ impl LogicalBlobId {
     pub fn immutable_content_key(&self, content_id: &str) -> String {
         format!(".overmesh/objects/{}/{content_id}", self.path_hash(),)
     }
+}
+
+fn is_reserved_blob_name(blob: &str) -> bool {
+    blob == ".overmesh" || blob.starts_with(".overmesh/")
 }
 
 pub fn stable_component(value: &str) -> String {
@@ -221,6 +253,41 @@ mod tests {
     }
 
     #[test]
+    fn rejects_names_that_exceed_the_derived_catalog_key_limit() {
+        let accepted = "a".repeat(497);
+        let rejected = "a".repeat(498);
+        assert!(LogicalBlobId::parse("account-a", &format!("/photos/{accepted}")).is_ok());
+        assert!(matches!(
+            LogicalBlobId::parse("account-a", &format!("/photos/{rejected}")),
+            Err(LogicalResourceError::InvalidBlob)
+        ));
+
+        let accepted_unicode = "é".repeat(248);
+        let rejected_unicode = "é".repeat(249);
+        assert!(LogicalBlobId::parse("account-a", &format!("/photos/{accepted_unicode}")).is_ok());
+        assert!(matches!(
+            LogicalBlobId::parse("account-a", &format!("/photos/{rejected_unicode}")),
+            Err(LogicalResourceError::InvalidBlob)
+        ));
+    }
+
+    #[test]
+    fn rejects_the_reserved_internal_namespace() {
+        for name in [
+            ".overmesh",
+            ".overmesh/object",
+            ".overmesh/a/b",
+            ".overmesh%2Fencoded",
+        ] {
+            assert!(matches!(
+                LogicalBlobId::parse("account-a", &format!("/photos/{name}")),
+                Err(LogicalResourceError::InvalidBlob)
+            ));
+        }
+        assert!(LogicalBlobId::parse("account-a", "/photos/.overmesh-user").is_ok());
+    }
+
+    #[test]
     fn rejects_invalid_percent_escapes_and_utf8() {
         assert!(matches!(
             LogicalBlobId::parse("account-a", "/photos/a%2"),
@@ -229,6 +296,28 @@ mod tests {
         assert!(matches!(
             LogicalBlobId::parse("account-a", "/photos/%FF"),
             Err(LogicalResourceError::InvalidUtf8)
+        ));
+    }
+
+    #[test]
+    fn parses_canonical_blob_and_extracts_the_account() {
+        let blob = LogicalBlobId::parse_canonical("/account-a/photos/a%20b/~.jpg")
+            .expect("canonical blob");
+        assert_eq!(blob.account(), "account-a");
+        assert_eq!(blob.container(), "photos");
+        assert_eq!(blob.blob(), "a b/~.jpg");
+        assert_eq!(blob.canonical(), "/account-a/photos/a%20b/~.jpg");
+    }
+
+    #[test]
+    fn rejects_noncanonical_canonical_blob_strings() {
+        assert!(matches!(
+            LogicalBlobId::parse_canonical("/account-a/photos/a%2fb"),
+            Err(LogicalResourceError::NonCanonical)
+        ));
+        assert!(matches!(
+            LogicalBlobId::parse_canonical("/account-a/photos/a%7eb"),
+            Err(LogicalResourceError::NonCanonical)
         ));
     }
 }

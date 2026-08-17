@@ -57,8 +57,9 @@ impl ReconcilerEngine {
             signed.payload.ring_version == self.ring.ring_version,
             "head Ring version does not match the active Ring"
         );
+        let logical_blob = parse_signed_logical_blob(&signed.payload.blob, "committed head")?;
         ensure!(
-            head_object == head_object_key(&signed.payload.blob),
+            head_object == head_object_key(&logical_blob),
             "head object path does not match the signed blob path"
         );
         if signed.payload.state == ManifestState::Tombstoned {
@@ -75,9 +76,17 @@ impl ReconcilerEngine {
                 "tombstone structure is invalid"
             );
         }
-        let high_water_checkpoint =
-            validate_high_water(backend, head_object, &signed, token, self.signer.as_ref()).await?;
+        let high_water_checkpoint = validate_high_water(
+            backend,
+            head_object,
+            &signed,
+            &logical_blob,
+            token,
+            self.signer.as_ref(),
+        )
+        .await?;
         let head = ValidatedHead {
+            logical_blob,
             signed,
             bytes: head_object_value.bytes,
             backend_etag: head_object_value.etag,
@@ -112,9 +121,13 @@ impl ReconcilerEngine {
             }
             let previous = SignedDocument::<CommitManifest>::from_bytes(&high_water_checkpoint)
                 .context("previous high-water checkpoint is not a signed commit manifest")?;
+            let previous_logical_blob = parse_signed_logical_blob(
+                &previous.payload.blob,
+                "previous high-water checkpoint",
+            )?;
             ensure!(
                 previous.payload.state == ManifestState::Committed
-                    && previous.payload.blob == head.signed.payload.blob
+                    && previous_logical_blob == head.logical_blob
                     && previous.payload.logical_version.saturating_add(1)
                         == head.signed.payload.logical_version
                     && head.signed.payload.previous_logical_etag.as_deref()
@@ -145,6 +158,7 @@ impl ReconcilerEngine {
             backend: &dyn ReplicaBackend,
             head_object: &str,
             head: &SignedDocument<CommitManifest>,
+            logical_blob: &LogicalBlobId,
             token: &ControlToken,
             signer: &dyn ManifestSigner,
         ) -> Result<Option<Vec<u8>>> {
@@ -160,8 +174,11 @@ impl ReconcilerEngine {
                         signer,
                     )
                     .context("high-water checkpoint signature validation failed")?;
+                let highest_logical_blob =
+                    parse_signed_logical_blob(&highest.payload.blob, "high-water checkpoint")?;
                 ensure!(
-                    highest.payload.logical_version <= head.payload.logical_version,
+                    highest_logical_blob == *logical_blob
+                        && highest.payload.logical_version <= head.payload.logical_version,
                     "committed head was replayed below the durable high-water version"
                 );
                 if highest.payload.logical_version == head.payload.logical_version {

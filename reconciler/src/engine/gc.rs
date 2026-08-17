@@ -44,17 +44,22 @@ impl ReconcilerEngine {
             "current head and durable high-water checkpoints do not correspond exactly"
         );
         let active = &first.head.signed.payload;
+        let active_logical_blob = &first.head.logical_blob;
         let health = if active.state == ManifestState::Tombstoned {
             HealthState::Tombstoned
         } else {
             HealthState::Healthy
         };
-        let path_hash = head_hash(head_object)?;
+        let path_hash = active_logical_blob.path_hash();
+        ensure!(
+            head_object == head_object_key(active_logical_blob),
+            "current head object path does not match its validated logical blob"
+        );
         let checkpoint = self
             .validate_or_repair_compaction_checkpoint(
-                path_hash,
                 head_object,
                 active,
+                active_logical_blob,
                 first_backend,
                 second_backend,
                 token,
@@ -62,9 +67,10 @@ impl ReconcilerEngine {
             .await?;
         let history = self
             .validate_history(
-                path_hash,
+                &path_hash,
                 head_object,
                 active,
+                active_logical_blob,
                 &first.head.bytes,
                 checkpoint.as_ref(),
                 first_backend,
@@ -74,9 +80,10 @@ impl ReconcilerEngine {
             .await?;
         let markers = self
             .validate_garbage_collection_markers(
-                path_hash,
+                &path_hash,
                 head_object,
                 active,
+                active_logical_blob,
                 &history,
                 checkpoint.as_ref(),
                 first_backend,
@@ -117,7 +124,7 @@ impl ReconcilerEngine {
                     ManifestState::Committed => {
                         let (data, metadata) = self
                             .validate_candidate_namespace(
-                                path_hash,
+                                &path_hash,
                                 entry,
                                 first_backend,
                                 second_backend,
@@ -131,7 +138,7 @@ impl ReconcilerEngine {
                     ManifestState::Tombstoned => {
                         metadata_deletes.extend(
                             self.validate_tombstone_candidate_namespace(
-                                path_hash,
+                                &path_hash,
                                 entry,
                                 first_backend,
                                 second_backend,
@@ -151,7 +158,7 @@ impl ReconcilerEngine {
             let marker = SignedDocument::create(
                 GarbageCollectionMarker {
                     api_version: "overmesh.io/garbage-collection-marker/v1".to_owned(),
-                    blob: active.blob.clone(),
+                    blob: active_logical_blob.canonical().to_owned(),
                     head_object: head_object.to_owned(),
                     ring_version: self.ring.ring_version,
                     history_head_logical_version: active.logical_version,
@@ -170,7 +177,7 @@ impl ReconcilerEngine {
             )
             .await?;
             Some((
-                garbage_collection_marker_key(path_hash, through),
+                garbage_collection_marker_key(&path_hash, through),
                 marker.canonical_bytes()?,
             ))
         } else {
@@ -213,8 +220,8 @@ impl ReconcilerEngine {
             let signed = SignedDocument::create(
                 HistoryCompactionCheckpoint {
                     api_version: HISTORY_COMPACTION_API_VERSION.to_owned(),
-                    blob: active.blob.clone(),
-                    path_hash: path_hash.to_owned(),
+                    blob: active_logical_blob.canonical().to_owned(),
+                    path_hash: path_hash.clone(),
                     head_object: head_object.to_owned(),
                     ring_version: self.ring.ring_version,
                     checkpoint_version,
@@ -252,7 +259,8 @@ impl ReconcilerEngine {
             .await?;
             validate_compaction_checkpoint(
                 &signed.payload,
-                path_hash,
+                active_logical_blob,
+                &path_hash,
                 head_object,
                 active,
                 self.ring.ring_version,
@@ -306,7 +314,7 @@ impl ReconcilerEngine {
         });
 
         Ok(GarbageCollectionPlan {
-            blob: active.blob.clone(),
+            logical_blob: active_logical_blob.clone(),
             health,
             marker_repairs: markers.repairs,
             data_deletes: data_deletes.into_iter().collect(),
@@ -442,7 +450,7 @@ impl ReconcilerEngine {
                 .to_owned()
         };
         Ok(BlobReport {
-            blob: Some(plan.blob),
+            blob: Some(plan.logical_blob.canonical().to_owned()),
             head_object: head_object.to_owned(),
             health_before: plan.health,
             health_after: plan.health,

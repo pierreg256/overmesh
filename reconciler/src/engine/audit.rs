@@ -25,7 +25,7 @@ impl ReconcilerEngine {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn write_audit(
         &self,
-        blob: Option<&str>,
+        blob: Option<&LogicalBlobId>,
         head_object: &str,
         classification: ReconciliationClassification,
         action: ReconciliationRecordAction,
@@ -68,7 +68,7 @@ impl ReconcilerEngine {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn signed_record(
         &self,
-        blob: Option<&str>,
+        blob: Option<&LogicalBlobId>,
         head_object: &str,
         classification: ReconciliationClassification,
         action: ReconciliationRecordAction,
@@ -79,7 +79,7 @@ impl ReconcilerEngine {
         Ok(SignedDocument::create(
             ReconciliationRecord {
                 api_version: "overmesh.io/reconciliation/v1".to_owned(),
-                blob: blob.map(ToOwned::to_owned),
+                blob: blob.map(|logical_blob| logical_blob.canonical().to_owned()),
                 head_object: head_object.to_owned(),
                 ring_version: self.ring.ring_version,
                 observed_at_unix_ms: now_unix_ms(),

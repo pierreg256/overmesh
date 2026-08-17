@@ -139,7 +139,7 @@ pub enum RbacPostureProvider {
 }
 
 pub struct ReconcilerRuntime {
-    pub ring: SignedRing,
+    pub ring: Arc<SignedRing>,
     pub backends: HashMap<String, SharedBackend>,
     pub signer: Arc<dyn ManifestSigner>,
     pub token_provider: SharedTokenProvider,
@@ -368,7 +368,7 @@ impl ReconcilerConfig {
             }
         };
         Ok(ReconcilerRuntime {
-            ring,
+            ring: Arc::new(ring),
             backends,
             signer,
             token_provider,

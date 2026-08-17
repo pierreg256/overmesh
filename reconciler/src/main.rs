@@ -1,7 +1,8 @@
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use overmesh_gateway::resource::LogicalBlobId;
 use overmesh_reconciler::{
     config::ReconcilerConfig,
     engine::{ReconcilerEngine, ReconcilerOptions, verify_reconciliation_record},
@@ -71,7 +72,7 @@ async fn main() -> Result<()> {
     let head_discovery_batch_size = runtime.head_discovery_batch_size;
     let staged_block_gc_max_records_per_cycle = runtime.staged_block_gc_max_records_per_cycle;
     let engine = ReconcilerEngine::new(
-        Arc::new(runtime.ring.document),
+        runtime.ring.clone(),
         runtime.backends,
         runtime.signer,
         runtime.token_provider,
@@ -108,9 +109,13 @@ async fn main() -> Result<()> {
             blob,
             source_replica,
         } => {
+            let logical_blob = LogicalBlobId::parse_canonical(&blob)
+                .context("recover --blob must be a canonical logical blob path")?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&engine.recover(&blob, &source_replica).await?)?
+                serde_json::to_string_pretty(
+                    &engine.recover(&logical_blob, &source_replica).await?
+                )?
             );
         }
         Command::AuditRbac => {

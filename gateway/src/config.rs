@@ -283,7 +283,7 @@ impl GatewayConfig {
         )
     }
 
-    pub fn load_commit_service(&self, signed_ring: &SignedRing) -> Result<CommitService> {
+    pub fn load_commit_service(&self, signed_ring: Arc<SignedRing>) -> Result<CommitService> {
         anyhow::ensure!(
             (60..=24 * 60 * 60).contains(&self.listing.continuation_token_lifetime_seconds),
             "listing.continuationTokenLifetimeSeconds must be between 60 and 86400"
@@ -311,7 +311,7 @@ impl GatewayConfig {
         let signer = build_manifest_signer(&self.signing)?;
         let control_tokens = build_control_token_provider(&self.control_identity)?;
         Ok(CommitService::new_with_options(
-            Arc::new(signed_ring.document.clone()),
+            signed_ring,
             backends,
             signer,
             control_tokens,

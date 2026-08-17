@@ -3,23 +3,38 @@ use super::*;
 impl ReconcilerEngine {
     pub(super) async fn validate_or_repair_compaction_checkpoint(
         &self,
-        path_hash: &str,
         head_object: &str,
         active: &CommitManifest,
+        active_logical_blob: &LogicalBlobId,
         first_backend: &dyn ReplicaBackend,
         second_backend: &dyn ReplicaBackend,
         token: &ControlToken,
     ) -> Result<Option<LoadedCompactionCheckpoint>> {
+        let path_hash = active_logical_blob.path_hash();
         let (first, second) = tokio::try_join!(
-            self.load_compaction_checkpoint(first_backend, path_hash, head_object, active, token),
-            self.load_compaction_checkpoint(second_backend, path_hash, head_object, active, token)
+            self.load_compaction_checkpoint(
+                first_backend,
+                &path_hash,
+                head_object,
+                active,
+                active_logical_blob,
+                token
+            ),
+            self.load_compaction_checkpoint(
+                second_backend,
+                &path_hash,
+                head_object,
+                active,
+                active_logical_blob,
+                token
+            )
         )?;
         let authoritative = match (first, second) {
             (None, None) => return Ok(None),
             (Some(value), None) => {
                 put_immutable(
                     second_backend,
-                    &history_compaction_checkpoint_key(path_hash),
+                    &history_compaction_checkpoint_key(&path_hash),
                     value.bytes.clone(),
                     "application/json",
                     token,
@@ -30,7 +45,7 @@ impl ReconcilerEngine {
             (None, Some(value)) => {
                 put_immutable(
                     first_backend,
-                    &history_compaction_checkpoint_key(path_hash),
+                    &history_compaction_checkpoint_key(&path_hash),
                     value.bytes.clone(),
                     "application/json",
                     token,
@@ -42,7 +57,7 @@ impl ReconcilerEngine {
             (Some(first), Some(second)) if checkpoint_descends(&first, &second) => {
                 replace_control_object(
                     second_backend,
-                    &history_compaction_checkpoint_key(path_hash),
+                    &history_compaction_checkpoint_key(&path_hash),
                     first.bytes.clone(),
                     second.etag.as_deref(),
                     token,
@@ -53,7 +68,7 @@ impl ReconcilerEngine {
             (Some(first), Some(second)) if checkpoint_descends(&second, &first) => {
                 replace_control_object(
                     first_backend,
-                    &history_compaction_checkpoint_key(path_hash),
+                    &history_compaction_checkpoint_key(&path_hash),
                     second.bytes.clone(),
                     first.etag.as_deref(),
                     token,
@@ -66,7 +81,7 @@ impl ReconcilerEngine {
         verify_identical_control_objects(
             first_backend,
             second_backend,
-            &history_compaction_checkpoint_key(path_hash),
+            &history_compaction_checkpoint_key(&path_hash),
             &authoritative.bytes,
             token,
         )
@@ -83,6 +98,7 @@ impl ReconcilerEngine {
         path_hash: &str,
         head_object: &str,
         active: &CommitManifest,
+        active_logical_blob: &LogicalBlobId,
         token: &ControlToken,
     ) -> Result<Option<ReplicaCompactionCheckpoint>> {
         let Some(value) = backend
@@ -110,6 +126,7 @@ impl ReconcilerEngine {
         );
         validate_compaction_checkpoint(
             &signed.payload,
+            active_logical_blob,
             path_hash,
             head_object,
             active,
@@ -160,6 +177,7 @@ impl ReconcilerEngine {
         path_hash: &str,
         head_object: &str,
         active: &CommitManifest,
+        active_logical_blob: &LogicalBlobId,
         active_bytes: &[u8],
         checkpoint: Option<&LoadedCompactionCheckpoint>,
         first_backend: &dyn ReplicaBackend,
@@ -181,7 +199,7 @@ impl ReconcilerEngine {
 
         let expected_replicas = self
             .ring
-            .replicas_for(&active.blob)?
+            .replicas_for(active_logical_blob)?
             .into_iter()
             .map(|node| node.id.as_str())
             .collect::<HashSet<_>>();
@@ -220,9 +238,9 @@ impl ReconcilerEngine {
                     self.signer.as_ref(),
                 )
                 .context("high-water history signature validation failed")?;
-            validate_history_manifest(
+            let logical_blob = validate_history_manifest(
                 &signed.payload,
-                &active.blob,
+                active_logical_blob,
                 self.ring.ring_version,
                 path_hash,
                 &expected_replicas,
@@ -249,6 +267,7 @@ impl ReconcilerEngine {
                         signed.payload.logical_version,
                         ValidatedHistoryEntry {
                             signed,
+                            logical_blob,
                             bytes,
                             object_key,
                             first_etag: first_value.and_then(|value| value.etag),
@@ -363,7 +382,7 @@ impl ReconcilerEngine {
             current.signed.payload == *active
                 && current.bytes == active_bytes
                 && current.signed.payload.logical_version == active.logical_version
-                && head_object == head_object_key(&current.signed.payload.blob),
+                && head_object == head_object_key(&current.logical_blob),
             "current head does not correspond to the authoritative history high-water entry"
         );
         Ok(ValidatedHistory {
@@ -378,6 +397,7 @@ impl ReconcilerEngine {
         path_hash: &str,
         head_object: &str,
         active: &CommitManifest,
+        active_logical_blob: &LogicalBlobId,
         history: &ValidatedHistory,
         checkpoint: Option<&LoadedCompactionCheckpoint>,
         first_backend: &dyn ReplicaBackend,
@@ -428,9 +448,11 @@ impl ReconcilerEngine {
                 )
                 .context("garbage-collection marker signature validation failed")?;
             let marker = &signed.payload;
+            let marker_logical_blob =
+                parse_signed_logical_blob(&marker.blob, "garbage-collection marker")?;
             ensure!(
                 marker.api_version == "overmesh.io/garbage-collection-marker/v1"
-                    && marker.blob == active.blob
+                    && marker_logical_blob == *active_logical_blob
                     && marker.head_object == head_object
                     && marker.ring_version == self.ring.ring_version
                     && marker.history_head_logical_version
@@ -442,7 +464,7 @@ impl ReconcilerEngine {
             ensure!(
                 object_key
                     == garbage_collection_marker_key(
-                        path_hash,
+                        &marker_logical_blob.path_hash(),
                         marker.collected_through_logical_version
                     ),
                 "garbage-collection marker object name does not match its watermark"
@@ -567,17 +589,19 @@ impl ReconcilerEngine {
 
 fn validate_history_manifest(
     manifest: &CommitManifest,
-    expected_blob: &str,
+    expected_logical_blob: &LogicalBlobId,
     expected_ring_version: u64,
     path_hash: &str,
     expected_replicas: &HashSet<&str>,
-) -> Result<()> {
+) -> Result<LogicalBlobId> {
+    let logical_blob = parse_signed_logical_blob(&manifest.blob, "high-water history")?;
     ensure!(
-        manifest.blob == expected_blob
+        logical_blob == *expected_logical_blob
             && manifest.ring_version == expected_ring_version
             && !manifest.write_id.is_empty()
             && manifest.logical_version > 0
-            && manifest.committed_at_unix_ms > 0,
+            && manifest.committed_at_unix_ms > 0
+            && logical_blob.path_hash() == path_hash,
         "high-water history is not bound to the active blob and Ring"
     );
     let replicas = manifest
@@ -593,7 +617,7 @@ fn validate_history_manifest(
     ensure!(
         manifest.logical_etag
             == logical_etag(
-                &manifest.blob,
+                logical_blob.canonical(),
                 manifest.logical_version,
                 &manifest.write_id,
                 &manifest.content_sha256
@@ -606,7 +630,7 @@ fn validate_history_manifest(
                 manifest.deleted_at_unix_ms.is_none()
                     && valid_sha256(&manifest.content_sha256)
                     && valid_sha256(&manifest.block_manifest_sha256)
-                    && manifest.content_container == canonical_blob_container(&manifest.blob)?
+                    && manifest.content_container == logical_blob.container()
                     && valid_content_object(path_hash, &manifest.content_object),
                 "committed history content namespace or timestamp metadata is invalid"
             );
@@ -639,14 +663,7 @@ fn validate_history_manifest(
         }
         ManifestState::Prepared => bail!("high-water history contains a prepared manifest"),
     }
-    Ok(())
-}
-
-fn canonical_blob_container(blob: &str) -> Result<&str> {
-    blob.strip_prefix('/')
-        .and_then(|value| value.split('/').nth(1))
-        .filter(|value| !value.is_empty())
-        .context("signed blob path has no canonical container")
+    Ok(logical_blob)
 }
 
 fn valid_content_object(path_hash: &str, object_key: &str) -> bool {
@@ -777,16 +794,21 @@ fn checkpoint_descends(
 
 pub(super) fn validate_compaction_checkpoint(
     checkpoint: &HistoryCompactionCheckpoint,
+    active_logical_blob: &LogicalBlobId,
     path_hash: &str,
     head_object: &str,
     active: &CommitManifest,
     ring_version: u64,
 ) -> Result<()> {
+    let logical_blob =
+        parse_signed_logical_blob(&checkpoint.blob, "history compaction checkpoint")?;
     ensure!(
         checkpoint.api_version == HISTORY_COMPACTION_API_VERSION
-            && checkpoint.blob == active.blob
+            && logical_blob == *active_logical_blob
             && checkpoint.path_hash == path_hash
+            && checkpoint.path_hash == active_logical_blob.path_hash()
             && checkpoint.head_object == head_object
+            && checkpoint.head_object == head_object_key(active_logical_blob)
             && checkpoint.ring_version == ring_version
             && checkpoint.checkpoint_version > 0
             && checkpoint.compacted_through_logical_version > 0

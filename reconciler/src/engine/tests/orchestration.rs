@@ -50,6 +50,7 @@ fn test_head(
         signing_key_id: signer.key_id().to_owned(),
     };
     ValidatedHead {
+        logical_blob: LogicalBlobId::parse_canonical(&payload.blob).expect("logical blob"),
         signed: SignedDocument {
             payload,
             signed_at_unix_ms: 1,
@@ -81,7 +82,7 @@ async fn catalog_backfill_and_one_sided_repair_copy_exact_current_head_bytes() {
         fixture
             .engine
             .reconcile_catalog_current(
-                &fixture.blob,
+                &fixture.logical_blob,
                 &fixture.head_object,
                 &fixture.first,
                 &fixture.second,
@@ -101,7 +102,7 @@ async fn catalog_backfill_and_one_sided_repair_copy_exact_current_head_bytes() {
         fixture
             .engine
             .reconcile_catalog_current(
-                &fixture.blob,
+                &fixture.logical_blob,
                 &fixture.head_object,
                 &fixture.first,
                 &fixture.second,
@@ -139,7 +140,7 @@ async fn catalog_tamper_or_newer_state_is_reported_for_quarantine() {
         fixture
             .engine
             .reconcile_catalog_current(
-                &fixture.blob,
+                &fixture.logical_blob,
                 &fixture.head_object,
                 &fixture.first,
                 &fixture.second,
@@ -160,7 +161,7 @@ async fn catalog_tamper_or_newer_state_is_reported_for_quarantine() {
         fixture
             .engine
             .reconcile_catalog_current(
-                &fixture.blob,
+                &fixture.logical_blob,
                 &fixture.head_object,
                 &fixture.first,
                 &fixture.second,
@@ -181,7 +182,7 @@ async fn catalog_conflict_quarantines_before_tombstone_collection() {
     )
     .await;
     let active = &fixture.history[1];
-    let path_hash = logical_path_hash(&fixture.blob);
+    let path_hash = fixture.logical_blob.path_hash();
     for backend in [&fixture.first, &fixture.second] {
         backend.put_control(&fixture.head_object, active.bytes.clone());
         backend.put_control(
@@ -199,7 +200,7 @@ async fn catalog_conflict_quarantines_before_tombstone_collection() {
         .engine
         .reconcile_head_locked(
             &fixture.head_object,
-            Some(&fixture.blob),
+            Some(&fixture.logical_blob),
             fixture.first.id(),
             &test_token().await,
         )
