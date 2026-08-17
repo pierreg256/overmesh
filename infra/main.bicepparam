@@ -1,8 +1,21 @@
 using './main.bicep'
 
-param location = 'francecentral'
-param resourceGroupName = 'rg-overmesh-v050-live'
+param primaryLocation = 'francecentral'
+param secondaryLocation = 'swedencentral'
+param thirdStorageLocation = 'norwayeast'
 param uniqueSuffix = '8152352'
-param operatorPrincipalId = 'a0ede19f-e63d-4e5c-aa3b-d2958be4febd'
-param sshPublicKey = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKiqgqzz03I2wcswnJ/ZTN5bTDrZR7c8qfKp0lRa0y5t overmesh-v050-live'
-param adminUsername = 'overmesh'
+param storageAccountAName = 'stomv050a8152352'
+param storageAccountBName = 'stomv050b8152352'
+param keyVaultName = 'kv-overmesh-v050-8152352'
+param gatewayIdentityName = 'id-overmesh-gateway-v050'
+param reconcilerIdentityName = 'id-overmesh-reconciler-v050'
+param allowedCallerIdentityName = 'id-overmesh-caller-allowed-v050'
+
+// Supply the real OIDC principal and signed runtime configuration at validation/deployment time.
+param githubPublisherPrincipalId = '00000000-0000-0000-0000-000000000000'
+param imageTag = '0.9.0'
+param deployRuntime = false
+param gatewayConfigBase64 = ''
+param reconcilerConfigBase64 = ''
+param ringDocumentBase64 = ''
+param ringSignatureBase64 = ''

@@ -1,0 +1,19 @@
+FROM rust:1.94-bookworm AS build
+
+WORKDIR /src
+COPY . .
+RUN cargo build --locked --release -p overmesh-gateway
+
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates coreutils \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /src/target/release/overmesh-gateway /usr/local/bin/overmesh-gateway
+COPY --chmod=0555 deploy/overmesh-entrypoint.sh /usr/local/bin/overmesh-entrypoint
+
+USER 65532:65532
+EXPOSE 8080
+ENTRYPOINT ["/usr/local/bin/overmesh-entrypoint"]
+CMD ["/usr/local/bin/overmesh-gateway", "--config", "/tmp/overmesh/config.yaml"]

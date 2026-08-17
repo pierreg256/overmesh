@@ -14,7 +14,7 @@ COMPOSE_FILE := harness/environments/azurite/compose.yaml
 COMPOSE := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE)
 HARNESS := cargo run --quiet -p overmesh-harness --
 
-.PHONY: harness-certs dev-up dev-down dev-reset fault-reset gateway-smoke placement-smoke reconciler-smoke validate-system harness-list harness-run-all version-check test-pr test-main test-nightly test-live-azure test-release
+.PHONY: harness-certs dev-up dev-down dev-reset fault-reset gateway-smoke placement-smoke reconciler-smoke validate-system harness-list harness-run-all version-check infra-build test-pr test-main test-nightly test-live-azure test-release
 
 HARNESS_CERT_DIR := .harness/certs
 HARNESS_CERT := $(HARNESS_CERT_DIR)/azurite.pem
@@ -66,6 +66,9 @@ harness-run-all:
 
 version-check:
 	$(HARNESS) version-check
+
+infra-build:
+	az bicep build --file infra/main.bicep --stdout >/dev/null
 
 test-pr: version-check
 	cargo fmt --all --check
