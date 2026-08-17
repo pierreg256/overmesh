@@ -99,7 +99,6 @@ impl TestIdentity {
                     "kty": "RSA",
                     "use": "sig",
                     "kid": RSA_KEY_ID,
-                    "alg": "RS256",
                     "n": URL_SAFE_NO_PAD.encode(rsa_public_key.n().to_bytes_be()),
                     "e": URL_SAFE_NO_PAD.encode(rsa_public_key.e().to_bytes_be())
                 }
