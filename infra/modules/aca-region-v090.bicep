@@ -28,20 +28,32 @@ param gatewayImage string
 param reconcilerImage string
 
 @secure()
-@description('Base64-encoded Gateway configuration.')
-param gatewayConfigBase64 string
+@description('Gateway configuration.')
+param gatewayConfig string
 
 @secure()
-@description('Base64-encoded Reconciler configuration.')
-param reconcilerConfigBase64 string
+@description('Reconciler configuration.')
+param reconcilerConfig string
 
 @secure()
-@description('Base64-encoded signed Ring document.')
-param ringDocumentBase64 string
+@description('Signed Ring document.')
+param ringDocument string
 
 @secure()
-@description('Base64-encoded Ring detached signature.')
-param ringSignatureBase64 string
+@description('Ring detached signature.')
+param ringSignature string
+
+@secure()
+@description('Microsoft Entra JWKS document.')
+param entraJwks string
+
+@secure()
+@description('Ring verification public key.')
+param ringPublicKey string
+
+@secure()
+@description('Manifest verification public key.')
+param manifestPublicKey string
 
 @allowed([
   'Schedule'
@@ -134,47 +146,84 @@ resource gateway 'Microsoft.App/containerApps@2025-07-01' = if (deployRuntime) {
       secrets: [
         {
           name: 'gateway-config'
-          value: gatewayConfigBase64
+          value: gatewayConfig
         }
         {
           name: 'ring-document'
-          value: ringDocumentBase64
+          value: ringDocument
         }
         {
           name: 'ring-signature'
-          value: ringSignatureBase64
+          value: ringSignature
+        }
+        {
+          name: 'entra-jwks'
+          value: entraJwks
+        }
+        {
+          name: 'ring-public-key'
+          value: ringPublicKey
+        }
+        {
+          name: 'manifest-public-key'
+          value: manifestPublicKey
         }
       ]
     }
     template: {
+      volumes: [
+        {
+          name: 'runtime-config'
+          storageType: 'Secret'
+          secrets: [
+            {
+              secretRef: 'gateway-config'
+              path: 'config.yaml'
+            }
+            {
+              secretRef: 'ring-document'
+              path: 'ring.yaml'
+            }
+            {
+              secretRef: 'ring-signature'
+              path: 'ring.sig'
+            }
+            {
+              secretRef: 'entra-jwks'
+              path: 'entra-jwks.json'
+            }
+            {
+              secretRef: 'ring-public-key'
+              path: 'ring-public.pem'
+            }
+            {
+              secretRef: 'manifest-public-key'
+              path: 'manifest-public.pem'
+            }
+          ]
+        }
+      ]
       containers: [
         {
           name: 'gateway'
           image: gatewayImage
           command: [
-            '/usr/local/bin/overmesh-entrypoint'
+            '/usr/local/bin/overmesh-gateway'
           ]
           args: [
-            '/usr/local/bin/overmesh-gateway'
             '--config'
-            '/tmp/overmesh/config.yaml'
+            '/run/overmesh/config.yaml'
           ]
           env: [
             {
-              name: 'OVERMESH_CONFIG_BASE64'
-              secretRef: 'gateway-config'
-            }
-            {
-              name: 'OVERMESH_RING_BASE64'
-              secretRef: 'ring-document'
-            }
-            {
-              name: 'OVERMESH_RING_SIGNATURE_BASE64'
-              secretRef: 'ring-signature'
-            }
-            {
               name: 'RUST_LOG'
               value: 'info'
+            }
+          ]
+          volumeMounts: [
+            {
+              volumeName: 'runtime-config'
+              mountPath: '/run/overmesh'
             }
           ]
           probes: [
@@ -242,48 +291,77 @@ resource reconciler 'Microsoft.App/jobs@2025-07-01' = if (deployRuntime) {
       secrets: [
         {
           name: 'reconciler-config'
-          value: reconcilerConfigBase64
+          value: reconcilerConfig
         }
         {
           name: 'ring-document'
-          value: ringDocumentBase64
+          value: ringDocument
         }
         {
           name: 'ring-signature'
-          value: ringSignatureBase64
+          value: ringSignature
+        }
+        {
+          name: 'ring-public-key'
+          value: ringPublicKey
+        }
+        {
+          name: 'manifest-public-key'
+          value: manifestPublicKey
         }
       ]
     }, reconcilerTriggerConfiguration)
     template: {
+      volumes: [
+        {
+          name: 'runtime-config'
+          storageType: 'Secret'
+          secrets: [
+            {
+              secretRef: 'reconciler-config'
+              path: 'config.yaml'
+            }
+            {
+              secretRef: 'ring-document'
+              path: 'ring.yaml'
+            }
+            {
+              secretRef: 'ring-signature'
+              path: 'ring.sig'
+            }
+            {
+              secretRef: 'ring-public-key'
+              path: 'ring-public.pem'
+            }
+            {
+              secretRef: 'manifest-public-key'
+              path: 'manifest-public.pem'
+            }
+          ]
+        }
+      ]
       containers: [
         {
           name: 'reconciler'
           image: reconcilerImage
           command: [
-            '/usr/local/bin/overmesh-entrypoint'
+            '/usr/local/bin/overmesh-reconciler'
           ]
           args: [
-            '/usr/local/bin/overmesh-reconciler'
             '--config'
-            '/tmp/overmesh/config.yaml'
+            '/run/overmesh/config.yaml'
             'once'
           ]
           env: [
             {
-              name: 'OVERMESH_CONFIG_BASE64'
-              secretRef: 'reconciler-config'
-            }
-            {
-              name: 'OVERMESH_RING_BASE64'
-              secretRef: 'ring-document'
-            }
-            {
-              name: 'OVERMESH_RING_SIGNATURE_BASE64'
-              secretRef: 'ring-signature'
-            }
-            {
               name: 'RUST_LOG'
               value: 'info'
+            }
+          ]
+          volumeMounts: [
+            {
+              volumeName: 'runtime-config'
+              mountPath: '/run/overmesh'
             }
           ]
           resources: {

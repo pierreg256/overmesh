@@ -52,6 +52,12 @@ The secure configuration parameters in `main.bicepparam` are empty
 placeholders. Never commit rendered runtime configuration or deployment
 parameter files containing signed environment material.
 
+At deployment time, Bicep projects the supplied configuration, signed Ring,
+JWKS, and verification keys into an ACA secret volume mounted read-only at
+`/run/overmesh`. Gateway and Reconciler start directly from the generic
+published images and read their files from that mount. No environment-specific
+configuration or trust material is embedded in either image.
+
 The Gateway and Reconciler identities remain distinct. GitHub Actions uses only
 the repository-scoped `GITHUB_TOKEN` to publish `linux/amd64` images to GHCR;
 it receives no Azure identity or credential. After the first publication,

@@ -43,20 +43,32 @@ param imageTag string = '0.9.0'
 param deployRuntime bool = false
 
 @secure()
-@description('Base64-encoded Gateway YAML configuration without credentials.')
-param gatewayConfigBase64 string
+@description('Gateway YAML configuration without credentials.')
+param gatewayConfig string
 
 @secure()
-@description('Base64-encoded Reconciler YAML configuration without credentials.')
-param reconcilerConfigBase64 string
+@description('Reconciler YAML configuration without credentials.')
+param reconcilerConfig string
 
 @secure()
-@description('Base64-encoded signed three-node Ring document.')
-param ringDocumentBase64 string
+@description('Signed three-node Ring document.')
+param ringDocument string
 
 @secure()
-@description('Base64-encoded detached Ring signature.')
-param ringSignatureBase64 string
+@description('Detached Ring signature.')
+param ringSignature string
+
+@secure()
+@description('Microsoft Entra JWKS document.')
+param entraJwks string
+
+@secure()
+@description('Ring verification public key.')
+param ringPublicKey string
+
+@secure()
+@description('Manifest verification public key.')
+param manifestPublicKey string
 
 var tags = {
   workload: 'overmesh'
@@ -170,10 +182,13 @@ module primaryRuntime './modules/aca-region-v090.bicep' = {
     registryServer: data.outputs.containerRegistryLoginServer
     gatewayImage: '${data.outputs.containerRegistryLoginServer}/overmesh-gateway:${imageTag}'
     reconcilerImage: '${data.outputs.containerRegistryLoginServer}/overmesh-reconciler:${imageTag}'
-    gatewayConfigBase64: gatewayConfigBase64
-    reconcilerConfigBase64: reconcilerConfigBase64
-    ringDocumentBase64: ringDocumentBase64
-    ringSignatureBase64: ringSignatureBase64
+    gatewayConfig: gatewayConfig
+    reconcilerConfig: reconcilerConfig
+    ringDocument: ringDocument
+    ringSignature: ringSignature
+    entraJwks: entraJwks
+    ringPublicKey: ringPublicKey
+    manifestPublicKey: manifestPublicKey
     deployRuntime: deployRuntime
     reconcilerTriggerType: 'Schedule'
     reconcilerCronExpression: '0 */5 * * * *'
@@ -197,10 +212,13 @@ module secondaryRuntime './modules/aca-region-v090.bicep' = {
     registryServer: data.outputs.containerRegistryLoginServer
     gatewayImage: '${data.outputs.containerRegistryLoginServer}/overmesh-gateway:${imageTag}'
     reconcilerImage: '${data.outputs.containerRegistryLoginServer}/overmesh-reconciler:${imageTag}'
-    gatewayConfigBase64: gatewayConfigBase64
-    reconcilerConfigBase64: reconcilerConfigBase64
-    ringDocumentBase64: ringDocumentBase64
-    ringSignatureBase64: ringSignatureBase64
+    gatewayConfig: gatewayConfig
+    reconcilerConfig: reconcilerConfig
+    ringDocument: ringDocument
+    ringSignature: ringSignature
+    entraJwks: entraJwks
+    ringPublicKey: ringPublicKey
+    manifestPublicKey: manifestPublicKey
     deployRuntime: deployRuntime
     reconcilerTriggerType: 'Manual'
     reconcilerCronExpression: ''
