@@ -81,7 +81,7 @@ docker buildx version >/dev/null 2>&1 || {
 }
 
 short_sha=${commit_sha:0:12}
-source_owner=${source_owner,,}
+source_owner=$(printf '%s' "$source_owner" | LC_ALL=C tr '[:upper:]' '[:lower:]')
 
 for image in overmesh-gateway overmesh-reconciler; do
   source="ghcr.io/${source_owner}/${image}:${tag}"
