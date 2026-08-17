@@ -62,7 +62,7 @@ param manifestPublicKey string
 @description('Reconciler job trigger type.')
 param reconcilerTriggerType string
 
-@description('Six-field cron expression when trigger type is Schedule.')
+@description('Five-field cron expression when trigger type is Schedule.')
 param reconcilerCronExpression string
 
 @description('Common resource tags.')

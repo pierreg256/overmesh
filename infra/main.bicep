@@ -191,7 +191,7 @@ module primaryRuntime './modules/aca-region-v090.bicep' = {
     manifestPublicKey: manifestPublicKey
     deployRuntime: deployRuntime
     reconcilerTriggerType: 'Schedule'
-    reconcilerCronExpression: '0 */5 * * * *'
+    reconcilerCronExpression: '*/5 * * * *'
     tags: tags
   }
   dependsOn: [
