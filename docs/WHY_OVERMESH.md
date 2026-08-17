@@ -167,6 +167,13 @@ accounts, not with the ceiling of one. Adding an account is a signed Ring
 revision, and the endpoint that applications are configured with does not move.
 This is the primary reason the project exists.
 
+One qualification for V1: the Ring is fixed for the life of a deployment.
+Objects are located through the active Ring, so revising it before the
+migration path exists would leave existing objects unreachable. A V1 deployment
+therefore sizes its account set up front; growing it in place is a post-V1
+capability, and it is the one that turns this from an architectural property
+into an operational one.
+
 **You choose the regions.** The Ring declares them. Nothing forces you onto an
 assigned pair. If residency requires France Central and Sweden Central, or if
 latency requires a specific neighbour, that is a line in a YAML document rather

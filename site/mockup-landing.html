@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Overmesh — No region left behind</title>
+    <meta
+      name="description"
+      content="A Microsoft Entra-native federation layer that presents several Azure Storage Accounts behind a single Blob endpoint."
+    />
+    <meta name="theme-color" content="#000000" />
+    <link rel="stylesheet" href="mockup.css" />
+  </head>
+
+  <body class="landing">
+    <!-- ====================================================================
+         Ring mark — reusable inline SVG (replaces the 950 KB raster)
+         ==================================================================== -->
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <defs>
+        <linearGradient id="ramp" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#4fc3ff" />
+          <stop offset="45%" stop-color="#4a5bff" />
+          <stop offset="100%" stop-color="#c43bff" />
+        </linearGradient>
+        <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="2.4" result="b" />
+          <feMerge>
+            <feMergeNode in="b" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        <g id="ring-art">
+          <g class="halo">
+            <circle
+              cx="100"
+              cy="100"
+              r="84"
+              fill="none"
+              stroke="url(#ramp)"
+              stroke-width="8"
+              stroke-dasharray="0.1 5.5"
+              stroke-linecap="round"
+              opacity=".5"
+            />
+            <circle
+              cx="100"
+              cy="100"
+              r="73"
+              fill="none"
+              stroke="url(#ramp)"
+              stroke-width="6"
+              stroke-dasharray="0.1 5"
+              stroke-linecap="round"
+              opacity=".28"
+            />
+          </g>
+          <g class="orbits" filter="url(#glow)" opacity=".95">
+            <ellipse
+              cx="100"
+              cy="100"
+              rx="79"
+              ry="41"
+              fill="none"
+              stroke="url(#ramp)"
+              stroke-width="1.7"
+              transform="rotate(22 100 100)"
+            />
+            <ellipse
+              cx="100"
+              cy="100"
+              rx="79"
+              ry="41"
+              fill="none"
+              stroke="url(#ramp)"
+              stroke-width="1.7"
+              transform="rotate(-38 100 100)"
+            />
+            <ellipse
+              cx="100"
+              cy="100"
+              rx="79"
+              ry="41"
+              fill="none"
+              stroke="url(#ramp)"
+              stroke-width="1.7"
+              transform="rotate(84 100 100)"
+            />
+          </g>
+          <g filter="url(#glow)">
+            <circle cx="100" cy="21" r="5.5" fill="#eaf7ff" />
+            <circle cx="168" cy="61" r="5.5" fill="#dfe6ff" />
+            <circle cx="168" cy="139" r="5.5" fill="#f0dcff" />
+            <circle cx="100" cy="179" r="5.5" fill="#eaf7ff" />
+            <circle cx="32" cy="139" r="5.5" fill="#dfe6ff" />
+            <circle cx="32" cy="61" r="5.5" fill="#eaf7ff" />
+          </g>
+        </g>
+      </defs>
+    </svg>
+
+    <!-- ==================================================================== -->
+    <nav class="nav">
+      <a class="nav__brand" href="mockup-landing.html">
+        <svg class="ring" viewBox="0 0 200 200" aria-hidden="true">
+          <use href="#ring-art" />
+        </svg>
+        Overmesh
+      </a>
+      <div class="nav__links">
+        <a href="mockup-reference.html">Why</a>
+        <a href="#">Specification</a>
+        <a href="#">Compatibility</a>
+        <a href="#">Decisions</a>
+        <a href="#">GitHub</a>
+      </div>
+    </nav>
+
+    <!-- ==================================================================== -->
+    <header class="hero">
+      <div>
+        <span class="badge">Work in progress · v0.8</span>
+        <h1 class="hero__title">Overmesh</h1>
+        <p class="hero__tagline">
+          No region left behind. No storage keys required.
+        </p>
+        <p class="hero__lede">
+          A Microsoft&nbsp;Entra-native federation layer that presents several
+          Azure Storage Accounts, in regions you choose, behind a single Blob
+          endpoint. Your applications change one setting and nothing else.
+        </p>
+        <div class="cta">
+          <a class="btn btn--primary" href="mockup-reference.html"
+            >Why Overmesh</a
+          >
+          <a class="btn btn--ghost" href="#">Read the specification</a>
+        </div>
+      </div>
+      <div class="hero__art">
+        <!-- Inlined rather than <use>: CSS animation cannot reach a shadow
+             tree. The gradient and filter are still resolved from the shared
+             <defs> above — SVG references are document-scoped. -->
+        <svg class="ring" viewBox="0 0 200 200" aria-hidden="true">
+          <g class="halo">
+            <circle cx="100" cy="100" r="84" fill="none" stroke="url(#ramp)" stroke-width="8" stroke-dasharray="0.1 5.5" stroke-linecap="round" opacity=".5" />
+            <circle cx="100" cy="100" r="73" fill="none" stroke="url(#ramp)" stroke-width="6" stroke-dasharray="0.1 5" stroke-linecap="round" opacity=".28" />
+          </g>
+          <g class="orbits" filter="url(#glow)" opacity=".95">
+            <ellipse cx="100" cy="100" rx="79" ry="41" fill="none" stroke="url(#ramp)" stroke-width="1.7" transform="rotate(22 100 100)" />
+            <ellipse cx="100" cy="100" rx="79" ry="41" fill="none" stroke="url(#ramp)" stroke-width="1.7" transform="rotate(-38 100 100)" />
+            <ellipse cx="100" cy="100" rx="79" ry="41" fill="none" stroke="url(#ramp)" stroke-width="1.7" transform="rotate(84 100 100)" />
+          </g>
+          <g filter="url(#glow)">
+            <circle cx="100" cy="21" r="5.5" fill="#eaf7ff" />
+            <circle cx="168" cy="61" r="5.5" fill="#dfe6ff" />
+            <circle cx="168" cy="139" r="5.5" fill="#f0dcff" />
+            <circle cx="100" cy="179" r="5.5" fill="#eaf7ff" />
+            <circle cx="32" cy="139" r="5.5" fill="#dfe6ff" />
+            <circle cx="32" cy="61" r="5.5" fill="#eaf7ff" />
+          </g>
+        </svg>
+      </div>
+    </header>
+
+    <!-- ==================================================================== -->
+    <section class="section">
+      <p class="section__eyebrow">Adoption cost</p>
+      <h2 class="section__title">One line changes. Nothing else does.</h2>
+      <div class="swap">
+        <div class="swap__card">
+          <p class="swap__head">Before</p>
+          <pre><code><span class="tok-key">const</span> client = <span class="tok-key">new</span> <span class="tok-fn">BlobServiceClient</span>(
+  <span class="tok-str">"https://contoso.blob.core.windows.net"</span>,
+  <span class="tok-key">new</span> <span class="tok-fn">DefaultAzureCredential</span>()
+);</code></pre>
+        </div>
+        <div class="swap__card swap__card--after">
+          <p class="swap__head">After</p>
+          <pre><code><span class="tok-key">const</span> client = <span class="tok-key">new</span> <span class="tok-fn">BlobServiceClient</span>(
+  <span class="tok-str">"https://overmesh.contoso.com"</span>,
+  <span class="tok-key">new</span> <span class="tok-fn">DefaultAzureCredential</span>()
+);</code></pre>
+        </div>
+      </div>
+      <p style="color: var(--text-muted); margin-top: 1.2rem; max-width: 60ch">
+        Same SDK, same credential flow, same Entra token audience. Authorization
+        for customer data remains the caller's own Azure RBAC, enforced by Azure
+        Storage on every replica. There is no Overmesh permission model to
+        administer.
+      </p>
+    </section>
+
+    <!-- ==================================================================== -->
+    <section class="section">
+      <p class="section__eyebrow">What it addresses</p>
+      <h2 class="section__title">Three limits that compound at scale</h2>
+      <div class="grid">
+        <article class="card">
+          <span class="card__index">01</span>
+          <h3>A storage account has a ceiling</h3>
+          <p>
+            Five petabytes and 20,000 requests per second. Past that you do not
+            tune an account — you add accounts, and something has to route
+            across them.
+          </p>
+        </article>
+        <article class="card">
+          <span class="card__index">02</span>
+          <h3>You do not choose the secondary</h3>
+          <p>
+            For GRS and GZRS the secondary region is derived from the primary
+            and cannot be changed. Residency and latency constraints have no
+            answer.
+          </p>
+        </article>
+        <article class="card">
+          <span class="card__index">03</span>
+          <h3>Failover is destructive</h3>
+          <p>
+            An unplanned failover converts the account to LRS in the new primary
+            and deletes the original copy. Re-establishing geo-redundancy costs
+            time and money.
+          </p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ==================================================================== -->
+    <section class="section">
+      <p class="section__eyebrow">Honesty</p>
+      <h2 class="section__title">What it costs you</h2>
+      <div class="tradeoff">
+        <h3>Overmesh is less available for writes than a single ZRS account</h3>
+        <p>
+          A ZRS account survives the loss of an availability zone and keeps
+          accepting writes. Overmesh, with a strict two-replica commit, stops
+          accepting writes while either region is unavailable. That is a
+          deliberate exchange — cross-region durability and a provable
+          consistency state, at the price of write availability — and hinted
+          handoff is the planned way to buy it back.
+        </p>
+      </div>
+    </section>
+
+    <!-- ==================================================================== -->
+    <footer class="footer">
+      <div class="footer__inner">
+        <svg class="ring" viewBox="0 0 200 200" width="22" height="22" aria-hidden="true">
+          <use href="#ring-art" />
+        </svg>
+        <span>Overmesh — advanced prototype, published to be forked.</span>
+        <span style="margin-left: auto">
+          <a href="#">GitHub</a> · <a href="#">MIT</a>
+        </span>
+      </div>
+    </footer>
+  </body>
+</html>
