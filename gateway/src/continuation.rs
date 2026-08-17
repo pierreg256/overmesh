@@ -289,4 +289,100 @@ mod tests {
         token.push('A');
         assert!(verify_at(&token, &binding(), 1_050, &signer).is_err());
     }
+
+    #[tokio::test]
+    async fn binds_every_request_and_ring_dimension() {
+        let signer =
+            LocalTestManifestSigner::new("key", true, KeyValidity::new(0, u64::MAX).expect("key"))
+                .expect("signer");
+        let state = ContinuationState {
+            last_ordering_key: "blob:a".to_owned(),
+            backend_cursors: BTreeMap::from([
+                ("storage-a".to_owned(), Some("opaque-a".to_owned())),
+                ("storage-b".to_owned(), None),
+            ]),
+        };
+        let token = issue_at(
+            &binding(),
+            &state,
+            Duration::from_millis(100),
+            1_000,
+            &signer,
+        )
+        .await
+        .expect("token");
+        let mut mismatches = Vec::new();
+
+        let mut changed = binding();
+        changed.account = "other".to_owned();
+        mismatches.push(changed);
+        let mut changed = binding();
+        changed.container = Some("other".to_owned());
+        mismatches.push(changed);
+        let mut changed = binding();
+        changed.scope = ContinuationScope::Containers;
+        mismatches.push(changed);
+        let mut changed = binding();
+        changed.prefix = "b/".to_owned();
+        mismatches.push(changed);
+        let mut changed = binding();
+        changed.delimiter = ".".to_owned();
+        mismatches.push(changed);
+        let mut changed = binding();
+        changed.include.clear();
+        mismatches.push(changed);
+        let mut changed = binding();
+        changed.max_results = 3;
+        mismatches.push(changed);
+        let mut changed = binding();
+        changed.ring_version = 8;
+        mismatches.push(changed);
+        let mut changed = binding();
+        changed.ring_hash = format!("sha256:{}", "2".repeat(64));
+        mismatches.push(changed);
+
+        for changed in mismatches {
+            assert!(matches!(
+                verify_at(&token, &changed, 1_050, &signer),
+                Err(ContinuationError::Binding)
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_future_tokens_and_invalid_cursor_state() {
+        let signer =
+            LocalTestManifestSigner::new("key", true, KeyValidity::new(0, u64::MAX).expect("key"))
+                .expect("signer");
+        let token = issue_at(
+            &binding(),
+            &ContinuationState {
+                last_ordering_key: "blob:a".to_owned(),
+                backend_cursors: BTreeMap::from([("storage-a".to_owned(), None)]),
+            },
+            Duration::from_millis(100),
+            1_000,
+            &signer,
+        )
+        .await
+        .expect("token");
+        assert!(matches!(
+            verify_at(&token, &binding(), 999, &signer),
+            Err(ContinuationError::NotYetValid)
+        ));
+        assert!(matches!(
+            issue_at(
+                &binding(),
+                &ContinuationState {
+                    last_ordering_key: String::new(),
+                    backend_cursors: BTreeMap::new(),
+                },
+                Duration::from_millis(100),
+                1_000,
+                &signer,
+            )
+            .await,
+            Err(ContinuationError::Ordering)
+        ));
+    }
 }

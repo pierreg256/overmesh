@@ -47,8 +47,9 @@ Milestones through `0.8.0` provide:
 - durable tombstone high-water checkpoints and anti-resurrection enforcement;
 - recreation after deletion as a strictly newer logical generation.
 - logical `List Blobs` from bounded pages of an ordered W=2 catalog containing
-  exact signed current-head bytes, revalidated against both heads, high-water
-  checkpoints, compaction floors, sidecars, Ring placement, and quarantine;
+  exact signed current-head bytes, compared byte-for-byte on both selected
+  replicas, validated for signature and Ring placement, and filtered against a
+  request-level union of quarantine keys;
 - logical `List Containers` from bounded signed catalog pages with per-container
   caller authorization, excluding `overmesh-system`, unauthorized containers,
   and containers without a current visible catalog entry;
@@ -58,8 +59,9 @@ Milestones through `0.8.0` provide:
   requested page size, Ring version/hash, last catalog ordering key,
   issue/expiry time, and signing key;
 - no per-blob caller read authorization or content probe after successful
-  container-list authorization; catalog validation uses typed control-plane
-  reads under the gateway identity;
+  container-list authorization; catalog validation uses two typed per-entry
+  control-plane reads under the gateway identity, while full freshness and
+  anti-replay validation remains on HEAD, GET, and Reconciler paths;
 - W=2 `Put Block`, `Put Block List`, and `Get Block List` with exact Azure
   block IDs retained only in signed metadata;
 - immutable unpredictable staged content paths, equal decoded block-ID length

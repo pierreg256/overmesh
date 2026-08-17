@@ -1163,6 +1163,8 @@ The compatibility matrix MUST pin:
 - supported scenario IDs.
 - supported listing parameters and include values;
 - ordered W=2 catalog page bounds and absence of `heads/` discovery;
+- two catalog object reads per returned blob plus request-level quarantine
+  prefix scans, without per-item head, high-water, sidecar, or compaction reads;
 - exact signed-head catalog publication, idempotent retry, one-sided recovery,
   backfill, conflict/tamper quarantine, delete, and recreation;
 - catalog-derived container enumeration, explicit replica authorization

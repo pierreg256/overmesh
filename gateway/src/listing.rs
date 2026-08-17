@@ -4,6 +4,7 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
+use futures_util::future::join_all;
 use thiserror::Error;
 
 use crate::{
@@ -13,12 +14,11 @@ use crate::{
         catalog_containers_prefix, catalog_listing_prefix, logical_blob_from_catalog_key,
         validate_catalog_entry,
     },
-    commit::CommitCoordinator,
     continuation::{
         ContinuationBinding, ContinuationError, ContinuationScope, ContinuationState, issue, verify,
     },
     identity::SharedControlTokenProvider,
-    manifest::{ManifestSigner, ManifestState, commit_manifest_object_prefix},
+    manifest::{ManifestSigner, ManifestState},
     read::BlobMetadata,
     ring::RingDocument,
 };
@@ -195,6 +195,7 @@ impl ListingService {
             .token()
             .await
             .map_err(|error| BackendError::InvalidResponse(error.to_string()))?;
+        let quarantined = self.quarantined_path_hashes(&control_token).await?;
         let limit = usize::try_from(request.max_results).expect("maxresults fits usize");
         let batch_size = limit.saturating_add(1).max(MIN_CATALOG_PAGE_SIZE);
         let mut backend_cursors = state.map_or(backend_cursors, |state| state.backend_cursors);
@@ -220,7 +221,9 @@ impl ListingService {
                 if after.as_ref().is_some_and(|cursor| key <= *cursor) {
                     continue;
                 }
-                let candidate = self.validated_catalog_blob(&key, &control_token).await?;
+                let candidate = self
+                    .validated_catalog_blob(&key, &quarantined, &control_token)
+                    .await?;
                 let Some((name, metadata)) = candidate else {
                     after = Some(key);
                     consumed_any = true;
@@ -231,14 +234,7 @@ impl ListingService {
                     consumed_any = true;
                     continue;
                 }
-                let output = if !request.delimiter.is_empty()
-                    && let Some(index) = name[request.prefix.len()..].find(&request.delimiter)
-                {
-                    let end = request.prefix.len() + index + request.delimiter.len();
-                    BlobListEntry::Prefix(name[..end].to_owned())
-                } else {
-                    BlobListEntry::Blob(ListedBlob { name, metadata })
-                };
+                let output = listed_blob_entry(name, metadata, &request.prefix, &request.delimiter);
                 let duplicate_prefix = match &output {
                     BlobListEntry::Prefix(prefix) => {
                         last_emitted_prefix.as_deref() == Some(prefix.as_str())
@@ -332,6 +328,7 @@ impl ListingService {
             .token()
             .await
             .map_err(|error| BackendError::InvalidResponse(error.to_string()))?;
+        let quarantined = self.quarantined_path_hashes(&control_token).await?;
         let limit = usize::try_from(request.max_results).expect("maxresults fits usize");
         let batch_size = limit.saturating_add(1).max(MIN_CATALOG_PAGE_SIZE);
         let mut containers = Vec::with_capacity(limit);
@@ -368,8 +365,9 @@ impl ListingService {
                     consumed_any = true;
                     continue;
                 }
-                let Some((_blob, metadata)) =
-                    self.validated_catalog_blob(&key, &control_token).await?
+                let Some((_blob, metadata)) = self
+                    .validated_catalog_blob(&key, &quarantined, &control_token)
+                    .await?
                 else {
                     consumed_any = true;
                     continue;
@@ -481,6 +479,7 @@ impl ListingService {
     async fn validated_catalog_blob(
         &self,
         object_key: &str,
+        quarantined: &BTreeSet<String>,
         token: &crate::identity::ControlToken,
     ) -> Result<Option<(String, BlobMetadata)>, ListingError> {
         let logical_blob = match logical_blob_from_catalog_key(&self.logical_account, object_key) {
@@ -520,66 +519,7 @@ impl ListingService {
             Err(_) => return Ok(None),
         };
         let path_hash = entry.logical_blob.path_hash();
-        let head_key = format!("heads/{path_hash}.json");
-        let high_water_key = format!("high-water/{path_hash}/current.json");
-        let quarantine_key = format!("quarantine/{path_hash}.json");
-        let committed_key = match commit_manifest_object_prefix(&entry.signed_head.payload) {
-            Ok(prefix) => format!("{prefix}/committed.json"),
-            Err(_) => return Ok(None),
-        };
-        let (
-            primary_head,
-            secondary_head,
-            primary_high,
-            secondary_high,
-            primary_quarantine,
-            secondary_quarantine,
-            primary_committed,
-            secondary_committed,
-        ) = tokio::try_join!(
-            primary.control_get_object(&head_key, token),
-            secondary.control_get_object(&head_key, token),
-            primary.control_get_object(&high_water_key, token),
-            secondary.control_get_object(&high_water_key, token),
-            primary.control_get_object(&quarantine_key, token),
-            secondary.control_get_object(&quarantine_key, token),
-            primary.control_get_object(&committed_key, token),
-            secondary.control_get_object(&committed_key, token)
-        )?;
-        let expected = primary_catalog.bytes.as_slice();
-        if primary_quarantine.is_some()
-            || secondary_quarantine.is_some()
-            || [primary_head, secondary_head, primary_high, secondary_high]
-                .iter()
-                .any(|value| value.as_ref().map(|value| value.bytes.as_slice()) != Some(expected))
-            || [primary_committed, secondary_committed]
-                .iter()
-                .any(|value| value.as_ref().map(|value| value.bytes.as_slice()) != Some(expected))
-        {
-            return Ok(None);
-        }
-        let compaction = CommitCoordinator::strict_compaction_checkpoint(
-            primary.as_ref(),
-            secondary.as_ref(),
-            &path_hash,
-            entry.logical_blob.canonical(),
-            self.ring.ring_version,
-            token,
-            self.signer.as_ref(),
-        )
-        .await;
-        let Ok(compaction) = compaction else {
-            return Ok(None);
-        };
-        if compaction.as_ref().is_some_and(|checkpoint| {
-            entry.signed_head.payload.logical_version
-                <= checkpoint.signed.payload.compacted_through_logical_version
-                || entry.signed_head.payload.logical_version
-                    < checkpoint
-                        .signed
-                        .payload
-                        .garbage_collection_history_head_logical_version
-        }) {
+        if quarantined.contains(&path_hash) {
             return Ok(None);
         }
         let head = entry.signed_head.payload;
@@ -598,6 +538,27 @@ impl ListingService {
                 committed_at_unix_ms: head.committed_at_unix_ms,
             },
         )))
+    }
+
+    async fn quarantined_path_hashes(
+        &self,
+        token: &crate::identity::ControlToken,
+    ) -> Result<BTreeSet<String>, ListingError> {
+        let mut quarantined = BTreeSet::new();
+        let listings = join_all(
+            self.backends
+                .values()
+                .map(|backend| backend.control_list_objects("quarantine/", token)),
+        )
+        .await;
+        for listing in listings {
+            for key in listing? {
+                if let Some(path_hash) = quarantine_path_hash(&key) {
+                    quarantined.insert(path_hash.to_owned());
+                }
+            }
+        }
+        Ok(quarantined)
     }
 
     fn binding(
@@ -721,6 +682,28 @@ fn container_ordering_key(value: &str) -> String {
     format!("containers/v1/{}", hex::encode(value.as_bytes()))
 }
 
+fn listed_blob_entry(
+    name: String,
+    metadata: BlobMetadata,
+    prefix: &str,
+    delimiter: &str,
+) -> BlobListEntry {
+    if !delimiter.is_empty()
+        && let Some(index) = name[prefix.len()..].find(delimiter)
+    {
+        let end = prefix.len() + index + delimiter.len();
+        BlobListEntry::Prefix(name[..end].to_owned())
+    } else {
+        BlobListEntry::Blob(ListedBlob { name, metadata })
+    }
+}
+
+fn quarantine_path_hash(key: &str) -> Option<&str> {
+    let path_hash = key.strip_prefix("quarantine/")?.strip_suffix(".json")?;
+    (path_hash.len() == 64 && path_hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then_some(path_hash)
+}
+
 fn is_internal_blob_name(value: &str) -> bool {
     value == ".overmesh" || value.starts_with(".overmesh/")
 }
@@ -759,4 +742,114 @@ fn escape_xml(value: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_the_published_request_subset() {
+        assert!(
+            ListRequest::new(
+                "a".to_owned(),
+                "/".to_owned(),
+                None,
+                Some(5_000),
+                vec!["metadata".to_owned()]
+            )
+            .is_ok()
+        );
+        assert!(
+            ListRequest::new(String::new(), "::".to_owned(), None, Some(1), Vec::new()).is_err()
+        );
+        assert!(ListRequest::new(String::new(), String::new(), None, Some(0), Vec::new()).is_err());
+        assert!(
+            ListRequest::new(
+                String::new(),
+                String::new(),
+                None,
+                Some(1),
+                vec!["snapshots".to_owned()]
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn groups_blob_names_at_the_first_delimiter_after_the_prefix() {
+        let entry = listed_blob_entry(
+            "photos/2026/august/image.jpg".to_owned(),
+            metadata(),
+            "photos/",
+            "/",
+        );
+        assert_eq!(entry, BlobListEntry::Prefix("photos/2026/".to_owned()));
+
+        let entry = listed_blob_entry("photos/image.jpg".to_owned(), metadata(), "photos/", "/");
+        assert!(matches!(
+            entry,
+            BlobListEntry::Blob(ListedBlob { name, .. }) if name == "photos/image.jpg"
+        ));
+    }
+
+    #[test]
+    fn round_trips_container_ordering_keys_and_rejects_invalid_markers() {
+        let key = container_ordering_key("équipe");
+        assert_eq!(
+            container_name_from_ordering_key(&key).expect("container"),
+            "équipe"
+        );
+        assert!(container_name_from_ordering_key("catalog/v1/not-a-container").is_err());
+        assert!(container_name_from_ordering_key("containers/v1/zz").is_err());
+    }
+
+    #[test]
+    fn recognizes_only_canonical_quarantine_keys() {
+        let digest = "a".repeat(64);
+        assert_eq!(
+            quarantine_path_hash(&format!("quarantine/{digest}.json")),
+            Some(digest.as_str())
+        );
+        assert_eq!(quarantine_path_hash("quarantine/short.json"), None);
+        assert_eq!(
+            quarantine_path_hash(&format!("quarantine/{digest}.json/extra")),
+            None
+        );
+    }
+
+    #[test]
+    fn renders_azure_shapes_with_escaped_values() {
+        let page = BlobListPage {
+            container: "customer".to_owned(),
+            prefix: "a&".to_owned(),
+            delimiter: "/".to_owned(),
+            max_results: 1,
+            marker: "<marker>".to_owned(),
+            entries: vec![BlobListEntry::Blob(ListedBlob {
+                name: "a&b".to_owned(),
+                metadata: metadata(),
+            })],
+            next_marker: Some("\"next\"".to_owned()),
+            include_metadata: true,
+        };
+        let xml = page.to_xml("https://example.invalid");
+        assert!(xml.contains("<Prefix>a&amp;</Prefix>"));
+        assert!(xml.contains("<Marker>&lt;marker&gt;</Marker>"));
+        assert!(xml.contains("<Name>a&amp;b</Name>"));
+        assert!(xml.contains("<NextMarker>&quot;next&quot;</NextMarker>"));
+        assert!(xml.contains("<Metadata><overmesh_sha256>"));
+    }
+
+    fn metadata() -> BlobMetadata {
+        BlobMetadata {
+            logical_etag: "\"etag\"".to_owned(),
+            logical_version: 1,
+            write_id: "write".to_owned(),
+            ring_version: 1,
+            content_length: 5,
+            content_sha256: format!("sha256:{}", "1".repeat(64)),
+            committed_at_unix_ms: 1_700_000_000_000,
+        }
+    }
 }

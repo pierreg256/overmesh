@@ -865,10 +865,13 @@ Before exposure, the selected catalog bytes MUST be identical on the active
 RF=2 replicas and MUST validate as a canonical signed commit manifest. The
 catalog key, signed blob/container path, logical version and ETag, state,
 Ring version and selected replicas MUST agree. The same exact bytes MUST be
-the current head, current high-water checkpoint, and committed sidecar on both
-replicas, and MUST remain above identical valid compaction floors. Quarantine,
-tamper, conflict, one-sided publication, incomplete publication, replay, and
-`TOMBSTONED` state are skipped.
+present on both selected replicas. Before processing entries, listing MUST
+load the union of quarantine keys from every configured backend and MUST skip
+every matching path hash. Per-item current-head, high-water, committed-sidecar,
+and compaction reads are prohibited on the listing hot path; complete freshness
+and anti-replay validation remains normative for HEAD, GET, and Reconciler
+processing. Signature failure, key/path mismatch, Ring mismatch, quarantine,
+one-sided catalog publication, and non-`COMMITTED` state are skipped.
 
 Successful PUT, DELETE, recreation, Put Block List commit, idempotent retry,
 and partial-publication recovery MUST conditionally publish and verify the

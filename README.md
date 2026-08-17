@@ -93,8 +93,9 @@ milestone in `roadmap.toml`.
 
 ## Current milestone
 
-Project version `0.8.0` is the active milestone for listing, block APIs, and
-signed continuation tokens. Milestone `0.7.0` completed signed tombstones,
+Project version `0.8.0` is the latest completed milestone for listing, block
+APIs, and signed continuation tokens. Milestone `0.9.0` remains planned and is
+not active yet. Milestone `0.7.0` completed signed tombstones,
 retention, validate-plan-execute garbage collection, overwrite collection,
 signed history compaction, streaming reconciliation, RF=2 placement across
 N-node Rings, key-validity windows, Ring lineage, and the hardened live Azure
@@ -104,12 +105,15 @@ Milestone `0.8.0` implements Azure-compatible logical container/blob listing,
 W=2 signed block staging and block-list commits, committed/uncommitted block
 inspection, and opaque signed continuation tokens. Blob listing uses a W=2
 lexicographically ordered catalog whose mutable entries are the exact signed
-current heads. Bounded catalog pages are revalidated against both heads,
-high-water state, compaction floors, and quarantine before exposure; physical
-customer paths, system objects, staged blocks, tombstones, and unhealthy
+current heads. Listing compares each selected catalog entry byte-for-byte on
+both replicas, validates its signature and Ring placement, and excludes a
+request-level union of quarantine keys. Full head, high-water,
+sidecar, and compaction validation remains on HEAD, GET, and Reconciler paths
+rather than adding eight control-plane reads to every listed item. Physical
+customer paths, system objects, staged blocks, tombstones, and quarantined
 records are never client-visible. Container listing filters catalog-derived
-candidates with caller-authorized container probes, avoiding
-account-scoped caller RBAC and keeping the system container inaccessible.
+candidates with caller-authorized container probes, avoiding account-scoped
+caller RBAC and keeping the system container inaccessible.
 
 Before V1 stabilization, milestone `0.10.0` will establish signed live
 performance baselines against direct Azure Storage and Overmesh paths.

@@ -71,24 +71,7 @@ pub fn check(repository_root: &Path) -> Result<VersionReport> {
         );
     }
 
-    let active_milestones = roadmap
-        .milestones
-        .iter()
-        .filter(|milestone| milestone.status == MilestoneStatus::Active)
-        .collect::<Vec<_>>();
-    if active_milestones.len() != 1 {
-        bail!("roadmap must contain exactly one active milestone");
-    }
-    let active = active_milestones[0];
-    if active.version != project_version || active.generation != roadmap.active_generation {
-        bail!(
-            "active roadmap milestone {} {} does not match project {} {}",
-            active.generation,
-            active.version,
-            roadmap.active_generation,
-            project_version
-        );
-    }
+    validate_milestone_state(&roadmap, &project_version)?;
 
     let output = Command::new("cargo")
         .args(["metadata", "--no-deps", "--format-version", "1"])
@@ -132,12 +115,103 @@ pub fn check(repository_root: &Path) -> Result<VersionReport> {
     })
 }
 
+fn validate_milestone_state(roadmap: &Roadmap, project_version: &Version) -> Result<()> {
+    let active_milestones = roadmap
+        .milestones
+        .iter()
+        .filter(|milestone| milestone.status == MilestoneStatus::Active)
+        .collect::<Vec<_>>();
+    match active_milestones.as_slice() {
+        [active] => {
+            if active.version != *project_version || active.generation != roadmap.active_generation
+            {
+                bail!(
+                    "active roadmap milestone {} {} does not match project {} {}",
+                    active.generation,
+                    active.version,
+                    roadmap.active_generation,
+                    project_version
+                );
+            }
+        }
+        [] => {
+            let current = roadmap
+                .milestones
+                .iter()
+                .filter(|milestone| milestone.version == *project_version)
+                .collect::<Vec<_>>();
+            if current.len() != 1
+                || current[0].generation != roadmap.active_generation
+                || current[0].status != MilestoneStatus::Completed
+            {
+                bail!(
+                    "roadmap without an active milestone must mark project {} {} completed",
+                    roadmap.active_generation,
+                    project_version
+                );
+            }
+        }
+        _ => {
+            bail!(
+                "roadmap must contain at most one active milestone, found {}",
+                active_milestones.len()
+            );
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use semver::Version;
 
+    use super::*;
+
     #[test]
     fn project_version_is_semantic() {
         Version::parse(env!("CARGO_PKG_VERSION")).expect("Cargo package version is semantic");
+    }
+
+    #[test]
+    fn accepts_a_completed_project_between_active_milestones() {
+        let roadmap = roadmap_with_statuses([
+            ("0.8.0", MilestoneStatus::Completed),
+            ("0.9.0", MilestoneStatus::Planned),
+        ]);
+        validate_milestone_state(&roadmap, &Version::new(0, 8, 0))
+            .expect("completed transition state");
+    }
+
+    #[test]
+    fn rejects_multiple_active_milestones() {
+        let roadmap = roadmap_with_statuses([
+            ("0.8.0", MilestoneStatus::Active),
+            ("0.9.0", MilestoneStatus::Active),
+        ]);
+        assert!(validate_milestone_state(&roadmap, &Version::new(0, 8, 0)).is_err());
+    }
+
+    #[test]
+    fn rejects_a_planned_project_without_an_active_milestone() {
+        let roadmap = roadmap_with_statuses([
+            ("0.8.0", MilestoneStatus::Planned),
+            ("0.9.0", MilestoneStatus::Planned),
+        ]);
+        assert!(validate_milestone_state(&roadmap, &Version::new(0, 8, 0)).is_err());
+    }
+
+    fn roadmap_with_statuses<const N: usize>(values: [(&str, MilestoneStatus); N]) -> Roadmap {
+        Roadmap {
+            project_version: Version::new(0, 8, 0),
+            active_generation: "V1".to_owned(),
+            milestones: values
+                .into_iter()
+                .map(|(version, status)| Milestone {
+                    version: Version::parse(version).expect("version"),
+                    generation: "V1".to_owned(),
+                    status,
+                })
+                .collect(),
+        }
     }
 }

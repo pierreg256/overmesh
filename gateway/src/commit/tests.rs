@@ -1560,6 +1560,20 @@ async fn listing_uses_bounded_catalog_pages_without_blob_read_probes() {
     }
     let first_before = primary.state.control_page_calls.load(Ordering::SeqCst);
     let second_before = secondary.state.control_page_calls.load(Ordering::SeqCst);
+    let primary_gets_before = primary
+        .state
+        .control_get_calls
+        .lock()
+        .expect("get calls")
+        .values()
+        .sum::<u64>();
+    let secondary_gets_before = secondary
+        .state
+        .control_get_calls
+        .lock()
+        .expect("get calls")
+        .values()
+        .sum::<u64>();
     let page = service
         .listing_service("test-account")
         .list_blobs(
@@ -1594,8 +1608,78 @@ async fn listing_uses_bounded_catalog_pages_without_blob_read_probes() {
         secondary.state.blob_read_auth_calls.load(Ordering::SeqCst),
         0
     );
-    assert_eq!(primary.state.list_calls.load(Ordering::SeqCst), 0);
-    assert_eq!(secondary.state.list_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(primary.state.list_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(secondary.state.list_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        primary
+            .state
+            .control_get_calls
+            .lock()
+            .expect("get calls")
+            .values()
+            .sum::<u64>()
+            - primary_gets_before,
+        3
+    );
+    assert_eq!(
+        secondary
+            .state
+            .control_get_calls
+            .lock()
+            .expect("get calls")
+            .values()
+            .sum::<u64>()
+            - secondary_gets_before,
+        3
+    );
+}
+
+#[tokio::test]
+async fn listing_excludes_the_union_of_quarantine_keys() {
+    use crate::listing::{BlobListEntry, ListRequest};
+
+    let (service, primary, _secondary) = service_fixture_parts();
+    for name in ["visible", "quarantined"] {
+        let content = spool_body(Body::from(name), 4).await.expect("content");
+        service
+            .put_blob(
+                &blob(&format!("/container/{name}")),
+                &principal(),
+                &format!("catalog-{name}"),
+                &content,
+                LogicalCondition::None,
+            )
+            .await
+            .expect("commit");
+    }
+    let path_hash = blob("/container/quarantined").path_hash();
+    primary.state.objects.lock().expect("object lock").insert(
+        format!("quarantine/{path_hash}.json"),
+        ObjectValue {
+            bytes: b"quarantine".to_vec(),
+            etag: Some("\"quarantine\"".to_owned()),
+        },
+    );
+
+    let page = service
+        .listing_service("test-account")
+        .list_blobs(
+            "container",
+            &ListRequest::new(String::new(), String::new(), None, Some(10), Vec::new())
+                .expect("request"),
+            &principal(),
+        )
+        .await
+        .expect("listing");
+    let names = page
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            BlobListEntry::Blob(blob) => Some(blob.name.as_str()),
+            BlobListEntry::Prefix(_) => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["visible"]);
 }
 
 #[tokio::test]
@@ -1637,8 +1721,8 @@ async fn list_containers_uses_visible_catalog_entries_without_account_listing() 
             .collect::<Vec<_>>(),
         ["visible-customer"]
     );
-    assert_eq!(primary.state.list_calls.load(Ordering::SeqCst), 0);
-    assert_eq!(secondary.state.list_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(primary.state.list_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(secondary.state.list_calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
