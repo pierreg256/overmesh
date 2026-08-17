@@ -20,6 +20,12 @@ least-privilege role assignments. It also creates the dedicated non-exportable
 P-256 `overmesh-ring-v090` Key Vault signing key. It does not create an
 application revision before its image exists.
 
+The retained `10.50.0.0/16` validation VNet and the two ACA VNets
+(`10.90.0.0/16`, `10.91.0.0/16`) use a full mesh of direct peerings. Private
+DNS may select a Private Endpoint in any of those VNets, so every linked VNet
+must have a direct route to every published private address. Gateway transit
+and forwarded traffic remain disabled.
+
 The retained `0.5.0` deployment remains authoritative for the Gateway and
 Reconciler permissions on the two original `overmesh-system` containers and
 Key Vault. The `0.9.0` RBAC module adds only the new Storage C, `live-v090`,

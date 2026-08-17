@@ -21,6 +21,9 @@ param storageAccountBName string = 'stomv050b8152352'
 @description('Existing Key Vault name.')
 param keyVaultName string = 'kv-overmesh-v050-8152352'
 
+@description('Retained validation VNet linked to the private DNS zones.')
+param retainedValidationVnetName string = 'vnet-overmesh-v050-live'
+
 @description('Dedicated non-exportable Ring signing key.')
 param ringKeyName string = 'overmesh-ring-v090'
 
@@ -104,6 +107,7 @@ module networking './modules/networking-v090.bicep' = {
   params: {
     primaryLocation: primaryLocation
     secondaryLocation: secondaryLocation
+    retainedValidationVnetName: retainedValidationVnetName
     tags: tags
   }
 }

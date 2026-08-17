@@ -6,6 +6,9 @@ param primaryLocation string
 @description('Secondary ACA region.')
 param secondaryLocation string
 
+@description('Retained validation VNet connected to the private DNS zones.')
+param retainedValidationVnetName string
+
 @description('Common resource tags.')
 param tags object
 
@@ -148,6 +151,94 @@ resource secondaryVnet 'Microsoft.Network/virtualNetworks@2024-07-01' = {
     ]
   }
   tags: tags
+}
+
+resource retainedValidationVnet 'Microsoft.Network/virtualNetworks@2024-07-01' existing = {
+  name: retainedValidationVnetName
+}
+
+resource primaryToSecondary 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2024-07-01' = {
+  parent: primaryVnet
+  name: 'peer-to-v090-swe'
+  properties: {
+    allowForwardedTraffic: false
+    allowGatewayTransit: false
+    allowVirtualNetworkAccess: true
+    remoteVirtualNetwork: {
+      id: secondaryVnet.id
+    }
+    useRemoteGateways: false
+  }
+}
+
+resource secondaryToPrimary 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2024-07-01' = {
+  parent: secondaryVnet
+  name: 'peer-to-v090-frc'
+  properties: {
+    allowForwardedTraffic: false
+    allowGatewayTransit: false
+    allowVirtualNetworkAccess: true
+    remoteVirtualNetwork: {
+      id: primaryVnet.id
+    }
+    useRemoteGateways: false
+  }
+}
+
+resource primaryToRetained 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2024-07-01' = {
+  parent: primaryVnet
+  name: 'peer-to-v050-live'
+  properties: {
+    allowForwardedTraffic: false
+    allowGatewayTransit: false
+    allowVirtualNetworkAccess: true
+    remoteVirtualNetwork: {
+      id: retainedValidationVnet.id
+    }
+    useRemoteGateways: false
+  }
+}
+
+resource retainedToPrimary 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2024-07-01' = {
+  parent: retainedValidationVnet
+  name: 'peer-to-v090-frc'
+  properties: {
+    allowForwardedTraffic: false
+    allowGatewayTransit: false
+    allowVirtualNetworkAccess: true
+    remoteVirtualNetwork: {
+      id: primaryVnet.id
+    }
+    useRemoteGateways: false
+  }
+}
+
+resource secondaryToRetained 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2024-07-01' = {
+  parent: secondaryVnet
+  name: 'peer-to-v050-live'
+  properties: {
+    allowForwardedTraffic: false
+    allowGatewayTransit: false
+    allowVirtualNetworkAccess: true
+    remoteVirtualNetwork: {
+      id: retainedValidationVnet.id
+    }
+    useRemoteGateways: false
+  }
+}
+
+resource retainedToSecondary 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2024-07-01' = {
+  parent: retainedValidationVnet
+  name: 'peer-to-v090-swe'
+  properties: {
+    allowForwardedTraffic: false
+    allowGatewayTransit: false
+    allowVirtualNetworkAccess: true
+    remoteVirtualNetwork: {
+      id: secondaryVnet.id
+    }
+    useRemoteGateways: false
+  }
 }
 
 resource blobPrivateDns 'Microsoft.Network/privateDnsZones@2024-06-01' existing = {
