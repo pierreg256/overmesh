@@ -21,9 +21,6 @@ param reconcilerPrincipalId string
 @description('Positive caller canary managed identity principal ID.')
 param allowedCallerPrincipalId string
 
-@description('Optional GitHub Actions OIDC publisher principal ID.')
-param githubPublisherPrincipalId string = ''
-
 @description('System control container name.')
 param systemContainerName string
 
@@ -41,14 +38,6 @@ var blobContributorRoleId = subscriptionResourceId(
 var acrPullRoleId = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
   '7f951dda-4ed3-4680-a7ca-43fe172d538d'
-)
-var acrPushRoleId = subscriptionResourceId(
-  'Microsoft.Authorization/roleDefinitions',
-  '8311e382-0749-4cb8-b61a-304f252e45ec'
-)
-var acrTasksContributorRoleId = subscriptionResourceId(
-  'Microsoft.Authorization/roleDefinitions',
-  'fb382eab-e894-4461-af04-94435c366c3f'
 )
 
 resource storageA 'Microsoft.Storage/storageAccounts@2025-01-01' existing = {
@@ -259,23 +248,5 @@ resource reconcilerAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' 
     principalId: reconcilerPrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: acrPullRoleId
-  }
-}
-
-resource githubAcrPush 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(githubPublisherPrincipalId)) {
-  name: guid(registry.id, githubPublisherPrincipalId, acrPushRoleId)
-  scope: registry
-  properties: {
-    principalId: githubPublisherPrincipalId
-    roleDefinitionId: acrPushRoleId
-  }
-}
-
-resource githubAcrTasksContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(githubPublisherPrincipalId)) {
-  name: guid(registry.id, githubPublisherPrincipalId, acrTasksContributorRoleId)
-  scope: registry
-  properties: {
-    principalId: githubPublisherPrincipalId
-    roleDefinitionId: acrTasksContributorRoleId
   }
 }

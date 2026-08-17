@@ -1,6 +1,16 @@
-name: Build private ACR images
+name: Build public GHCR images
 
 on:
+  push:
+    branches:
+      - milestone/**
+    paths:
+      - .github/workflows/build-images.yml
+      - Cargo.toml
+      - Cargo.lock
+      - gateway/**
+      - reconciler/**
+      - deploy/**
   workflow_dispatch:
     inputs:
       image_tag:
@@ -10,49 +20,114 @@ on:
 
 permissions:
   contents: read
-  id-token: write
+  packages: write
 
 concurrency:
-  group: overmesh-acr-build
+  group: overmesh-ghcr-build-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  build:
+  metadata:
+    name: Prepare image metadata
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    environment: live-azure
+    outputs:
+      image_tag: ${{ steps.metadata.outputs.image_tag }}
+      owner: ${{ steps.metadata.outputs.owner }}
+      short_sha: ${{ steps.metadata.outputs.short_sha }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - uses: azure/login@v2
+      - name: Resolve tags
+        id: metadata
+        env:
+          REQUESTED_TAG: ${{ inputs.image_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_tag=$REQUESTED_TAG
+          if [[ -z $image_tag ]]; then
+            image_tag=$(cargo metadata --no-deps --format-version 1 |
+              jq -er '.packages[] | select(.name == "overmesh-gateway") | .version')
+          fi
+          [[ $image_tag =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]]
+          echo "image_tag=$image_tag" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.component }}
+    needs: metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: gateway
+            image: overmesh-gateway
+            dockerfile: deploy/Dockerfile.gateway
+          - component: reconciler
+            image: overmesh-reconciler
+            dockerfile: deploy/Dockerfile.reconciler
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Gateway in ACR
+      - name: Build and publish
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ghcr.io/${{ needs.metadata.outputs.owner }}/${{ matrix.image }}:${{ needs.metadata.outputs.image_tag }}
+            ghcr.io/${{ needs.metadata.outputs.owner }}/${{ matrix.image }}:sha-${{ needs.metadata.outputs.short_sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.metadata.outputs.image_tag }}
+
+      - name: Record immutable digest
+        shell: bash
+        run: |
+          {
+            echo "### ${{ matrix.image }}"
+            echo
+            echo '```text'
+            echo "ghcr.io/${{ needs.metadata.outputs.owner }}/${{ matrix.image }}@${{ steps.build.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify-public:
+    name: Verify anonymous pulls
+    needs:
+      - metadata
+      - build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        image:
+          - overmesh-gateway
+          - overmesh-reconciler
+
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Require public package visibility
         env:
-          ACR_NAME: ${{ vars.OVERMESH_ACR_NAME }}
-          IMAGE_TAG: ${{ inputs.image_tag }}
+          IMAGE: ghcr.io/${{ needs.metadata.outputs.owner }}/${{ matrix.image }}:${{ needs.metadata.outputs.image_tag }}
         run: |
           set -euo pipefail
-          az acr build \
-            --registry "$ACR_NAME" \
-            --file deploy/Dockerfile.gateway \
-            --image "overmesh-gateway:$IMAGE_TAG" \
-            --image "overmesh-gateway:sha-${GITHUB_SHA::12}" \
-            .
-
-      - name: Build Reconciler in ACR
-        env:
-          ACR_NAME: ${{ vars.OVERMESH_ACR_NAME }}
-          IMAGE_TAG: ${{ inputs.image_tag }}
-        run: |
-          set -euo pipefail
-          az acr build \
-            --registry "$ACR_NAME" \
-            --file deploy/Dockerfile.reconciler \
-            --image "overmesh-reconciler:$IMAGE_TAG" \
-            --image "overmesh-reconciler:sha-${GITHUB_SHA::12}" \
-            .
+          docker buildx imagetools inspect "${IMAGE,,}" >/dev/null

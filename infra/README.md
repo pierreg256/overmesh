@@ -8,11 +8,12 @@ The `0.9.0` deployment is intentionally phased:
 
 1. Build and validate the template.
 2. Deploy the foundation with `deployRuntime=false`.
-3. Build the Gateway and Reconciler images inside the private ACR through
-   GitHub Actions and ACR Tasks.
-4. Supply signed Ring and runtime configuration values outside source control.
-5. Deploy with `deployRuntime=true`.
-6. Approve the two Front Door Private Link requests on the ACA environments.
+3. Build the Gateway and Reconciler images in public GHCR through GitHub
+   Actions.
+4. Import the immutable GHCR digests into private ACR through Azure.
+5. Supply signed Ring and runtime configuration values outside source control.
+6. Deploy with `deployRuntime=true`.
+7. Approve the two Front Door Private Link requests on the ACA environments.
 
 The foundation phase creates the third Storage Account, geo-replicated Premium
 ACR, regional networks, Private Endpoints, monitoring, ACA environments, and
@@ -51,12 +52,22 @@ The secure configuration parameters in `main.bicepparam` are empty
 placeholders. Never commit rendered runtime configuration or deployment
 parameter files containing signed environment material.
 
-The Gateway and Reconciler identities remain distinct. GitHub-hosted runners do
-not connect to the ACR data endpoint: GitHub OIDC authorizes an `az acr build`
-request, and ACR Tasks performs the private build and push inside Azure.
+The Gateway and Reconciler identities remain distinct. GitHub Actions uses only
+the repository-scoped `GITHUB_TOKEN` to publish `linux/amd64` images to GHCR;
+it receives no Azure identity or credential. After the first publication,
+change both package visibilities to **Public** in GitHub package settings. The
+workflow's anonymous-pull job enforces that state.
 
-`githubPublisherPrincipalId` is optional. When it is empty, the foundation
-omits the GitHub publisher role assignments. Before running the image workflow,
-configure a secretless OIDC principal for the `live-azure` GitHub environment,
-redeploy with its object ID, then set `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`,
-`AZURE_SUBSCRIPTION_ID`, and the `OVERMESH_ACR_NAME` environment variable.
+An Azure-authenticated operator imports the public images server-side by
+immutable digest. No runner or workstation connects to the private ACR data
+endpoint:
+
+```bash
+./deploy/import-ghcr-images-to-acr.sh \
+  --acr-name crovermesh0908152352 \
+  --tag 0.9.0 \
+  --commit-sha "$(git rev-parse HEAD)"
+```
+
+The script resolves each public GHCR digest, invokes synchronous `az acr
+import`, and assigns both `0.9.0` and `sha-<12-character-commit>` in ACR.

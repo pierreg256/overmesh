@@ -36,9 +36,6 @@ param reconcilerIdentityName string = 'id-overmesh-reconciler-v050'
 @description('Existing positive caller canary managed identity name.')
 param allowedCallerIdentityName string = 'id-overmesh-caller-allowed-v050'
 
-@description('Optional GitHub Actions OIDC publisher principal ID. Empty omits publisher RBAC.')
-param githubPublisherPrincipalId string = ''
-
 @description('Container image tag deployed to both regions.')
 param imageTag string = '0.9.0'
 
@@ -225,7 +222,6 @@ module rbac './modules/rbac-v090.bicep' = {
     gatewayPrincipalId: gatewayIdentity.properties.principalId
     reconcilerPrincipalId: reconcilerIdentity.properties.principalId
     allowedCallerPrincipalId: allowedCallerIdentity.properties.principalId
-    githubPublisherPrincipalId: githubPublisherPrincipalId
     systemContainerName: 'overmesh-system'
     customerContainerName: 'live-v090'
   }
