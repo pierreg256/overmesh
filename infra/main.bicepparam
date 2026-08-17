@@ -11,8 +11,7 @@ param gatewayIdentityName = 'id-overmesh-gateway-v050'
 param reconcilerIdentityName = 'id-overmesh-reconciler-v050'
 param allowedCallerIdentityName = 'id-overmesh-caller-allowed-v050'
 
-// Supply the real OIDC principal and signed runtime configuration at validation/deployment time.
-param githubPublisherPrincipalId = '00000000-0000-0000-0000-000000000000'
+// Supply signed runtime configuration at validation/deployment time.
 param imageTag = '0.9.0'
 param deployRuntime = false
 param gatewayConfigBase64 = ''

@@ -9,9 +9,6 @@ param storageAccountBName string
 @description('Storage Account C name.')
 param storageAccountCName string
 
-@description('Key Vault name.')
-param keyVaultName string
-
 @description('Container Registry name.')
 param containerRegistryName string
 
@@ -24,8 +21,8 @@ param reconcilerPrincipalId string
 @description('Positive caller canary managed identity principal ID.')
 param allowedCallerPrincipalId string
 
-@description('GitHub Actions OIDC publisher principal ID.')
-param githubPublisherPrincipalId string
+@description('Optional GitHub Actions OIDC publisher principal ID.')
+param githubPublisherPrincipalId string = ''
 
 @description('System control container name.')
 param systemContainerName string
@@ -40,10 +37,6 @@ var readerRoleId = subscriptionResourceId(
 var blobContributorRoleId = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
   'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
-)
-var keyVaultCryptoUserRoleId = subscriptionResourceId(
-  'Microsoft.Authorization/roleDefinitions',
-  '12338af0-0e69-4776-bea7-57ae8d297424'
 )
 var acrPullRoleId = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
@@ -85,16 +78,6 @@ resource blobServiceC 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01
   name: 'default'
 }
 
-resource systemContainerA 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' existing = {
-  parent: blobServiceA
-  name: systemContainerName
-}
-
-resource systemContainerB 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' existing = {
-  parent: blobServiceB
-  name: systemContainerName
-}
-
 resource systemContainerC 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' existing = {
   parent: blobServiceC
   name: systemContainerName
@@ -113,10 +96,6 @@ resource customerContainerB 'Microsoft.Storage/storageAccounts/blobServices/cont
 resource customerContainerC 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' existing = {
   parent: blobServiceC
   name: customerContainerName
-}
-
-resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' existing = {
-  name: keyVaultName
 }
 
 resource registry 'Microsoft.ContainerRegistry/registries@2025-04-01' existing = {
@@ -183,51 +162,11 @@ resource reconcilerReaderC 'Microsoft.Authorization/roleAssignments@2022-04-01' 
   }
 }
 
-resource gatewaySystemA 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(systemContainerA.id, gatewayPrincipalId, blobContributorRoleId)
-  scope: systemContainerA
-  properties: {
-    principalId: gatewayPrincipalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: blobContributorRoleId
-  }
-}
-
-resource gatewaySystemB 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(systemContainerB.id, gatewayPrincipalId, blobContributorRoleId)
-  scope: systemContainerB
-  properties: {
-    principalId: gatewayPrincipalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: blobContributorRoleId
-  }
-}
-
 resource gatewaySystemC 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(systemContainerC.id, gatewayPrincipalId, blobContributorRoleId)
   scope: systemContainerC
   properties: {
     principalId: gatewayPrincipalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: blobContributorRoleId
-  }
-}
-
-resource reconcilerSystemA 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(systemContainerA.id, reconcilerPrincipalId, blobContributorRoleId)
-  scope: systemContainerA
-  properties: {
-    principalId: reconcilerPrincipalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: blobContributorRoleId
-  }
-}
-
-resource reconcilerSystemB 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(systemContainerB.id, reconcilerPrincipalId, blobContributorRoleId)
-  scope: systemContainerB
-  properties: {
-    principalId: reconcilerPrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: blobContributorRoleId
   }
@@ -303,26 +242,6 @@ resource callerCustomerC 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   }
 }
 
-resource gatewayKeyVault 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(keyVault.id, gatewayPrincipalId, keyVaultCryptoUserRoleId)
-  scope: keyVault
-  properties: {
-    principalId: gatewayPrincipalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: keyVaultCryptoUserRoleId
-  }
-}
-
-resource reconcilerKeyVault 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(keyVault.id, reconcilerPrincipalId, keyVaultCryptoUserRoleId)
-  scope: keyVault
-  properties: {
-    principalId: reconcilerPrincipalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: keyVaultCryptoUserRoleId
-  }
-}
-
 resource gatewayAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(registry.id, gatewayPrincipalId, acrPullRoleId)
   scope: registry
@@ -343,7 +262,7 @@ resource reconcilerAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' 
   }
 }
 
-resource githubAcrPush 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource githubAcrPush 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(githubPublisherPrincipalId)) {
   name: guid(registry.id, githubPublisherPrincipalId, acrPushRoleId)
   scope: registry
   properties: {
@@ -352,7 +271,7 @@ resource githubAcrPush 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-resource githubAcrTasksContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource githubAcrTasksContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(githubPublisherPrincipalId)) {
   name: guid(registry.id, githubPublisherPrincipalId, acrTasksContributorRoleId)
   scope: registry
   properties: {
