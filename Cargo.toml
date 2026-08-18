@@ -15,7 +15,7 @@ azure_core = "1.0.0"
 azure_identity = "1.0.0"
 azure_security_keyvault_keys = "1.0.0"
 axum = "0.8.8"
-base64 = "0.22.1"
+base64 = "0.23.1"
 bytes = "1.11.1"
 clap = { version = "4.5.54", features = ["derive"] }
 hex = "0.4.3"
@@ -35,7 +35,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_jcs = "0.1.0"
 serde_json = "1.0.145"
 serde_yaml = "0.9.34"
-sha2 = "0.10.9"
+sha2 = "0.11.0"
 tempfile = "3.24.0"
 thiserror = "2.0.17"
 tokio = { version = "1.49.0", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
