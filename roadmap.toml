@@ -1,5 +1,5 @@
 schema_version = 1
-project_version = "0.9.0"
+project_version = "0.9.1"
 active_generation = "V1"
 
 [[milestones]]
@@ -72,6 +72,21 @@ deliverables = [
   "Integrate Azure Front Door with caching and content transformation disabled for Blob data-plane routes.",
   "Validate Azure SDK .NET, Python, and JavaScript, Azure CLI, and AzCopy against the deployed surface.",
   "Complete two-region live Azure conformance and retain signed deployment evidence."
+]
+
+[[milestones]]
+version = "0.9.1"
+generation = "V1"
+name = "Published documentation and drift enforcement"
+status = "active"
+deliverables = [
+  "Publish the specifications, rationale, compatibility matrix, and architecture decision records as a GitHub Pages site built with a pinned Zola release.",
+  "Assemble site content from the documents where they already live, leaving specifications at the repository root and rationale and decision records under docs/, and keep the generated content tree out of version control so that no authored document is duplicated.",
+  "Apply the agreed visual identity derived from the reference mockups: pure-black landing surface, softened reading surface for long documents, rationed accent and glow usage, vector ring mark, and self-hosted typefaces with no third-party font requests.",
+  "Provide full-text search over the built output with Pagefind, heading anchors, and a per-page table of contents for documents that exceed a few screens.",
+  "Add an overmesh-harness doc-check subcommand that fails closed when an authored Markdown document is not registered for publication, when an accepted decision record cites verification evidence that no longer exists, or when a documented count, milestone, or version disagrees with the repository.",
+  "Run doc-check in the pull-request gate so that documentation drift fails before publication rather than after it.",
+  "Publish through a dedicated GitHub Pages workflow triggered only by documentation and site paths, with pinned tool versions and least-privilege permissions, and exclude documentation-only changes from the code validation workflow."
 ]
 
 [[milestones]]
