@@ -24,24 +24,29 @@ An ADR explains a choice; it does not define behaviour.
 | [0005](0005-authorization-probes-for-metadata-only-operations.md) | Authorization probes and the resource they check | accepted | 0.5.0 → 0.8.0 | yes |
 | [0006](0006-placement-through-a-signed-ring-document.md) | Placement through a signed Ring document | accepted | 0.2.0 → 0.6.0 | yes |
 | [0007](0007-canonical-logical-resource-identity.md) | Canonical logical resource identity | accepted | 0.5.0 → 0.8.0 | yes |
-
-**0008 — the signed catalogue behind listing** is deferred until the listing
-validation cost and the catalogue key encoding have been settled. Writing it
-now would record a snapshot rather than a decision.
+| [0008](0008-listing-from-a-signed-catalogue.md) | Listing from a signed catalogue | accepted | 0.8.0 | partial |
 
 ## Implementation status
 
-All implementation items identified by the accepted records are present in the
-current tree. The live authorization gate still has to be executed against a
-deployed Gateway, with controlled write-role revocation and restoration, before
-the corresponding release evidence can be signed.
+All runtime implementation items identified by the accepted records are
+present in the current tree. The live authorization gate has been executed
+against the deployed Gateway with controlled write-role revocation and
+restoration, and the milestone 0.9 release evidence is signed.
 
 Implementation-status sections inside accepted records remain the historical
 snapshot from acceptance; the index above is the current implementation state.
 
-If 0008 changes the catalogue encoding, the derived bound changes in
-`LogicalBlobId::parse`, in 0007, and in
-[`COMPATIBILITY.md`](../../COMPATIBILITY.md).
+0008 carries the one outstanding item: property tests for the catalogue
+encoding, asserting round-trip and order preservation over random byte strings.
+They are a prerequisite for any cheaper encoding, because an ordering bug there
+corrupts pagination silently.
+
+Two items are scheduled rather than pending. Parity with Azure on blob-name
+length is to be reopened **before 1.0**; if the encoding changes, the derived
+bound changes in `LogicalBlobId::parse`, in 0007, and in
+[`COMPATIBILITY.md`](../../COMPATIBILITY.md). Reducing listing below four
+backend reads per entry is a policy question for the **0.10** performance
+baseline, not an ordering fix.
 
 ## Conventions
 

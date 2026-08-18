@@ -23,6 +23,19 @@ The capability gate validates:
   loses write permission while retaining read permission;
 - Gateway idempotent replay by the original caller after write-permission
   revocation, asserting `403` rather than `409`/`412`;
+- Azure SDK for .NET compatibility through the live gateway with explicit
+  `x-ms-client-request-id` injection;
+- Azure SDK for Python compatibility through the live gateway with explicit
+  `x-ms-client-request-id` injection;
+- Azure SDK for JavaScript/Node compatibility through the live gateway with
+  explicit `x-ms-client-request-id` injection;
+- Azure CLI compatibility through the live gateway with managed-identity login
+  only;
+- AzCopy compatibility through the live gateway with managed identity only;
+- upload/PUT, download/GET, delete, payload-byte verification, and cleanup for
+  every client, plus properties/HEAD and listing through each SDK and Azure CLI;
+- machine-readable JSON evidence with the endpoint, timestamp, commit, client
+  versions, per-client operations, and overall result;
 - `404` for an allowed absent-blob `HEAD` and `403` for a denied one;
 - `404` for an allowed exact-path nonexistent-snapshot `DELETE` and `403` for
   a denied one;
@@ -34,6 +47,8 @@ The repository includes an executable provider:
 make test-live-azure
 make test-live-azure-storage
 make test-live-azure-gateway
+make test-live-azure-client-compat
+make test-live-azure-placement
 ```
 
 It requires:
@@ -72,8 +87,78 @@ must restore the original write grants afterward. The gate fails closed if the
 helper is absent, if replay loses read permission after revocation, or if a
 revoked write still succeeds.
 
-`make test-live-azure` runs both providers. Missing configuration or an
-ambiguous authorization status fails closed.
+`make test-live-azure` runs the storage, gateway-authorization, and client
+compatibility providers. Missing configuration or an ambiguous authorization
+status fails closed.
+
+The placement provider runs in three explicit phases: `baseline`, `outage`,
+and `recovery`. It writes one blob for every RF=2 pair in the signed
+three-node Ring, verifies each signed head exists on exactly those two Storage
+Accounts, proves that a Storage A outage rejects only the A/B and A/C writes,
+then retries those writes after restoration and removes the logical canaries.
 
 `HARNESS_LIVE_AZURE_COMMAND` can override the bundled provider when an
 organization needs an equivalent internal runner.
+
+## Client compatibility gate
+
+`make test-live-azure-client-compat` executes the milestone `0.9.0` client
+compatibility matrix against the configured live Overmesh gateway.
+
+Required environment:
+
+- `OVERMESH_LIVE_GATEWAY_ENDPOINT`;
+- `OVERMESH_LIVE_CUSTOMER_CONTAINER`;
+- `OVERMESH_LIVE_ALLOWED_MANAGED_IDENTITY_CLIENT_ID`.
+
+Runtime prerequisites on the validation host:
+
+- Linux `x86_64`;
+- the allowed user-assigned managed identity attached to the VM and reachable
+  through IMDS;
+- `python3`, `curl`, `jq`, `git`, and `tar`;
+- outbound HTTPS to `nodejs.org`, `dot.net`, `pypi.org`,
+  `files.pythonhosted.org`, and GitHub release assets unless the toolchain has
+  already been cached locally;
+- write access to `.harness/` and to
+  `${OVERMESH_LIVE_CLIENT_COMPAT_ROOT:-/opt/overmesh-live/client-compat}`.
+
+The gate installs or reuses:
+
+- Node.js under `/opt/overmesh-live/client-compat/tools/`;
+- .NET SDK under `/opt/overmesh-live/client-compat/tools/`;
+- AzCopy under `/opt/overmesh-live/client-compat/tools/`;
+- isolated Python virtual environments for the Azure SDK and Azure CLI under
+  `/opt/overmesh-live/client-compat/venvs/`.
+
+No Storage account keys, SAS tokens, or client secrets are used. The SDK
+clients inject `x-ms-client-request-id` explicitly so Overmesh write-id
+requirements are deterministic. Azure CLI and AzCopy rely on their native
+generated client request IDs; a successful write is itself proof because the
+gateway rejects any write missing `x-overmesh-write-id`/`x-ms-client-request-id`.
+
+The default evidence file is:
+
+```text
+.harness/live-client-compat/<run-id>/evidence.json
+```
+
+Optional overrides:
+
+- `OVERMESH_LIVE_CLIENT_COMPAT_ROOT` to relocate the cached toolchain;
+- `OVERMESH_LIVE_CLIENT_COMPAT_WORK_DIR` to relocate local logs and downloads;
+- `OVERMESH_LIVE_CLIENT_COMPAT_EVIDENCE_PATH` to choose an explicit JSON output
+  path;
+- `OVERMESH_LIVE_CLIENT_COMPAT_NODE_VERSION`,
+  `OVERMESH_LIVE_CLIENT_COMPAT_DOTNET_VERSION`,
+  `OVERMESH_LIVE_CLIENT_COMPAT_AZURE_CLI_VERSION`, and
+  `OVERMESH_LIVE_CLIENT_COMPAT_AZCOPY_VERSION` to pin alternate tool versions.
+
+Example invocation on the retained Linux validation VM:
+
+```bash
+OVERMESH_LIVE_GATEWAY_ENDPOINT="https://overmesh.example.internal" \
+OVERMESH_LIVE_CUSTOMER_CONTAINER="customer-data" \
+OVERMESH_LIVE_ALLOWED_MANAGED_IDENTITY_CLIENT_ID="00000000-0000-0000-0000-000000000000" \
+make test-live-azure-client-compat
+```

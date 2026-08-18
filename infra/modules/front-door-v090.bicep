@@ -30,6 +30,9 @@ resource profile 'Microsoft.Cdn/profiles@2025-06-01' = {
   sku: {
     name: 'Premium_AzureFrontDoor'
   }
+  properties: {
+    originResponseTimeoutSeconds: 60
+  }
   tags: tags
 }
 

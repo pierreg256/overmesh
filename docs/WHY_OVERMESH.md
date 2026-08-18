@@ -13,10 +13,14 @@ figures are estimated rather than measured, and its conclusions may change.
 It records current thinking about why the project exists. It is **not** a
 specification, **not** a commitment, and **not** a source of requirements. It
 must not be used to justify, prioritise, or constrain design and implementation
-decisions at this stage. The normative documents remain
-[`OVERMESH_V1_SPECIFICATION.md`](../OVERMESH_V1_SPECIFICATION.md),
+decisions at this stage.
+
+The references are
+[`OVERMESH_V1_SPECIFICATION.md`](../OVERMESH_V1_SPECIFICATION.md) and
 [`OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md`](../OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md),
-and `roadmap.toml`.
+which define behaviour, and the decision records in [`adr/`](adr/README.md),
+which explain why it is what it is. Where this document and any of those
+disagree, they are right and this is out of date.
 
 ---
 
@@ -36,6 +40,8 @@ not. Nothing in this document should be read as a production readiness claim.
 The normative design lives in
 [`OVERMESH_V1_SPECIFICATION.md`](../OVERMESH_V1_SPECIFICATION.md) and
 [`OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md`](../OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md).
+The reasoning behind individual choices — including several that were reversed
+during development — is in [`adr/`](adr/README.md).
 
 ## 2. The problem
 
@@ -252,7 +258,7 @@ Nothing here is hidden. Each line states whether it is inherent or scheduled.
 | Storage | 2×, plus uncollected generations | Inherent to RF=2 |
 | Write latency | ~35 backend round trips and 4 Key Vault signatures per PUT | Being reduced |
 | Read latency | ~12 round trips before the first byte, including for `HEAD` | Being reduced |
-| Listing | Per-entry cross-replica validation, paid on every page | Being reduced |
+| Listing | ~20,000 backend reads for a 5,000-entry page | Reduced 2.5× in 0.8; going further is a trade, not a fix |
 | Write availability | Writes stop while either region is unavailable | Hinted handoff, post-V1 |
 | Reconciliation | O(dataset) per cycle | Merkle trees in V2 |
 | Operations | 2+ accounts, private endpoints, 3 managed identities, container-scoped RBAC, Key Vault, signed Ring distribution, reconciler scheduling, continuous RBAC posture auditing | Inherent |
@@ -265,6 +271,15 @@ either region is unavailable. That is a deliberate exchange — cross-region
 durability and a provable consistency state, at the price of write
 availability — and hinted handoff is the planned way to buy the availability
 back without giving up the guarantee.
+
+The listing line is the largest number in this table and deserves a word,
+because it is not simply unfinished work. Each listed entry is validated across
+both replicas and against its committed head before it is returned. Removing
+either check halves the cost and buys a class of incorrect result — serving an
+entry a reconciler has not yet repaired, or reporting a version that was never
+committed. Write ordering does not resolve it: two objects that must agree
+require a check at read time. The 0.10 performance baseline is where that trade
+gets priced.
 
 ## 9. What Overmesh does not do
 
@@ -285,12 +300,29 @@ deployment is required to enable.
 **One logical account per gateway, today.** The logical account is a deployment
 setting. Multi-account hosting behind one gateway is post-V1.
 
+**Authorization is granular to the container, not to the path.** Caller
+authorization is the caller's own Azure RBAC, and container-scoped assignments
+behave exactly as they do against Blob Storage. Role assignment conditions
+whose predicate depends on the blob path are refused: content is written under
+a derived key that no path predicate can match, so such a condition would be
+enforced on reads and silently bypassed on writes, and a partially enforced
+access rule is worse than an absent one. Path-independent conditions —
+`@Environment`, `@Principal` — are unaffected, and because logical containers
+map one-to-one onto backend containers, separation by container works with full
+fidelity.
+
+**Usable blob names are shorter than Azure's.** The catalogue that backs
+listing encodes the name at two characters per byte and is bound by the same
+1,024-character backend limit, so the usable budget is roughly 48% of Azure's
+for ASCII names and less for other scripts. Parity is tracked as debt to be
+reopened before 1.0. The published matrix carries the exact figures.
+
 **The API surface is a published subset, not the whole of Azure Blob.** `PUT`,
 `GET`, `HEAD`, `DELETE`, conditional requests, ranged reads, container and blob
 listing with delimiters and continuation, `Put Block`, `Put Block List`, and
 `Get Block List` are implemented. Client compatibility across the Azure SDKs,
-the CLI, and AzCopy is the next milestone. The compatibility matrix is an
-explicit deliverable: anything not on it is rejected with an Azure-compatible
+the CLI, and AzCopy is validated live in milestone 0.9. The compatibility
+matrix is explicit: anything not on it is rejected with an Azure-compatible
 error rather than silently approximated.
 
 **It is not a quorum system.** No RF≥3, no configurable quorums, no read
@@ -299,8 +331,8 @@ fixed two-replica commit protocol and says so.
 
 ## 10. Status
 
-Overmesh is an advanced prototype, at milestone 0.8 of a V1 plan that reaches
-1.0.
+Overmesh is an advanced prototype that has completed milestone 0.9 of a V1
+plan that reaches 1.0.
 
 **Implemented and tested:** the signed Ring with rollback and predecessor
 validation, Entra-only authentication with explicit Shared Key and SAS
@@ -314,12 +346,17 @@ block staging APIs with their own retention and collection, reconciliation with
 repair and quarantine, and continuous RBAC posture auditing against Azure
 Resource Manager.
 
-**How it is validated:** 138 unit and integration tests, 23 declarative
+**How it is validated:** 173 unit and integration tests, 23 declarative
 scenarios against an independent reference model, three process-level suites
 and a Rust system validator running against Azurite backends behind a fault
-proxy, and a live Azure gate that verifies account posture and probes storage
-authorization with both an allowed and a deliberately denied principal across
-Storage API versions.
+proxy, and a live Azure gate that verifies account posture, authorization
+revocation, three-account RF=2 placement, single-account outage isolation, and
+the Azure SDK .NET/Python/JavaScript, Azure CLI, and AzCopy clients.
+
+Why decisions were taken the way they were — including several that were
+reversed during development — is recorded in
+[`docs/adr/`](adr/README.md). That is the first thing to read if the design
+looks surprising.
 
 Placement across a multi-account, multi-region Ring is part of that suite. A
 three-node topology is exercised on every run: object placement is asserted
@@ -327,29 +364,24 @@ account by account, and a single-account outage is shown to affect only the
 objects assigned to it. The capacity argument of section 6 is therefore
 measured, not merely designed.
 
-**Not yet demonstrated.** One thing, stated plainly.
-
-The live Azure gate exists and is wired into the release target, but the
-security model it validates — container-scoped RBAC, private endpoints,
-authorization probe semantics — cannot be exercised by the local emulator.
-Until that gate has been run against real storage accounts, the security
-argument is well constructed rather than demonstrated. Standing up that
-environment is milestone 0.9; a measured performance baseline follows in 0.10,
-and optimisation in 0.11.
+**Demonstrated live.** The milestone 0.9 evidence is retained and signed by a
+non-exportable Key Vault key. Container-scoped RBAC, private endpoints,
+authorization probe semantics, deterministic placement, outage isolation, and
+standard-client behavior have all been exercised against real Azure resources.
+A measured performance baseline follows in 0.10, and optimisation in 0.11.
 
 ## 11. Where to start if you want to fork it
 
 The three highest-value contributions, in order:
 
-1. **Running the live Azure gate.** Two storage accounts, three managed
-   identities, one Key Vault key. It is the shortest path from "well
-   constructed" to "demonstrated", and it is the only thing standing between
-   this prototype and a credible security claim.
-2. **Listing throughput.** Every listed entry is currently validated across
-   both replicas before it is returned. It is safe and it is expensive, and
-   listing is a bulk operation by nature. Deciding what a listing must prove —
-   as opposed to what `GET`, `HEAD`, and the reconciler already prove — is a
-   design question as much as an optimisation.
+1. **Establishing the performance baseline.** Measure direct Azure Storage and
+   Overmesh with the same payloads, concurrency and identity posture before
+   changing the design.
+2. **Listing throughput.** Four backend reads per entry, twenty thousand for a
+   default page. The two candidate reductions each buy a class of incorrect
+   result rather than costing only engineering, so the work is to decide what a
+   listing must prove — as opposed to what `GET`, `HEAD` and the reconciler
+   already prove — and then to measure it. See ADR-0008.
 3. **Write-path latency.** Thirty-five round trips and four Key Vault
    signatures per write is the number that will decide whether this is usable.
    It is also the most tractable engineering problem in the repository.

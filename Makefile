@@ -14,7 +14,7 @@ COMPOSE_FILE := harness/environments/azurite/compose.yaml
 COMPOSE := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE)
 HARNESS := cargo run --quiet -p overmesh-harness --
 
-.PHONY: harness-certs dev-up dev-down dev-reset fault-reset gateway-smoke placement-smoke reconciler-smoke validate-system harness-list harness-run-all version-check infra-build test-pr test-main test-nightly test-live-azure test-live-azure-storage test-live-azure-gateway test-release
+.PHONY: harness-certs dev-up dev-down dev-reset fault-reset gateway-smoke placement-smoke reconciler-smoke validate-system harness-list harness-run-all version-check infra-build test-pr test-main test-nightly test-live-azure test-live-azure-storage test-live-azure-gateway test-live-azure-client-compat test-live-azure-placement test-release
 
 HARNESS_CERT_DIR := .harness/certs
 HARNESS_CERT := $(HARNESS_CERT_DIR)/azurite.pem
@@ -87,6 +87,12 @@ test-live-azure-storage:
 
 test-live-azure-gateway:
 	./harness/environments/azure/validate-gateway-authorization.sh
+
+test-live-azure-client-compat:
+	./harness/environments/azure/validate-client-compatibility.sh
+
+test-live-azure-placement:
+	./harness/environments/azure/validate-live-placement.sh
 
 test-live-azure:
 	$${HARNESS_LIVE_AZURE_COMMAND:-./harness/environments/azure/validate-live-azure.sh}

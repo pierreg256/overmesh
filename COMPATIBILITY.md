@@ -1,9 +1,9 @@
-# Overmesh 0.8 Compatibility Matrix
+# Overmesh 0.9 Compatibility Matrix
 
 The published V1-development surface uses Microsoft Entra bearer tokens and
 Storage API versions from `2017-11-09` through `2025-11-05`.
 
-| Operation | 0.8.0 support |
+| Operation | 0.9.0 support |
 |---|---|
 | Put Blob, Get Blob, Head Blob, Delete Blob | Supported |
 | List Containers | `GET /?comp=list`; catalog-backed non-empty logical containers; `prefix`, signed `marker`, `maxresults` |
@@ -83,6 +83,22 @@ behavior, hidden internal/staged objects, block commit/retry, block-list
 responses, tamper rejection, conditions, and reconciliation. The live Azure
 gate pins allowed/denied list and block status/shape assumptions with explicit
 canary cleanup.
+
+## Validated clients
+
+Milestone 0.9.0 ran the deployed Front Door surface with managed identity only:
+
+| Client | Validated version | Live operations |
+|---|---|---|
+| Azure SDK .NET | Azure.Storage.Blobs 12.22.2 | Put Blob, block upload/commit/list, Get, Head, List, Delete |
+| Azure SDK Python | azure-storage-blob 12.22.0 | Put Blob, block upload/commit/list, Get, Head, List, Delete |
+| Azure SDK JavaScript | @azure/storage-blob 12.23.0 | Put Blob, block upload/commit/list, Get, Head, List, Delete |
+| Azure CLI | 2.76.0 | Upload, download, show, list, delete |
+| AzCopy | 10.27.1 | Upload, download, delete |
+
+The Gateway accepts the canonical Azure Storage token audience both with and
+without a trailing slash, matching the tokens emitted by these standard
+clients while continuing to reject non-Storage audiences.
 
 Key error mappings are `400 InvalidMarker` for invalid/expired/reused tokens,
 `400 InvalidBlockId` or `InvalidBlockList` for malformed block requests,

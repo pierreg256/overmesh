@@ -79,7 +79,8 @@ make reconciler-smoke
 Release validation fails closed until `HARNESS_LIVE_AZURE_COMMAND` is
 configured to execute the live Azure conformance provider. The bundled live
 gate entry point is `make test-live-azure`, with focused
-`test-live-azure-storage` and `test-live-azure-gateway` subtargets.
+`test-live-azure-storage`, `test-live-azure-gateway`, and
+`test-live-azure-client-compat` subtargets.
 
 ## Versioning
 
@@ -90,13 +91,13 @@ and every Rust workspace module inherits the same version.
 make version-check
 ```
 
-The command verifies `VERSION`, all workspace packages, and the active
-milestone in `roadmap.toml`.
+The command verifies `VERSION`, all workspace packages, and the release state
+in `roadmap.toml`.
 
-## Current milestone
+## Current release state
 
-Project version `0.9.0` is the active milestone for private Azure Container
-Apps infrastructure, client compatibility, and live Azure conformance.
+Project version `0.9.0` has completed private Azure Container Apps
+infrastructure, client compatibility, and live Azure conformance.
 Milestone `0.8.0` completed listing, block APIs, and signed continuation
 tokens. Milestone `0.7.0` completed signed tombstones,
 retention, validate-plan-execute garbage collection, overwrite collection,
@@ -123,10 +124,11 @@ performance baselines against direct Azure Storage and Overmesh paths.
 Milestone `0.11.0` will apply and remeasure only optimizations justified by
 those historical results.
 
-Milestone `0.9.0` starts by deploying the Gateway and Reconciler on private
-Azure Container Apps with managed identities. Front Door and client
-compatibility validation follow only after that runtime infrastructure is
-operational.
+Milestone `0.9.0` deploys the Gateway and Reconciler on private Azure Container
+Apps with managed identities and exposes them through Azure Front Door Premium
+Private Link. Its retained live evidence covers authorization revocation,
+three-account RF=2 placement and a single-account outage, plus Azure SDK .NET,
+Python, JavaScript, Azure CLI, and AzCopy compatibility.
 
 ## Continuous integration
 
@@ -138,4 +140,5 @@ scenarios, process-level system validation, and Reconciler smoke tests.
 the retained private Azure environment. The `live-azure` GitHub environment
 must define the three Azure OIDC secrets and the
 `OVERMESH_LIVE_RESOURCE_GROUP` and `OVERMESH_LIVE_VM` variables. Its federated
-identity only needs permission to execute Run Command on the validation VM.
+identity only needs permission to execute Run Command on the validation VM,
+which must expose the managed identity used by the client compatibility gate.

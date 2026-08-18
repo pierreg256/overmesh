@@ -1,0 +1,9 @@
+{
+  "name": "overmesh-live-client-compat-node",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@azure/identity": "4.4.1",
+    "@azure/storage-blob": "12.23.0"
+  }
+}
