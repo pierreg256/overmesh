@@ -45,10 +45,13 @@ The repository includes an executable provider:
 
 ```bash
 make test-live-azure
+make test-pre-pr-live
 make test-live-azure-storage
+make test-live-azure-posture
 make test-live-azure-gateway
 make test-live-azure-client-compat
 make test-live-azure-placement
+make test-live-azure-reconciliation
 ```
 
 It requires:
@@ -87,15 +90,34 @@ must restore the original write grants afterward. The gate fails closed if the
 helper is absent, if replay loses read permission after revocation, or if a
 revoked write still succeeds.
 
-`make test-live-azure` runs the storage, gateway-authorization, and client
-compatibility providers. Missing configuration or an ambiguous authorization
-status fails closed.
+`make test-pre-pr-live` is the optional local pre-PR entry point and delegates
+to `make test-live-azure`. It runs the Storage, negative-posture,
+Gateway-authorization, client-compatibility, and reconciliation providers.
+Missing configuration or an ambiguous result fails closed.
+
+The live gate is intentionally not a GitHub Actions workflow. Enterprise policy
+prohibits Azure login from GitHub-hosted runners, so no repository workflow may
+request `id-token: write` or call `azure/login` for this environment. The
+operator runs the gate from an approved local workstation and retained
+validation VM, then commits only the redacted signed evidence.
 
 The placement provider runs in three explicit phases: `baseline`, `outage`,
 and `recovery`. It writes one blob for every RF=2 pair in the signed
 three-node Ring, verifies each signed head exists on exactly those two Storage
 Accounts, proves that a Storage A outage rejects only the A/B and A/C writes,
 then retries those writes after restoration and removes the logical canaries.
+
+The posture provider requires executable audit and mutation helpers. It proves
+the healthy three-account ARM snapshot, rejection of an unapproved inherited
+account-level data role, rejection of a path-dependent ABAC condition, removal
+of both temporary assignments, and successful nominal revalidation.
+
+The reconciliation provider proves missing-replica repair, quarantine without
+automatic use of tampered content, administrator-selected recovery, and
+retention-backed collection. A collection configuration shorter than the
+production delay is accepted only when
+`OVERMESH_LIVE_RECONCILIATION_ISOLATED_ENVIRONMENT=true`; this assertion is
+reserved for a validation environment containing no customer workload.
 
 `HARNESS_LIVE_AZURE_COMMAND` can override the bundled provider when an
 organization needs an equivalent internal runner.

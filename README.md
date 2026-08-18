@@ -76,11 +76,11 @@ replicas:
 make reconciler-smoke
 ```
 
-Release validation fails closed until `HARNESS_LIVE_AZURE_COMMAND` is
-configured to execute the live Azure conformance provider. The bundled live
-gate entry point is `make test-live-azure`, with focused
-`test-live-azure-storage`, `test-live-azure-gateway`, and
-`test-live-azure-client-compat` subtargets.
+The optional local pre-PR Azure gate is `make test-pre-pr-live`. It is
+deliberately absent from GitHub Actions because enterprise policy prohibits
+Azure login from hosted workflows. Focused targets cover Storage posture,
+negative RBAC posture, Gateway authorization, client compatibility, placement,
+and reconciliation.
 
 ## Versioning
 

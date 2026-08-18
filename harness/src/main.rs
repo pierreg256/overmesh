@@ -10,6 +10,7 @@ use overmesh_gateway::{RingDocument, resource::LogicalBlobId};
 use overmesh_harness::{
     RunOptions,
     dataset::generate,
+    doc_check,
     environment::local_service_statuses,
     identity::{TestPrincipal, TestTokenKind, issue_test_token},
     manifest_validation::{
@@ -19,6 +20,7 @@ use overmesh_harness::{
     run_scenario,
     runner::ensure_passed,
     scenario::Scenario,
+    site_content::{self, AssemblyOptions},
     system_validation::{SystemValidationConfig, validate_system},
     toxiproxy, version,
 };
@@ -59,6 +61,11 @@ enum Command {
     },
     Version,
     VersionCheck,
+    DocCheck {
+        #[arg(long)]
+        json: bool,
+    },
+    SiteContent,
     GenerateDataset {
         output: PathBuf,
         #[arg(long)]
@@ -184,7 +191,7 @@ impl From<ReplicaArgument> for toxiproxy::ProxyReplica {
 #[tokio::main]
 async fn main() -> ExitCode {
     match execute().await {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(exit_code) => exit_code,
         Err(error) => {
             eprintln!("error: {error:#}");
             ExitCode::FAILURE
@@ -192,7 +199,7 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn execute() -> Result<()> {
+async fn execute() -> Result<ExitCode> {
     let cli = Cli::parse();
     let repository_root = env::current_dir().context("failed to determine current directory")?;
 
@@ -278,12 +285,39 @@ async fn execute() -> Result<()> {
                 println!("module\t{}\t{}", package.name, package.version);
             }
         }
+        Command::DocCheck { json } => {
+            let report = doc_check::check(&repository_root)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report.violations)?);
+            } else if !report.passed() {
+                eprint!("{}", report.text());
+            }
+            if !report.passed() {
+                return Ok(ExitCode::FAILURE);
+            }
+        }
+        Command::SiteContent => {
+            let repository_url = github_repository_url(&repository_root)?;
+            let commit = git_output(&repository_root, &["rev-parse", "HEAD"])?;
+            let report = site_content::assemble(
+                &repository_root,
+                &AssemblyOptions {
+                    repository_url: &repository_url,
+                    commit: &commit,
+                },
+            )?;
+            println!(
+                "site\t{}\tdocuments\t{}\timages",
+                report.document_count, report.image_count
+            );
+        }
         Command::GenerateDataset { output, size, seed } => {
             if let Some(parent) = output.parent() {
                 fs::create_dir_all(parent).with_context(|| {
                     format!("failed to create dataset directory {}", parent.display())
                 })?;
             }
+
             let hash = generate(&output, size, seed)?;
             println!("{}\t{}\t{}", output.display(), size, hash);
         }
@@ -382,7 +416,38 @@ async fn execute() -> Result<()> {
             );
         }
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
+}
+
+fn github_repository_url(repository_root: &Path) -> Result<String> {
+    let remote = git_output(repository_root, &["remote", "get-url", "origin"])?;
+    let normalized = if let Some(path) = remote.strip_prefix("git@github.com:") {
+        format!("https://github.com/{path}")
+    } else if let Some(path) = remote.strip_prefix("ssh://git@github.com/") {
+        format!("https://github.com/{path}")
+    } else {
+        remote
+    };
+    Ok(normalized.trim_end_matches(".git").to_owned())
+}
+
+fn git_output(repository_root: &Path, arguments: &[&str]) -> Result<String> {
+    let output = std::process::Command::new("git")
+        .args(arguments)
+        .current_dir(repository_root)
+        .output()
+        .with_context(|| format!("failed to execute git {}", arguments.join(" ")))?;
+    if !output.status.success() {
+        bail!(
+            "git {} failed: {}",
+            arguments.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8(output.stdout)
+        .context("git output was not UTF-8")?
+        .trim()
+        .to_owned())
 }
 
 fn run_one(repository_root: &Path, scenario: &Path, no_report: bool) -> Result<()> {

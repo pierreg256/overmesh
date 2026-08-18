@@ -1,0 +1,470 @@
+{
+  "clients": [
+    {
+      "client": "azcopy",
+      "commit": "26449d7e5775ac9d28dea38182f509c7528c57c3",
+      "container": "live-v090",
+      "endpoint": "https://fd-75c816375b9d8504",
+      "log_path": "/opt/overmesh-live/client-compat-evidence/client-final-m090-20260818150017/logs/azcopy.log",
+      "operations": [
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azcopy/simple.txt",
+          "name": "put_blob",
+          "request_id_mode": "tool-generated-x-ms-client-request-id",
+          "result": "passed",
+          "sha256": "7fe85e42199815ac3c23fbdb755c26b706b0ab31451da8a7dd837bd3220ed12e",
+          "size_bytes": 63,
+          "timestamp_utc": "2026-08-18T15:01:21Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azcopy/block.bin",
+          "name": "put_blob_large",
+          "request_id_mode": "tool-generated-x-ms-client-request-id",
+          "result": "passed",
+          "sha256": "093ceb50030d1b425ce45ba77547ea05b2124215a757a63e2a9a9e5eaffe582f",
+          "size_bytes": 2097152,
+          "timestamp_utc": "2026-08-18T15:01:23Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azcopy/simple.txt",
+          "name": "get_blob",
+          "result": "passed",
+          "sha256": "7fe85e42199815ac3c23fbdb755c26b706b0ab31451da8a7dd837bd3220ed12e",
+          "timestamp_utc": "2026-08-18T15:01:26Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azcopy/block.bin",
+          "name": "get_blob_large",
+          "result": "passed",
+          "sha256": "093ceb50030d1b425ce45ba77547ea05b2124215a757a63e2a9a9e5eaffe582f",
+          "timestamp_utc": "2026-08-18T15:01:28Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azcopy/simple.txt",
+          "name": "delete_blob",
+          "request_id_mode": "tool-generated-x-ms-client-request-id",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:01:30Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azcopy/block.bin",
+          "name": "delete_blob_large",
+          "request_id_mode": "tool-generated-x-ms-client-request-id",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:01:33Z"
+        }
+      ],
+      "prefix": "client-compat/client-final-m090-20260818150017/azcopy",
+      "project_version": "0.9.0",
+      "result": "passed",
+      "timestamp_utc": "2026-08-18T15:01:38Z",
+      "tool_versions": {
+        "azcopy": "azcopy version 10.27.1"
+      }
+    },
+    {
+      "client": "azure-cli",
+      "commit": "26449d7e5775ac9d28dea38182f509c7528c57c3",
+      "container": "live-v090",
+      "endpoint": "https://fd-75c816375b9d8504",
+      "log_path": "/opt/overmesh-live/client-compat-evidence/client-final-m090-20260818150017/logs/azure-cli.log",
+      "operations": [
+        {
+          "name": "managed_identity_login",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:54Z"
+        },
+        {
+          "expires_on": "2026-08-19 14:49:21.000000",
+          "name": "get_access_token",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:55Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-cli/simple.txt",
+          "name": "put_blob",
+          "request_id_mode": "tool-generated-x-ms-client-request-id",
+          "result": "passed",
+          "sha256": "f500a7925ad29d7e020fb0d5344f68f827ba6ffc37fa914c7c5979b5849d3772",
+          "size_bytes": 66,
+          "timestamp_utc": "2026-08-18T15:00:57Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-cli/block.bin",
+          "name": "put_blob_large",
+          "request_id_mode": "tool-generated-x-ms-client-request-id",
+          "result": "passed",
+          "sha256": "6f92d24748c7678020b0f3416da4493b740a659226bbb3a5f5c19cca17f1691d",
+          "size_bytes": 2097152,
+          "timestamp_utc": "2026-08-18T15:01:00Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-cli/simple.txt",
+          "name": "get_blob",
+          "result": "passed",
+          "sha256": "f500a7925ad29d7e020fb0d5344f68f827ba6ffc37fa914c7c5979b5849d3772",
+          "timestamp_utc": "2026-08-18T15:01:01Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-cli/block.bin",
+          "name": "get_blob_large",
+          "result": "passed",
+          "sha256": "6f92d24748c7678020b0f3416da4493b740a659226bbb3a5f5c19cca17f1691d",
+          "timestamp_utc": "2026-08-18T15:01:02Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-cli/block.bin",
+          "content_length": 2097152,
+          "name": "head_blob",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:01:03Z"
+        },
+        {
+          "blobs": [
+            "client-compat/client-final-m090-20260818150017/azure-cli/block.bin",
+            "client-compat/client-final-m090-20260818150017/azure-cli/simple.txt"
+          ],
+          "count": 2,
+          "name": "list_blobs",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:01:05Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-cli/simple.txt",
+          "name": "delete_blob",
+          "request_id_mode": "tool-generated-x-ms-client-request-id",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:01:07Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-cli/block.bin",
+          "name": "delete_blob_large",
+          "request_id_mode": "tool-generated-x-ms-client-request-id",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:01:09Z"
+        }
+      ],
+      "prefix": "client-compat/client-final-m090-20260818150017/azure-cli",
+      "project_version": "0.9.0",
+      "result": "passed",
+      "timestamp_utc": "2026-08-18T15:01:11Z",
+      "tool_versions": {
+        "azure_cli": "2.76.0",
+        "azure_cli_core": "2.76.0",
+        "azure_cli_telemetry": "1.1.0",
+        "python": null
+      }
+    },
+    {
+      "client": "azure-sdk-dotnet",
+      "commit": "26449d7e5775ac9d28dea38182f509c7528c57c3",
+      "container": "live-v090",
+      "endpoint": "https://fd-75c816375b9d8504",
+      "operations": [
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-dotnet/simple.txt",
+          "name": "put_blob",
+          "request_id": "dotnet-client-final-m090-20260818150017-put-blob",
+          "request_id_mode": "explicit-x-ms-client-request-id",
+          "result": "passed",
+          "sha256": "ca57c42f688645aea28e1ce29bdb86fcad0d091dbf0db8099168358d5dd3b29e",
+          "size_bytes": 73,
+          "timestamp_utc": "2026-08-18T15:00:24Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-dotnet/block.bin",
+          "block_count": 2,
+          "decoded_block_id_length": 10,
+          "name": "put_block",
+          "request_id_mode": "explicit-x-ms-client-request-id",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:26Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-dotnet/block.bin",
+          "name": "put_block_list",
+          "request_id": "dotnet-client-final-m090-20260818150017-put-block-list",
+          "request_id_mode": "explicit-x-ms-client-request-id",
+          "result": "passed",
+          "sha256": "cf7cc2bc3879ca471ed020f3bca81c8296c3bdc6a1c635cd6b8ead51ed265ba1",
+          "size_bytes": 138,
+          "timestamp_utc": "2026-08-18T15:00:28Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-dotnet/block.bin",
+          "committed_block_count": 2,
+          "name": "get_block_list",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:29Z",
+          "uncommitted_block_count": 0
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-dotnet/simple.txt",
+          "name": "get_blob",
+          "result": "passed",
+          "sha256": "ca57c42f688645aea28e1ce29bdb86fcad0d091dbf0db8099168358d5dd3b29e",
+          "timestamp_utc": "2026-08-18T15:00:29Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-dotnet/block.bin",
+          "name": "get_blob_large",
+          "result": "passed",
+          "sha256": "cf7cc2bc3879ca471ed020f3bca81c8296c3bdc6a1c635cd6b8ead51ed265ba1",
+          "timestamp_utc": "2026-08-18T15:00:29Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-dotnet/block.bin",
+          "content_length": 138,
+          "name": "head_blob",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:29Z"
+        },
+        {
+          "blob_count": 2,
+          "blobs": [
+            "client-compat/client-final-m090-20260818150017/azure-sdk-dotnet/block.bin",
+            "client-compat/client-final-m090-20260818150017/azure-sdk-dotnet/simple.txt"
+          ],
+          "name": "list_blobs",
+          "page_count": 2,
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:30Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-dotnet/simple.txt",
+          "name": "delete_blob",
+          "request_id_mode": "explicit-x-ms-client-request-id",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:31Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-dotnet/block.bin",
+          "name": "delete_blob_large",
+          "request_id_mode": "explicit-x-ms-client-request-id",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:33Z"
+        }
+      ],
+      "prefix": "client-compat/client-final-m090-20260818150017/azure-sdk-dotnet",
+      "project_version": "0.9.0",
+      "result": "passed",
+      "timestamp_utc": "2026-08-18T15:00:33Z",
+      "tool_versions": {
+        "azure_identity": "1.12.0+75fb76b92b160a9b4566ec0f2956ba1da1101b23",
+        "azure_storage_blobs": "12.22.2+8c1430407c6761dfce1bb90d09aff6e127cbdf6f",
+        "dotnet_framework": ".NET 8.0.0",
+        "dotnet_sdk": "8.0.100"
+      }
+    },
+    {
+      "client": "azure-sdk-node",
+      "commit": "26449d7e5775ac9d28dea38182f509c7528c57c3",
+      "container": "live-v090",
+      "endpoint": "https://fd-75c816375b9d8504",
+      "operations": [
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-node/simple.txt",
+          "name": "put_blob",
+          "request_id": "node-client-final-m090-20260818150017-put-blob",
+          "request_id_mode": "explicit-x-ms-client-request-id",
+          "result": "passed",
+          "sha256": "9bcc66bd57488541a843093c85f00d7c4ca718791de7622cc246b0a977037014",
+          "size_bytes": 71,
+          "timestamp_utc": "2026-08-18T15:00:43Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-node/block.bin",
+          "block_count": 2,
+          "decoded_block_id_length": 10,
+          "name": "put_block",
+          "request_id_mode": "explicit-x-ms-client-request-id",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:44Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-node/block.bin",
+          "name": "put_block_list",
+          "request_id": "node-client-final-m090-20260818150017-put-block-list",
+          "request_id_mode": "explicit-x-ms-client-request-id",
+          "result": "passed",
+          "sha256": "056446ef1443241f60e14682f7e9a1b2810e38ac310de426521988e95446c522",
+          "size_bytes": 134,
+          "timestamp_utc": "2026-08-18T15:00:46Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-node/block.bin",
+          "committed_block_count": 2,
+          "name": "get_block_list",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:47Z",
+          "uncommitted_block_count": 0
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-node/simple.txt",
+          "name": "get_blob",
+          "result": "passed",
+          "sha256": "9bcc66bd57488541a843093c85f00d7c4ca718791de7622cc246b0a977037014",
+          "timestamp_utc": "2026-08-18T15:00:47Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-node/block.bin",
+          "name": "get_blob_large",
+          "result": "passed",
+          "sha256": "056446ef1443241f60e14682f7e9a1b2810e38ac310de426521988e95446c522",
+          "timestamp_utc": "2026-08-18T15:00:47Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-node/block.bin",
+          "content_length": 134,
+          "name": "head_blob",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:47Z"
+        },
+        {
+          "blob_count": 2,
+          "blobs": [
+            "client-compat/client-final-m090-20260818150017/azure-sdk-node/block.bin",
+            "client-compat/client-final-m090-20260818150017/azure-sdk-node/simple.txt"
+          ],
+          "name": "list_blobs",
+          "page_count": 2,
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:48Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-node/simple.txt",
+          "name": "delete_blob",
+          "request_id_mode": "explicit-x-ms-client-request-id",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:49Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-node/block.bin",
+          "name": "delete_blob_large",
+          "request_id_mode": "explicit-x-ms-client-request-id",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:50Z"
+        }
+      ],
+      "prefix": "client-compat/client-final-m090-20260818150017/azure-sdk-node",
+      "project_version": "0.9.0",
+      "result": "passed",
+      "timestamp_utc": "2026-08-18T15:00:50Z",
+      "tool_versions": {
+        "@azure/identity": "4.4.1",
+        "@azure/storage-blob": "12.23.0",
+        "arch": "x64",
+        "node": "v20.19.0",
+        "platform": "linux"
+      }
+    },
+    {
+      "client": "azure-sdk-python",
+      "commit": "26449d7e5775ac9d28dea38182f509c7528c57c3",
+      "container": "live-v090",
+      "endpoint": "https://fd-75c816375b9d8504",
+      "operations": [
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-python/simple.txt",
+          "name": "put_blob",
+          "request_id": "py-client-final-m090-20260818150017-put-blob",
+          "request_id_mode": "explicit-x-ms-client-request-id",
+          "result": "passed",
+          "sha256": "3d77410db6fe53954f1673b7e621bf356c746e823ccc11e97b7a76edf147c51c",
+          "size_bytes": 73,
+          "timestamp_utc": "2026-08-18T15:00:34Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-python/block.bin",
+          "block_count": 2,
+          "decoded_block_id_length": 10,
+          "name": "put_block",
+          "request_id_mode": "explicit-x-ms-client-request-id",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:36Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-python/block.bin",
+          "name": "put_block_list",
+          "request_id": "py-client-final-m090-20260818150017-put-block-list",
+          "request_id_mode": "explicit-x-ms-client-request-id",
+          "result": "passed",
+          "sha256": "e41b254ed89999feb537db6fe4888aee501c92d30fc21265e2c5a6cbd3051ea4",
+          "size_bytes": 138,
+          "timestamp_utc": "2026-08-18T15:00:37Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-python/block.bin",
+          "committed_block_count": 2,
+          "name": "get_block_list",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:38Z",
+          "uncommitted_block_count": 0
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-python/simple.txt",
+          "name": "get_blob",
+          "result": "passed",
+          "sha256": "3d77410db6fe53954f1673b7e621bf356c746e823ccc11e97b7a76edf147c51c",
+          "timestamp_utc": "2026-08-18T15:00:38Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-python/block.bin",
+          "name": "get_blob_large",
+          "result": "passed",
+          "sha256": "e41b254ed89999feb537db6fe4888aee501c92d30fc21265e2c5a6cbd3051ea4",
+          "timestamp_utc": "2026-08-18T15:00:38Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-python/block.bin",
+          "content_length": 138,
+          "name": "head_blob",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:38Z"
+        },
+        {
+          "blob_count": 2,
+          "blobs": [
+            "client-compat/client-final-m090-20260818150017/azure-sdk-python/block.bin",
+            "client-compat/client-final-m090-20260818150017/azure-sdk-python/simple.txt"
+          ],
+          "name": "list_blobs",
+          "page_count": 2,
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:39Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-python/simple.txt",
+          "name": "delete_blob",
+          "request_id_mode": "explicit-x-ms-client-request-id",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:41Z"
+        },
+        {
+          "blob": "client-compat/client-final-m090-20260818150017/azure-sdk-python/block.bin",
+          "name": "delete_blob_large",
+          "request_id_mode": "explicit-x-ms-client-request-id",
+          "result": "passed",
+          "timestamp_utc": "2026-08-18T15:00:41Z"
+        }
+      ],
+      "prefix": "client-compat/client-final-m090-20260818150017/azure-sdk-python",
+      "project_version": "0.9.0",
+      "result": "passed",
+      "timestamp_utc": "2026-08-18T15:00:41Z",
+      "tool_versions": {
+        "azure_identity": "1.17.1",
+        "azure_storage_blob": "12.22.0",
+        "python": "3.12.3"
+      }
+    }
+  ],
+  "commit": "26449d7e5775ac9d28dea38182f509c7528c57c3",
+  "container": "live-v090",
+  "endpoint": "https://fd-75c816375b9d8504",
+  "installation_root": "/opt/overmesh-live/client-compat",
+  "project_version": "0.9.0",
+  "result": "passed",
+  "run_id": "client-final-m090-20260818150017",
+  "timestamp_utc": "2026-08-18T15:01:38Z"
+}

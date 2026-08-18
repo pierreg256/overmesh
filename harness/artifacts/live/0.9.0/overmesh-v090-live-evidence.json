@@ -1,0 +1,248 @@
+{
+  "apiVersion": "evidence.overmesh.io/live-release/v1",
+  "gates": {
+    "authorization": {
+      "evidenceSha256": "01b529b41405dca349f417dd30354f1825bbe10c4cdcabd316139ce3ace4f8ec",
+      "result": "passed"
+    },
+    "clientCompatibility": {
+      "clients": [
+        {
+          "client": "azcopy",
+          "operations": [
+            "put_blob",
+            "put_blob_large",
+            "get_blob",
+            "get_blob_large",
+            "delete_blob",
+            "delete_blob_large"
+          ],
+          "result": "passed",
+          "tool_versions": {
+            "azcopy": "azcopy version 10.27.1"
+          }
+        },
+        {
+          "client": "azure-cli",
+          "operations": [
+            "managed_identity_login",
+            "get_access_token",
+            "put_blob",
+            "put_blob_large",
+            "get_blob",
+            "get_blob_large",
+            "head_blob",
+            "list_blobs",
+            "delete_blob",
+            "delete_blob_large"
+          ],
+          "result": "passed",
+          "tool_versions": {
+            "azure_cli": "2.76.0",
+            "azure_cli_core": "2.76.0",
+            "azure_cli_telemetry": "1.1.0",
+            "python": null
+          }
+        },
+        {
+          "client": "azure-sdk-dotnet",
+          "operations": [
+            "put_blob",
+            "put_block",
+            "put_block_list",
+            "get_block_list",
+            "get_blob",
+            "get_blob_large",
+            "head_blob",
+            "list_blobs",
+            "delete_blob",
+            "delete_blob_large"
+          ],
+          "result": "passed",
+          "tool_versions": {
+            "azure_identity": "1.12.0+75fb76b92b160a9b4566ec0f2956ba1da1101b23",
+            "azure_storage_blobs": "12.22.2+8c1430407c6761dfce1bb90d09aff6e127cbdf6f",
+            "dotnet_framework": ".NET 8.0.0",
+            "dotnet_sdk": "8.0.100"
+          }
+        },
+        {
+          "client": "azure-sdk-node",
+          "operations": [
+            "put_blob",
+            "put_block",
+            "put_block_list",
+            "get_block_list",
+            "get_blob",
+            "get_blob_large",
+            "head_blob",
+            "list_blobs",
+            "delete_blob",
+            "delete_blob_large"
+          ],
+          "result": "passed",
+          "tool_versions": {
+            "@azure/identity": "4.4.1",
+            "@azure/storage-blob": "12.23.0",
+            "arch": "x64",
+            "node": "v20.19.0",
+            "platform": "linux"
+          }
+        },
+        {
+          "client": "azure-sdk-python",
+          "operations": [
+            "put_blob",
+            "put_block",
+            "put_block_list",
+            "get_block_list",
+            "get_blob",
+            "get_blob_large",
+            "head_blob",
+            "list_blobs",
+            "delete_blob",
+            "delete_blob_large"
+          ],
+          "result": "passed",
+          "tool_versions": {
+            "azure_identity": "1.17.1",
+            "azure_storage_blob": "12.22.0",
+            "python": "3.12.3"
+          }
+        }
+      ],
+      "evidenceSha256": "8a80bd0d179c760eb36718b40526a983750b6a94e6d1443a9fb2f16ef9d018f4",
+      "result": "passed"
+    },
+    "health": {
+      "response": {
+        "ringVersion": 1,
+        "status": "ok",
+        "version": "0.9.0"
+      },
+      "result": "passed"
+    },
+    "placementAndOutage": {
+      "checks": 27,
+      "evidenceSha256": "162ee1e87cd7774fa2f8fab7cd26914e38cb8fcaf7d24f6de85db362a9825e26",
+      "phases": [
+        {
+          "checks": 9,
+          "phase": "baseline"
+        },
+        {
+          "checks": 8,
+          "phase": "outage"
+        },
+        {
+          "checks": 10,
+          "phase": "recovery"
+        }
+      ],
+      "result": "passed"
+    },
+    "posture": {
+      "evidenceSha256": "dcf7967bf77a227dbe26cd34f9edaa47eaab215d0000267a224f5cc58c21a9f1",
+      "result": "passed"
+    },
+    "reconciliation": {
+      "checks": 4,
+      "evidenceSha256": "3b9a83258fa414cc1d25da6b5138ff4a98cce6e5236cf0e4225f154a9df9f70d",
+      "result": "passed"
+    }
+  },
+  "generatedAt": "2026-08-18T20:56:51Z",
+  "generation": "V1",
+  "images": {
+    "gateway": {
+      "digest": "sha256:8aa09f53ad4b58052d4042b9c88cf6df6f85a2e4721cff8a54f62d697d0c93bc",
+      "tag": "sha-26449d7e5775"
+    },
+    "reconciler": {
+      "digest": "sha256:9352a98bcbce1d51df80d401ce0e35f94688262ab414dfec50c4570f36f1fca9",
+      "tag": "sha-26449d7e5775"
+    }
+  },
+  "redaction": {
+    "algorithm": "sha256-truncated-16",
+    "apiVersion": "evidence.overmesh.io/redaction/v1",
+    "canonicalForm": "redacted-before-signing",
+    "rawBundleSha256": "e2e8a3833f5e77db5b5648dff7f88c3e341aa5323b46b61a371ac07466da7e20"
+  },
+  "ring": {
+    "documentSha256": "c8cd020d106108e4363aedb12e49351eaef2b9182306b4e88aaea00dd414ea04",
+    "hash": "sha256:d8e2b6aef1a8ea0e32d032c002e4f0f7f1f0493b49bf50172d8d6d2ee65ad425",
+    "nodes": [
+      {
+        "id": "storage-a",
+        "region": "francecentral"
+      },
+      {
+        "id": "storage-b",
+        "region": "swedencentral"
+      },
+      {
+        "id": "storage-c",
+        "region": "norwayeast"
+      }
+    ],
+    "replicationFactor": 2,
+    "version": 1
+  },
+  "runtime": {
+    "deployments": [
+      {
+        "name": "overmesh-v090-client-compat-20260818144733",
+        "state": "Succeeded",
+        "timestamp": "2026-08-18T14:50:03.183149+00:00"
+      },
+      {
+        "name": "overmesh-v090-placement-restore-20260818150659",
+        "state": "Succeeded",
+        "timestamp": "2026-08-18T15:09:48.495620+00:00"
+      },
+      {
+        "name": "overmesh-v090-placement-final-restore-20260818151259",
+        "state": "Succeeded",
+        "timestamp": "2026-08-18T15:15:51.585638+00:00"
+      }
+    ],
+    "endpoint": "https://fd-75c816375b9d8504",
+    "frontDoorOriginResponseTimeoutSeconds": 60,
+    "gatewayFrance": {
+      "image": "acr-c349546d34ef32a9/overmesh-gateway:sha-26449d7e5775",
+      "revision": "ca-overmesh-gateway-frc--0000004",
+      "state": "Succeeded"
+    },
+    "gatewaySweden": {
+      "image": "acr-c349546d34ef32a9/overmesh-gateway:sha-26449d7e5775",
+      "revision": "ca-overmesh-gateway-swe--0000004",
+      "state": "Succeeded"
+    },
+    "reconcilerFrance": {
+      "image": "acr-c349546d34ef32a9/overmesh-reconciler:sha-26449d7e5775",
+      "state": "Succeeded"
+    },
+    "reconcilerSweden": {
+      "image": "acr-c349546d34ef32a9/overmesh-reconciler:sha-26449d7e5775",
+      "state": "Succeeded"
+    },
+    "resourceGroup": "rg-215f56064fa8d45c",
+    "storageAPrivateEndpoints": [
+      {
+        "endpoint": "arm-11db2626d5e9076f",
+        "status": "Approved"
+      },
+      {
+        "endpoint": "arm-9c4fc26bdd25c559",
+        "status": "Approved"
+      }
+    ]
+  },
+  "source": {
+    "branch": "milestone/0.9.0",
+    "commit": "26449d7e5775ac9d28dea38182f509c7528c57c3",
+    "repository": "https://github.com/pierreg256/overmesh"
+  },
+  "version": "0.9.0"
+}

@@ -160,16 +160,20 @@ should be treated as a change of product rather than of implementation.
 
 ## Verified by
 
-- `CallerToken` / `ControlToken` are distinct types with no conversion, and the
-  `ReplicaBackend` trait is split by credential class
-  (`gateway/src/identity.rs`, `gateway/src/backend.rs`)
-- `gateway/tests/auth_contract.rs` — the declarative authentication contract,
-  including explicit Shared Key and SAS rejection
+- `gateway/src/identity.rs` and `gateway/src/backend.rs` — caller and control
+  credentials are distinct types and backend operations are split by
+  credential class
+- `gateway/tests/auth_contract.rs::executes_declarative_gateway_authentication_contract`
+  — the authentication contract includes explicit Shared Key and SAS rejection
 - `harness/scripts/gateway-smoke.sh` — the committed head carries the caller's
   object id, not the gateway's, with distinct local principals for caller,
   gateway and reconciler
-- `reconciler/src/posture.rs` — rejects unapproved principals holding blob data
-  actions on the system container, and rejects replica role asymmetry
-- `overmesh-reconciler audit-rbac` — the operator-facing form of the same check
+- `reconciler/src/posture.rs::rejects_unapproved_system_container_access` —
+  unapproved principals cannot hold blob data actions on the system container
+- `reconciler/src/posture.rs::rejects_replica_role_asymmetry` — replica role
+  assignments must remain symmetric
 - `harness/environments/azure/validate-storage-authorization.sh` — probes every
   authorization capability with an allowed and a deliberately denied principal
+- `harness/artifacts/live/0.9.0/posture-v090-live-evidence.json` — live ARM
+  evidence that inherited unapproved access and path-dependent ABAC conditions
+  both fail closed before nominal posture is restored

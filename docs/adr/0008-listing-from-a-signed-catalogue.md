@@ -174,16 +174,19 @@ ADR-0005.
 
 ## Verified by
 
-- `prepared-invisibility-008` — a `PREPARED` object is never visible through
+- `PREPARED-INVISIBILITY-008` — a `PREPARED` object is never visible through
   the client API
-- `listing/continuation-tamper-001` — a tampered marker is refused with `400`
-- `listing/ring-rollover-001` — a marker issued under one Ring version is
+- `LIST-TOKEN-001` — a tampered marker is refused with `400`
+- `LIST-RING-ROLLOVER-001` — a marker issued under one Ring version is
   refused after a Ring change
-- `listing/delete-recreate-001` — catalogue behaviour across a delete and
+- `LIST-DELETE-RECREATE-001` — catalogue behaviour across a delete and
   recreate cycle
-- `gateway/src/catalog.rs` round-trip test —
-  `logical_blob_from_catalog_key(catalog_key(b)) == b`
+- `gateway/src/catalog.rs::ordered_keys_preserve_container_and_blob_utf8_order`
+  — catalogue keys round trip and preserve UTF-8 ordering
+- `gateway/src/catalog.rs::listing_prefix_is_a_physical_key_prefix` — logical
+  prefixes map to physical key prefixes
+- `gateway/src/commit/tests.rs::logical_listing_hides_stages_and_paginates_with_signed_markers`
+  — staged objects remain hidden and continuation markers are signed
 - `harness/scripts/gateway-smoke.sh` — delimiter grouping producing the
   expected `BlobPrefix`, pagination at `maxresults=1` following `NextMarker`,
   and `List Containers`
-- *(pending)* property tests for encoding monotonicity and prefix preservation

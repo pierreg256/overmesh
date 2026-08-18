@@ -1,0 +1,181 @@
+schema_version = 1
+
+# ---------------------------------------------------------------------------
+# Documents published to the site, in navigation order.
+# The site build assembles content from this list. Discovery is deliberately
+# explicit: an unlisted document is an error, not an omission.
+# ---------------------------------------------------------------------------
+
+[[document]]
+path = "docs/WHY_OVERMESH.md"
+section = "overview"
+title = "Why Overmesh"
+weight = 10
+
+[[document]]
+path = "COMPATIBILITY.md"
+section = "overview"
+title = "Compatibility matrix"
+weight = 20
+
+[[document]]
+path = "OVERMESH_V1_SPECIFICATION.md"
+section = "specifications"
+title = "Overmesh V1"
+weight = 10
+
+[[document]]
+path = "OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md"
+section = "specifications"
+title = "Development harness V1"
+weight = 20
+
+[[document]]
+path = "docs/adr/README.md"
+section = "decisions"
+title = "Architecture decision records"
+weight = 0
+
+[[document]]
+path = "docs/adr/0001-strict-replication-rather-than-erasure-coding.md"
+section = "decisions"
+title = "Strict replication rather than erasure coding for V1"
+weight = 10
+
+[[document]]
+path = "docs/adr/0002-synchronous-two-replica-commit.md"
+section = "decisions"
+title = "Synchronous two-replica commit"
+weight = 20
+
+[[document]]
+path = "docs/adr/0003-separate-caller-and-control-identities.md"
+section = "decisions"
+title = "Separate caller and control identities"
+weight = 30
+
+[[document]]
+path = "docs/adr/0004-immutable-content-naming-in-the-customer-container.md"
+section = "decisions"
+title = "Immutable content naming in the customer container"
+weight = 40
+
+[[document]]
+path = "docs/adr/0005-authorization-probes-for-metadata-only-operations.md"
+section = "decisions"
+title = "Authorization probes and the resource they check"
+weight = 50
+
+[[document]]
+path = "docs/adr/0006-placement-through-a-signed-ring-document.md"
+section = "decisions"
+title = "Placement through a signed Ring document"
+weight = 60
+
+[[document]]
+path = "docs/adr/0007-canonical-logical-resource-identity.md"
+section = "decisions"
+title = "Canonical logical resource identity"
+weight = 70
+
+[[document]]
+path = "docs/adr/0008-listing-from-a-signed-catalogue.md"
+section = "decisions"
+title = "Listing from a signed catalogue"
+weight = 80
+
+[[document]]
+path = "docs/adr/0009-redaction-policy-for-retained-live-evidence.md"
+section = "decisions"
+title = "Redaction policy for retained live evidence"
+weight = 90
+
+# ---------------------------------------------------------------------------
+# Authored documents deliberately not published.
+# ---------------------------------------------------------------------------
+
+[[excluded]]
+path = "README.md"
+reason = "Repository landing page; the site has its own landing template."
+
+[[excluded]]
+path = ".github/copilot-instructions.md"
+reason = "Contributor tooling instructions, not project documentation."
+
+[[excluded]]
+path = ".github/instructions/mermaid.instructions.md"
+reason = "Diagram tooling instructions, not project documentation."
+
+[[excluded]]
+path = "gateway/README.md"
+reason = "Component-local development notes."
+
+[[excluded]]
+path = "harness/artifacts/README.md"
+reason = "Operator description of retained release evidence and private raw retention."
+
+[[excluded]]
+path = "harness/environments/azure/README.md"
+reason = "Operator notes for the retained live Azure validation environment."
+
+[[excluded]]
+path = "harness/environments/azurite/README.md"
+reason = "Local test-environment notes."
+
+[[excluded]]
+path = "harness/identity/README.md"
+reason = "Local test-identity fixture notes."
+
+[[excluded]]
+path = "harness/keys/README.md"
+reason = "Local test-key fixture notes."
+
+[[excluded]]
+path = "harness/reports/README.md"
+reason = "Directory placeholder."
+
+[[excluded]]
+path = "harness/traces/README.md"
+reason = "Directory placeholder."
+
+[[excluded]]
+path = "infra/README.md"
+reason = "Infrastructure operator notes."
+
+[[excluded]]
+path = "reconciler/README.md"
+reason = "Component-local development notes."
+
+[[excluded]]
+path = "site/README.md"
+reason = "Working notes for the visual mockups; superseded by the site itself."
+
+# ---------------------------------------------------------------------------
+# Facts asserted in prose that must match the repository.
+# doc-check computes the metric, formats it with the pattern, and requires the
+# resulting string to appear in the document.
+# ---------------------------------------------------------------------------
+
+[[assertion]]
+document = "docs/WHY_OVERMESH.md"
+metric = "unit_test_count"
+pattern = "{} unit and integration tests"
+
+[[assertion]]
+document = "docs/WHY_OVERMESH.md"
+metric = "scenario_count"
+pattern = "{} declarative"
+
+[[assertion]]
+document = "docs/WHY_OVERMESH.md"
+metric = "active_milestone"
+pattern = "milestone {}"
+
+# ---------------------------------------------------------------------------
+# Verified-by citations that look like references but are not.
+# ---------------------------------------------------------------------------
+
+[[evidence_exemption]]
+record = "0002"
+citation = "commit-fail-008"
+reason = "Named in prose describing the failpoint, not cited as evidence."

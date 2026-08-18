@@ -185,12 +185,14 @@ because the change is not backward compatible for existing data.
 
 ## Verified by
 
-- `gateway/src/resource.rs` unit tests — canonical account-aware identity,
-  percent decoding of both cases, `%2F` convergence with the separator form,
-  container name validation
-- `gateway/src/catalog.rs` round-trip test —
-  `logical_blob_from_catalog_key(catalog_key(b)) == b` for a set of blobs,
-  which proves injectivity survives the catalogue encoding
+- `gateway/src/resource.rs::creates_account_aware_canonical_identity` —
+  canonical identities include the logical account
+- `gateway/src/resource.rs::equivalent_wire_encodings_have_one_identity` —
+  equivalent percent encodings converge on one identity
+- `gateway/src/resource.rs::rejects_invalid_percent_escapes_and_utf8` —
+  malformed encodings fail closed
+- `gateway/src/catalog.rs::ordered_keys_preserve_container_and_blob_utf8_order`
+  — catalogue encoding preserves logical ordering and round trips
 - `harness/scripts/gateway-smoke.sh` — the head object key is computed
-  independently by the script as `sha256("/local-overmesh" + path)` and matched
-  against what the gateway wrote, proving the derivation end to end
+  independently and matched against what the gateway wrote, proving the
+  derivation end to end

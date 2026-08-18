@@ -1,0 +1,23 @@
+base_url = "https://pierreg256.github.io/overmesh"
+title = "Overmesh"
+description = "A deterministic, Entra-native storage federation layer for Azure Blob Storage."
+compile_sass = true
+build_search_index = false
+generate_feeds = false
+output_dir = "public"
+
+[markdown]
+insert_anchor_links = "heading"
+smart_punctuation = true
+
+[markdown.highlighting]
+style = "inline"
+theme = "min-dark"
+
+[slugify]
+paths = "safe"
+anchors = "on"
+taxonomies = "on"
+
+[extra]
+repository_url = "https://github.com/pierreg256/overmesh"

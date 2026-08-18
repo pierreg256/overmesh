@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block body_class %}landing-surface{% endblock body_class %}
+{% block theme_color %}#000000{% endblock theme_color %}
+{% block title %}Overmesh — No Region Left Behind{% endblock title %}
+{% block og_title %}Overmesh — No Region Left Behind{% endblock og_title %}
+
+{% block body %}
+  <header class="landing-nav" data-pagefind-ignore>
+    <a class="brand" href="{{ config.base_url }}">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span>OVERMESH</span>
+    </a>
+    <a class="button button-quiet" href="{{ get_url(path='@/overview/why_overmesh.md') }}">Read the rationale</a>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Federated Azure Blob data plane</p>
+        <h1>No Region<br>Left Behind</h1>
+        <p class="hero-summary">
+          Deterministic placement, synchronous multi-region replication, and a strict
+          Entra-only trust model — without Storage Keys, SAS, or Azure GRS.
+        </p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="{{ get_url(path='@/specifications/overmesh_v1_specification.md') }}">Read the V1 specification</a>
+          <a class="button button-quiet" href="{{ get_url(path='@/decisions/index-of-records.md') }}">Review the decisions</a>
+        </div>
+        <p class="status"><span aria-hidden="true"></span> Version 0.9.1 · documentation milestone</p>
+      </div>
+      <div class="hero-ring">
+        {% include "partials/ring.html" %}
+      </div>
+    </section>
+
+    <section class="landing-section" aria-labelledby="contract-heading">
+      <p class="eyebrow">The contract</p>
+      <h2 id="contract-heading">One successful write means two durable replicas.</h2>
+      <div class="principle-grid">
+        <article>
+          <strong>W = 2</strong>
+          <p>A client success is returned only after both selected regions accept the write.</p>
+        </article>
+        <article>
+          <strong>R = 2 metadata</strong>
+          <p>Both signed heads are compared; blob bytes stream from one deterministic primary, with replica fallback only if it is unavailable.</p>
+        </article>
+        <article>
+          <strong>Entra only</strong>
+          <p>OAuth bearer tokens and Azure RBAC replace keys, connection strings, and every form of SAS.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="landing-section tradeoff" aria-labelledby="tradeoff-heading">
+      <div>
+        <p class="eyebrow">The trade-off</p>
+        <h2 id="tradeoff-heading">Availability is bounded by the integrity claim.</h2>
+      </div>
+      <p>
+        Overmesh does not pretend a partial write is durable. It rejects success when either replica
+        fails, keeps gateways stateless, and treats signed metadata and the Ring as verifiable inputs.
+      </p>
+    </section>
+  </main>
+
+  <footer class="landing-footer" data-pagefind-ignore>
+    <span>Overmesh</span>
+    <a href="{{ config.extra.repository_url }}">Source on GitHub</a>
+  </footer>
+{% endblock body %}

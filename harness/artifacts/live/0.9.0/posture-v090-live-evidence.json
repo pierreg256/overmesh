@@ -1,0 +1,62 @@
+{
+  "apiVersion": "evidence.overmesh.io/live-posture/v1",
+  "baseline": {
+    "accounts": [
+      {
+        "backendId": "storage-a",
+        "customerContainers": 2,
+        "effectiveDataAssignments": 15
+      },
+      {
+        "backendId": "storage-b",
+        "customerContainers": 2,
+        "effectiveDataAssignments": 15
+      },
+      {
+        "backendId": "storage-c",
+        "customerContainers": 2,
+        "effectiveDataAssignments": 15
+      }
+    ],
+    "approvedSystemPrincipals": 3,
+    "sha256": "d8d17e22ce008e8d30e459de30031481fc4ab44b06dc57fd89c7c0eb57fd433f"
+  },
+  "cleanup": {
+    "accounts": [
+      {
+        "backendId": "storage-a",
+        "customerContainers": 2,
+        "effectiveDataAssignments": 15
+      },
+      {
+        "backendId": "storage-b",
+        "customerContainers": 2,
+        "effectiveDataAssignments": 15
+      },
+      {
+        "backendId": "storage-c",
+        "customerContainers": 2,
+        "effectiveDataAssignments": 15
+      }
+    ],
+    "approvedSystemPrincipals": 3,
+    "result": "passed",
+    "sha256": "d8d17e22ce008e8d30e459de30031481fc4ab44b06dc57fd89c7c0eb57fd433f"
+  },
+  "generatedAt": "2026-08-18T17:55:02Z",
+  "negativeProbes": [
+    {
+      "diagnostic": "2026-08-18T17:52:09.925494Z  INFO azure_identity::managed_identity_credential: ManagedIdentityCredential will use IMDS managed identity user_assigned_id=Some(ClientId(\"id-81e982cc1b0622bd\"))\n2026-08-18T17:52:09.938278Z  INFO azure_identity::managed_identity_credential: ManagedIdentityCredential will use IMDS managed identity user_assigned_id=Some(ClientId(\"id-81e982cc1b0622bd\"))\n2026-08-18T17:52:10.283588Z  INFO overmesh_reconciler: validated Storage Account Ring topology storage_regions=3\nError: RBAC posture audit failed closed\n\nCaused by:\n    unapproved principal id-b1be2f7118a599bb has effective blob data access to overmesh-system on backend storage-a",
+      "probe": "unapproved-inherited-account-role",
+      "result": "rejected",
+      "sha256": "6e3a88c901bb8c4020fdddc23995b1d589cdba22933053c2cb6d623da038c988"
+    },
+    {
+      "diagnostic": "2026-08-18T17:54:00.564355Z  INFO azure_identity::managed_identity_credential: ManagedIdentityCredential will use IMDS managed identity user_assigned_id=Some(ClientId(\"id-81e982cc1b0622bd\"))\n2026-08-18T17:54:00.576742Z  INFO azure_identity::managed_identity_credential: ManagedIdentityCredential will use IMDS managed identity user_assigned_id=Some(ClientId(\"id-81e982cc1b0622bd\"))\n2026-08-18T17:54:00.945613Z  INFO overmesh_reconciler: validated Storage Account Ring topology storage_regions=3\nError: RBAC posture audit failed closed\n\nCaused by:\n    role assignment condition depends on blob path for customer container live-v050 on backend storage-a (principal id-58f93fe764036216, role id-a56d97094de3ae50, scope account)",
+      "probe": "path-dependent-abac-condition",
+      "result": "rejected",
+      "sha256": "8259d5bf3e9df37b1c55fc45fe4468f647ee4e3c500a3e2d99ab9908a1b1dbcd"
+    }
+  ],
+  "result": "passed"
+}

@@ -198,9 +198,12 @@ on that boundary.
 
 ## Implementation status
 
-**Live conformance needs denied-principal cases, and their setup is not
-obvious.** Each must reach the Azure call being tested rather than failing
-earlier in Overmesh:
+Complete. The live denied-principal cases were executed in milestone 0.9 and
+are retained as evidence.
+
+Their setup is recorded here because it is not obvious, and because anyone
+re-running or extending them will hit the same traps. Each case must reach the
+Azure call being tested rather than failing earlier inside Overmesh:
 
 - `Put Blob` and `Put Block` — a principal without write permission reaches the
   content write directly. No special setup.
@@ -216,12 +219,10 @@ earlier in Overmesh:
   `authorize_replay` reads the content object before probing. It must assert
   `403`, not `409` or `412`.
 
-Other pending items:
-
-- The RBAC posture audit must fail closed on a path-predicate condition
-  effective on a customer container, including one inherited from a higher
-  scope.
-- The two idempotent-write helpers are to be renamed.
+The RBAC posture audit now fails closed on a path-predicate condition
+effective on a customer container, including one inherited from a higher scope,
+and that behaviour was exercised live against real ARM assignments. The
+idempotent-write helpers carry their credential in their names.
 
 ## When to revisit
 
@@ -246,12 +247,23 @@ logical resource".
 - `harness/environments/azure/validate-storage-authorization.sh` — `HEAD` on an
   absent blob and `DELETE` of an absent snapshot, each with an allowed and a
   deliberately denied principal, across supported Storage API versions
-- *(pending)* the same gate, extended with denied-principal `Put Blob`,
-  `Put Block`, `Put Block List` and idempotent-replay cases
-- `delete_authorization_probe_outcome` unit tests — only the documented
-  terminal status counts as authorized (`gateway/src/backend.rs`)
-- `reconciler/src/posture.rs` — enumerates every container per account with
-  each assignment's condition, and fails closed on an unapproved posture
-- `gateway/tests/auth_contract.rs` — the declarative authentication contract
-- `harness/src/identity.rs` — distinct caller, gateway, reconciler and denied
-  principals, so a mis-wired credential is observable
+- `gateway/src/backend.rs::delete_authorization_probe_statuses_fail_closed` —
+  only the documented terminal status counts as authorized
+- `gateway/src/commit/tests.rs::put_blob_returns_forbidden_after_attempting_the_caller_data_write`
+  — caller-authorized content writes fail closed
+- `gateway/src/commit/tests.rs::put_blob_replay_reauthorizes_and_rejects_a_different_caller`
+  — idempotent replay rechecks the caller's authorization
+- `reconciler/src/posture.rs::rejects_unapproved_system_container_access` —
+  posture validation fails closed on unapproved assignments
+- `gateway/tests/auth_contract.rs::executes_declarative_gateway_authentication_contract`
+  — the declarative authentication contract exercises denied principals
+- `harness/src/identity.rs::local_runtime_principals_are_distinct` — local
+  caller, gateway, reconciler and denied principals remain distinguishable
+- `harness/artifacts/live/0.9.0/gateway-auth-v090-live-evidence.txt` — the live
+  run: a denied principal refused `403` on `Put Blob` and `Put Block`, and the
+  original principal refused `403` on idempotent replay and `Put Block List`
+  after its write permission was revoked and before it was restored
+- `harness/artifacts/live/0.9.0/posture-v090-live-evidence.json` — a
+  deliberately inherited account-scope role and a deliberately path-dependent
+  condition each make the posture audit fail closed, with baseline and cleanup
+  snapshots hashing identically

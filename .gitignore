@@ -2,9 +2,14 @@
 /.harness/
 /.azure/
 /harness/reports/*.json
-/harness/artifacts/*
 /harness/traces/*
 /reconciler/config/*-cursor.local.json
-!/harness/artifacts/README.md
 !/harness/traces/README.md
+/site/content/**/*.md
+!/site/content/_index.md
+!/site/content/overview/_index.md
+!/site/content/specifications/_index.md
+!/site/content/decisions/_index.md
+/site/public/
+/site/static/og/*.png
 .DS_Store

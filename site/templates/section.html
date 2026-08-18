@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}{{ section.title }} — Overmesh{% endblock title %}
+{% block og_title %}{{ section.title }} — Overmesh{% endblock og_title %}
+
+{% block body %}
+  <div class="documentation-shell">
+    {% include "partials/nav.html" %}
+    <main class="section-index">
+      <p class="eyebrow">Documentation</p>
+      <h1>{{ section.title }}</h1>
+      <p class="section-description">{{ section.description }}</p>
+      <ol class="document-list">
+        {% for listed_page in section.pages %}
+          <li>
+            <a href="{{ listed_page.permalink }}">
+              <span>{{ listed_page.title }}</span>
+              <span aria-hidden="true">→</span>
+            </a>
+          </li>
+        {% endfor %}
+      </ol>
+    </main>
+  </div>
+{% endblock body %}
