@@ -54,6 +54,7 @@ enum AuthenticationCase {
     None,
     SharedKey,
     ValidBearer,
+    ValidBearerWithoutTrailingSlash,
     ValidBearerRs256,
     WrongAudience,
     WrongTenant,
@@ -120,6 +121,7 @@ impl TestIdentity {
         match authentication {
             AuthenticationCase::None | AuthenticationCase::SharedKey => None,
             AuthenticationCase::ValidBearer
+            | AuthenticationCase::ValidBearerWithoutTrailingSlash
             | AuthenticationCase::ValidBearerRs256
             | AuthenticationCase::WrongAudience
             | AuthenticationCase::WrongTenant
@@ -128,10 +130,12 @@ impl TestIdentity {
                     .duration_since(UNIX_EPOCH)
                     .expect("current Unix time")
                     .as_secs();
-                let audience = if matches!(authentication, AuthenticationCase::WrongAudience) {
-                    "https://management.azure.com/"
-                } else {
-                    AUDIENCE
+                let audience = match authentication {
+                    AuthenticationCase::WrongAudience => "https://management.azure.com/",
+                    AuthenticationCase::ValidBearerWithoutTrailingSlash => {
+                        "https://storage.azure.com"
+                    }
+                    _ => AUDIENCE,
                 };
                 let tenant = if matches!(authentication, AuthenticationCase::WrongTenant) {
                     "another-tenant"

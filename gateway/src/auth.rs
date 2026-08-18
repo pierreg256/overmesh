@@ -36,7 +36,7 @@ impl AuthenticatedPrincipal {
 #[derive(Clone)]
 pub struct Authenticator {
     issuer: String,
-    audience: String,
+    audiences: Vec<String>,
     tenant_id: String,
     keys: HashMap<String, TrustedKey>,
 }
@@ -143,9 +143,19 @@ impl Authenticator {
             anyhow::bail!("JWKS must contain at least one supported key");
         }
 
+        let audience = audience.into();
+        let audiences = if audience.trim_end_matches('/') == "https://storage.azure.com" {
+            vec![
+                "https://storage.azure.com/".to_owned(),
+                "https://storage.azure.com".to_owned(),
+            ]
+        } else {
+            vec![audience]
+        };
+
         Ok(Self {
             issuer: issuer.into(),
-            audience: audience.into(),
+            audiences,
             tenant_id: tenant_id.into(),
             keys,
         })
@@ -201,7 +211,7 @@ impl Authenticator {
         }
 
         let mut validation = Validation::new(trusted_key.algorithm);
-        validation.set_audience(&[self.audience.as_str()]);
+        validation.set_audience(&self.audiences);
         validation.set_issuer(&[self.issuer.as_str()]);
         validation.validate_exp = true;
         validation.validate_nbf = true;
