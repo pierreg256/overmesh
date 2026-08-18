@@ -1411,7 +1411,7 @@ dependencies = [
  "jsonwebtoken",
  "overmesh-gateway",
  "p256",
- "rand 0.8.7",
+ "rand 0.10.2",
  "rand_chacha",
  "reqwest 0.12.28",
  "semver",
@@ -1676,7 +1676,6 @@ version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "22f6172bdec972074665ed81ed53b71da00bfc44b65a753cfde883ec4c702a1a"
 dependencies = [
- "libc",
  "rand_chacha",
  "rand_core 0.6.4",
 ]
