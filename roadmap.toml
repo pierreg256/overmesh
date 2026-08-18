@@ -1,5 +1,5 @@
 schema_version = 1
-project_version = "0.9.1"
+project_version = "0.10.0"
 active_generation = "V1"
 
 [[milestones]]
@@ -78,7 +78,7 @@ deliverables = [
 version = "0.9.1"
 generation = "V1"
 name = "Published documentation and drift enforcement"
-status = "active"
+status = "completed"
 deliverables = [
   "Publish the specifications, rationale, compatibility matrix, and architecture decision records as a GitHub Pages site built with a pinned Zola release.",
   "Assemble site content from the documents where they already live, leaving specifications at the repository root and rationale and decision records under docs/, and keep the generated content tree out of version control so that no authored document is duplicated.",
@@ -93,7 +93,7 @@ deliverables = [
 version = "0.10.0"
 generation = "V1"
 name = "Live performance baseline and historical comparison"
-status = "planned"
+status = "active"
 deliverables = [
   "Compare direct Azure Storage operations with the same operations through Overmesh.",
   "Measure latency percentiles, throughput, backend round trips, signing latency, CPU, and memory.",
