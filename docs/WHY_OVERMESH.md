@@ -331,7 +331,7 @@ fixed two-replica commit protocol and says so.
 
 ## 10. Status
 
-Overmesh is an advanced prototype in milestone 0.9.1 of a V1 plan that reaches
+Overmesh is an advanced prototype in milestone 0.10.0 of a V1 plan that reaches
 1.0.
 
 **Implemented and tested:** the signed Ring with rollback and predecessor
