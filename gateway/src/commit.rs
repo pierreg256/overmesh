@@ -10,7 +10,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::{
-    RingDocument,
+    SignedRing,
     auth::AuthenticatedPrincipal,
     backend::{
         BackendError, BackendLease, ObjectValue, PutCondition, ReplicaBackend, SharedBackend,
@@ -92,7 +92,7 @@ pub struct CommitCoordinator {
 
 #[derive(Clone)]
 pub struct CommitService {
-    pub(crate) ring: Arc<RingDocument>,
+    pub(crate) ring: Arc<SignedRing>,
     pub(crate) backends: HashMap<String, SharedBackend>,
     pub(crate) signer: Arc<dyn ManifestSigner>,
     pub(crate) control_tokens: SharedControlTokenProvider,
@@ -208,7 +208,7 @@ impl CommitCoordinator {
 
 impl CommitService {
     pub fn new(
-        ring: Arc<RingDocument>,
+        ring: Arc<SignedRing>,
         backends: HashMap<String, SharedBackend>,
         signer: Arc<dyn ManifestSigner>,
         control_tokens: SharedControlTokenProvider,
@@ -223,7 +223,7 @@ impl CommitService {
     }
 
     pub fn new_with_options(
-        ring: Arc<RingDocument>,
+        ring: Arc<SignedRing>,
         backends: HashMap<String, SharedBackend>,
         signer: Arc<dyn ManifestSigner>,
         control_tokens: SharedControlTokenProvider,
@@ -284,7 +284,7 @@ impl CommitService {
     ) -> Result<CommitCoordinator, CommitError> {
         let replicas = self
             .ring
-            .replicas_for(logical_blob.canonical())
+            .replicas_for(logical_blob)
             .map_err(|_| CommitError::ReplicaDrift)?;
         let primary = self
             .backends
@@ -447,7 +447,7 @@ fn head_condition_from_etag(etag: Option<&str>) -> PutCondition {
     }
 }
 
-pub(crate) async fn put_file_idempotent(
+pub(crate) async fn caller_put_file_idempotent(
     backend: &dyn ReplicaBackend,
     container: &str,
     object_key: &str,
@@ -480,7 +480,7 @@ pub(crate) async fn put_file_idempotent(
     }
 }
 
-pub(crate) async fn put_bytes_idempotent(
+pub(crate) async fn control_put_bytes_idempotent(
     backend: &dyn ReplicaBackend,
     object_key: &str,
     bytes: Vec<u8>,
@@ -528,6 +528,42 @@ pub(crate) async fn verify_identical_objects(
     } else {
         Err(CommitError::VerificationFailed)
     }
+}
+
+pub(crate) async fn load_or_repair_commit_manifest(
+    primary: &dyn ReplicaBackend,
+    secondary: &dyn ReplicaBackend,
+    object_key: &str,
+    control_token: &ControlToken,
+    signer: &dyn ManifestSigner,
+) -> Result<Option<(SignedDocument<CommitManifest>, Vec<u8>)>, CommitError> {
+    let (primary_value, secondary_value) = tokio::try_join!(
+        primary.control_get_object(object_key, control_token),
+        secondary.control_get_object(object_key, control_token)
+    )?;
+    let (bytes, repair_backend) = match (&primary_value, &secondary_value) {
+        (None, None) => return Ok(None),
+        (Some(primary), Some(secondary)) if primary.bytes == secondary.bytes => {
+            (primary.bytes.clone(), None)
+        }
+        (Some(value), None) => (value.bytes.clone(), Some(secondary)),
+        (None, Some(value)) => (value.bytes.clone(), Some(primary)),
+        (Some(_), Some(_)) => return Err(CommitError::VerificationFailed),
+    };
+    let signed = SignedDocument::<CommitManifest>::from_bytes(&bytes)?;
+    if signed.canonical_bytes()? != bytes {
+        return Err(CommitError::VerificationFailed);
+    }
+    signed.verify(
+        SignatureDomain::CommitManifest,
+        &signed.payload.signing_key_id,
+        signer,
+    )?;
+    if let Some(backend) = repair_backend {
+        control_put_bytes_idempotent(backend, object_key, bytes.clone(), control_token).await?;
+    }
+    verify_identical_objects(primary, secondary, object_key, &bytes, control_token).await?;
+    Ok(Some((signed, bytes)))
 }
 
 pub(crate) async fn publish_catalog_current(

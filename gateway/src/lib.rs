@@ -10,9 +10,11 @@ pub mod error;
 pub mod identity;
 pub mod listing;
 pub mod manifest;
+mod namespace;
 pub mod read;
 pub mod resource;
 pub mod ring;
+pub mod topology;
 pub mod upload;
 
 pub use app::{AppState, SUPPORTED_STORAGE_VERSION, build_router};

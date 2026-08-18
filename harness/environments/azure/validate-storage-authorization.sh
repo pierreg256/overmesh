@@ -385,4 +385,4 @@ for version in "${versions[@]}"; do
   done
 done
 
-echo "Overmesh live Azure posture and Storage authorization capability gates passed."
+echo "Overmesh live Azure posture and direct Storage authorization probes passed."

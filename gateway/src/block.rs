@@ -16,8 +16,9 @@ use crate::{
     backend::BackendError,
     commit::{
         CommitCoordinator, CommitError, CommitResult, CommitService, LogicalCondition,
-        ensure_not_quarantined, head_condition, load_head, maintain_lease, publish_catalog_current,
-        put_bytes_idempotent, put_file_idempotent, strict_current_head, verify_identical_objects,
+        caller_put_file_idempotent, control_put_bytes_idempotent, ensure_not_quarantined,
+        head_condition, load_head, maintain_lease, publish_catalog_current, strict_current_head,
+        verify_identical_objects,
     },
     identity::ControlToken,
     manifest::{
@@ -320,7 +321,7 @@ impl BlockService {
             }
             match (primary_existing, secondary_existing) {
                 (Some(_), None) => {
-                    put_bytes_idempotent(
+                    control_put_bytes_idempotent(
                         coordinator.secondary.as_ref(),
                         &metadata_key,
                         bytes.clone(),
@@ -329,7 +330,7 @@ impl BlockService {
                     .await?;
                 }
                 (None, Some(_)) => {
-                    put_bytes_idempotent(
+                    control_put_bytes_idempotent(
                         coordinator.primary.as_ref(),
                         &metadata_key,
                         bytes.clone(),
@@ -349,14 +350,14 @@ impl BlockService {
             )
             .await?;
             tokio::try_join!(
-                put_file_idempotent(
+                caller_put_file_idempotent(
                     coordinator.primary.as_ref(),
                     logical_blob.container(),
                     &staged.payload.content_object,
                     content,
                     &principal.access_token
                 ),
-                put_file_idempotent(
+                caller_put_file_idempotent(
                     coordinator.secondary.as_ref(),
                     logical_blob.container(),
                     &staged.payload.content_object,
@@ -410,13 +411,13 @@ impl BlockService {
         .await?;
         let bytes = signed.canonical_bytes()?;
         tokio::try_join!(
-            put_bytes_idempotent(
+            control_put_bytes_idempotent(
                 coordinator.primary.as_ref(),
                 &metadata_key,
                 bytes.clone(),
                 control_token
             ),
-            put_bytes_idempotent(
+            control_put_bytes_idempotent(
                 coordinator.secondary.as_ref(),
                 &metadata_key,
                 bytes.clone(),
@@ -432,14 +433,14 @@ impl BlockService {
         )
         .await?;
         tokio::try_join!(
-            put_file_idempotent(
+            caller_put_file_idempotent(
                 coordinator.primary.as_ref(),
                 logical_blob.container(),
                 &signed.payload.content_object,
                 content,
                 &principal.access_token
             ),
-            put_file_idempotent(
+            caller_put_file_idempotent(
                 coordinator.secondary.as_ref(),
                 logical_blob.container(),
                 &signed.payload.content_object,
@@ -497,7 +498,7 @@ impl BlockService {
             }
             match (primary, secondary) {
                 (Some(_), None) => {
-                    put_bytes_idempotent(
+                    control_put_bytes_idempotent(
                         coordinator.secondary.as_ref(),
                         &key,
                         bytes.clone(),
@@ -506,7 +507,7 @@ impl BlockService {
                     .await?;
                 }
                 (None, Some(_)) => {
-                    put_bytes_idempotent(
+                    control_put_bytes_idempotent(
                         coordinator.primary.as_ref(),
                         &key,
                         bytes.clone(),
@@ -558,13 +559,13 @@ impl BlockService {
         .await?;
         let bytes = generation.canonical_bytes()?;
         tokio::try_join!(
-            put_bytes_idempotent(
+            control_put_bytes_idempotent(
                 coordinator.primary.as_ref(),
                 &key,
                 bytes.clone(),
                 control_token
             ),
-            put_bytes_idempotent(
+            control_put_bytes_idempotent(
                 coordinator.secondary.as_ref(),
                 &key,
                 bytes.clone(),
@@ -1142,6 +1143,16 @@ impl BlockService {
         {
             return Err(BlockError::VerificationFailed);
         }
+        publish_catalog_current(
+            coordinator.primary.as_ref(),
+            coordinator.secondary.as_ref(),
+            logical_blob,
+            &committed.signed,
+            &committed.bytes,
+            control_token,
+            coordinator.signer.as_ref(),
+        )
+        .await?;
         lagging_backend
             .control_put_bytes(
                 &head_key,
@@ -1163,16 +1174,6 @@ impl BlockService {
             coordinator.primary.as_ref(),
             coordinator.secondary.as_ref(),
             &logical_blob.path_hash(),
-            &committed.signed,
-            &committed.bytes,
-            control_token,
-            coordinator.signer.as_ref(),
-        )
-        .await?;
-        publish_catalog_current(
-            coordinator.primary.as_ref(),
-            coordinator.secondary.as_ref(),
-            logical_blob,
             &committed.signed,
             &committed.bytes,
             control_token,

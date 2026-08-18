@@ -1,5 +1,5 @@
 schema_version = 1
-project_version = "0.8.0"
+project_version = "0.9.0"
 active_generation = "V1"
 
 [[milestones]]
@@ -63,7 +63,7 @@ deliverables = [
 version = "0.9.0"
 generation = "V1"
 name = "ACA infrastructure, client compatibility, and live Azure conformance"
-status = "planned"
+status = "completed"
 deliverables = [
   "Provision private Azure Container Apps environments for the Gateway and Reconciler before client conformance work.",
   "Deploy managed-identity-only Gateway and Reconciler revisions with private Storage and Key Vault connectivity.",

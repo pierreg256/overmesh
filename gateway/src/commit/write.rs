@@ -61,6 +61,7 @@ impl CommitCoordinator {
                     self.signer.as_ref(),
                 )
                 .await?;
+                // Listing exposes this generation only after both heads contain these exact bytes.
                 publish_catalog_current(
                     self.primary.as_ref(),
                     self.secondary.as_ref(),
@@ -139,14 +140,14 @@ impl CommitCoordinator {
         .await?;
         let content_key = signed_block.payload.content_object.clone();
         tokio::try_join!(
-            put_file_idempotent(
+            caller_put_file_idempotent(
                 self.primary.as_ref(),
                 logical_blob.container(),
                 &content_key,
                 content,
                 &principal.access_token
             ),
-            put_file_idempotent(
+            caller_put_file_idempotent(
                 self.secondary.as_ref(),
                 logical_blob.container(),
                 &content_key,
@@ -157,7 +158,7 @@ impl CommitCoordinator {
 
         let block_manifest_sha256 = sha256_bytes(&block_bytes);
 
-        let prepared_payload = CommitManifest {
+        let mut prepared_payload = CommitManifest {
             blob: logical_blob.canonical().to_owned(),
             caller: principal.identity(),
             write_id: write_id.to_owned(),
@@ -178,27 +179,45 @@ impl CommitCoordinator {
             prepared_replicas: Vec::new(),
             signing_key_id: self.signer.key_id().to_owned(),
         };
-        let signed_prepared = SignedDocument::create(
-            prepared_payload,
-            SignatureDomain::CommitManifest,
-            self.signer.as_ref(),
-        )
-        .await?;
-        let prepared_bytes = signed_prepared.canonical_bytes()?;
-        tokio::try_join!(
-            put_bytes_idempotent(
+        let (signed_prepared, prepared_bytes) = if let Some((signed, bytes)) =
+            load_or_repair_commit_manifest(
                 self.primary.as_ref(),
-                &prepared_manifest_key,
-                prepared_bytes.clone(),
-                control_token
-            ),
-            put_bytes_idempotent(
                 self.secondary.as_ref(),
                 &prepared_manifest_key,
-                prepared_bytes.clone(),
-                control_token
+                control_token,
+                self.signer.as_ref(),
             )
-        )?;
+            .await?
+        {
+            prepared_payload.committed_at_unix_ms = signed.payload.committed_at_unix_ms;
+            if signed.payload != prepared_payload {
+                return Err(CommitError::IdempotencyConflict);
+            }
+            (signed, bytes)
+        } else {
+            let signed = SignedDocument::create(
+                prepared_payload,
+                SignatureDomain::CommitManifest,
+                self.signer.as_ref(),
+            )
+            .await?;
+            let bytes = signed.canonical_bytes()?;
+            tokio::try_join!(
+                control_put_bytes_idempotent(
+                    self.primary.as_ref(),
+                    &prepared_manifest_key,
+                    bytes.clone(),
+                    control_token
+                ),
+                control_put_bytes_idempotent(
+                    self.secondary.as_ref(),
+                    &prepared_manifest_key,
+                    bytes.clone(),
+                    control_token
+                )
+            )?;
+            (signed, bytes)
+        };
         verify_identical_objects(
             self.primary.as_ref(),
             self.secondary.as_ref(),
@@ -213,27 +232,55 @@ impl CommitCoordinator {
             prepared_replicas: vec![self.primary.id().to_owned(), self.secondary.id().to_owned()],
             ..signed_prepared.payload
         };
-        let signed_committed = SignedDocument::create(
-            committed_payload,
-            SignatureDomain::CommitManifest,
+        let (signed_committed, committed_bytes) = if let Some((signed, bytes)) =
+            load_or_repair_commit_manifest(
+                self.primary.as_ref(),
+                self.secondary.as_ref(),
+                &committed_manifest_key,
+                control_token,
+                self.signer.as_ref(),
+            )
+            .await?
+        {
+            if signed.payload != committed_payload {
+                return Err(CommitError::IdempotencyConflict);
+            }
+            (signed, bytes)
+        } else {
+            let signed = SignedDocument::create(
+                committed_payload,
+                SignatureDomain::CommitManifest,
+                self.signer.as_ref(),
+            )
+            .await?;
+            let bytes = signed.canonical_bytes()?;
+            tokio::try_join!(
+                control_put_bytes_idempotent(
+                    self.primary.as_ref(),
+                    &committed_manifest_key,
+                    bytes.clone(),
+                    control_token
+                ),
+                control_put_bytes_idempotent(
+                    self.secondary.as_ref(),
+                    &committed_manifest_key,
+                    bytes.clone(),
+                    control_token
+                )
+            )?;
+            (signed, bytes)
+        };
+
+        publish_catalog_current(
+            self.primary.as_ref(),
+            self.secondary.as_ref(),
+            logical_blob,
+            &signed_committed,
+            &committed_bytes,
+            control_token,
             self.signer.as_ref(),
         )
         .await?;
-        let committed_bytes = signed_committed.canonical_bytes()?;
-        tokio::try_join!(
-            put_bytes_idempotent(
-                self.primary.as_ref(),
-                &committed_manifest_key,
-                committed_bytes.clone(),
-                control_token
-            ),
-            put_bytes_idempotent(
-                self.secondary.as_ref(),
-                &committed_manifest_key,
-                committed_bytes.clone(),
-                control_token
-            )
-        )?;
 
         let primary_condition = head_condition(primary_head.as_ref());
         let secondary_condition = head_condition(secondary_head.as_ref());
@@ -288,16 +335,6 @@ impl CommitCoordinator {
             self.signer.as_ref(),
         )
         .await?;
-        publish_catalog_current(
-            self.primary.as_ref(),
-            self.secondary.as_ref(),
-            logical_blob,
-            &signed_committed,
-            &committed_bytes,
-            control_token,
-            self.signer.as_ref(),
-        )
-        .await?;
 
         Ok(CommitResult {
             logical_version,
@@ -327,13 +364,23 @@ impl CommitCoordinator {
         let existing = match (primary_value, secondary_value) {
             (None, None) => None,
             (Some(value), None) => {
-                put_bytes_idempotent(secondary, object_key, value.bytes.clone(), control_token)
-                    .await?;
+                control_put_bytes_idempotent(
+                    secondary,
+                    object_key,
+                    value.bytes.clone(),
+                    control_token,
+                )
+                .await?;
                 Some(value.bytes)
             }
             (None, Some(value)) => {
-                put_bytes_idempotent(primary, object_key, value.bytes.clone(), control_token)
-                    .await?;
+                control_put_bytes_idempotent(
+                    primary,
+                    object_key,
+                    value.bytes.clone(),
+                    control_token,
+                )
+                .await?;
                 Some(value.bytes)
             }
             (Some(primary_value), Some(secondary_value)) => {
@@ -366,13 +413,13 @@ impl CommitCoordinator {
             )?;
             for page in &pages {
                 tokio::try_join!(
-                    put_bytes_idempotent(
+                    control_put_bytes_idempotent(
                         primary,
                         &page.reference.object,
                         page.bytes.clone(),
                         control_token
                     ),
-                    put_bytes_idempotent(
+                    control_put_bytes_idempotent(
                         secondary,
                         &page.reference.object,
                         page.bytes.clone(),
@@ -402,8 +449,8 @@ impl CommitCoordinator {
             .await?;
             let bytes = signed.canonical_bytes()?;
             tokio::try_join!(
-                put_bytes_idempotent(primary, object_key, bytes.clone(), control_token),
-                put_bytes_idempotent(secondary, object_key, bytes.clone(), control_token)
+                control_put_bytes_idempotent(primary, object_key, bytes.clone(), control_token),
+                control_put_bytes_idempotent(secondary, object_key, bytes.clone(), control_token)
             )?;
             (signed, bytes, content.blocks.clone())
         };
@@ -502,7 +549,7 @@ impl CommitCoordinator {
                     primary_value.bytes
                 }
                 (Some(value), None) => {
-                    put_bytes_idempotent(
+                    control_put_bytes_idempotent(
                         secondary,
                         &reference.object,
                         value.bytes.clone(),
@@ -512,7 +559,7 @@ impl CommitCoordinator {
                     value.bytes
                 }
                 (None, Some(value)) => {
-                    put_bytes_idempotent(
+                    control_put_bytes_idempotent(
                         primary,
                         &reference.object,
                         value.bytes.clone(),

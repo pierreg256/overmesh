@@ -14,7 +14,7 @@ COMPOSE_FILE := harness/environments/azurite/compose.yaml
 COMPOSE := COMPOSE_PROJECT_NAME=$(COMPOSE_PROJECT_NAME) docker compose -f $(COMPOSE_FILE)
 HARNESS := cargo run --quiet -p overmesh-harness --
 
-.PHONY: harness-certs dev-up dev-down dev-reset fault-reset gateway-smoke placement-smoke reconciler-smoke validate-system harness-list harness-run-all version-check test-pr test-main test-nightly test-live-azure test-release
+.PHONY: harness-certs dev-up dev-down dev-reset fault-reset gateway-smoke placement-smoke reconciler-smoke validate-system harness-list harness-run-all version-check infra-build test-pr test-main test-nightly test-live-azure test-live-azure-storage test-live-azure-gateway test-live-azure-client-compat test-live-azure-placement test-release
 
 HARNESS_CERT_DIR := .harness/certs
 HARNESS_CERT := $(HARNESS_CERT_DIR)/azurite.pem
@@ -67,6 +67,9 @@ harness-run-all:
 version-check:
 	$(HARNESS) version-check
 
+infra-build:
+	az bicep build --file infra/main.bicep --stdout >/dev/null
+
 test-pr: version-check
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets -- -D warnings
@@ -79,7 +82,19 @@ test-main: test-pr
 test-nightly: test-main
 	$(HARNESS) generate-dataset .harness/generated/nightly-16m.bin --size 16777216 --seed 20260815
 
+test-live-azure-storage:
+	./harness/environments/azure/validate-storage-authorization.sh
+
+test-live-azure-gateway:
+	./harness/environments/azure/validate-gateway-authorization.sh
+
+test-live-azure-client-compat:
+	./harness/environments/azure/validate-client-compatibility.sh
+
+test-live-azure-placement:
+	./harness/environments/azure/validate-live-placement.sh
+
 test-live-azure:
-	$${HARNESS_LIVE_AZURE_COMMAND:-./harness/environments/azure/validate-storage-authorization.sh}
+	$${HARNESS_LIVE_AZURE_COMMAND:-./harness/environments/azure/validate-live-azure.sh}
 
 test-release: test-main test-live-azure

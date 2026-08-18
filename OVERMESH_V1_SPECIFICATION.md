@@ -108,11 +108,12 @@ Any gateway instance can be deleted or recreated without functional data loss.
 Durable consistency state is stored as signed Overmesh system objects in the
 backend Storage Accounts. This does not make the gateway stateful.
 
-Beginning with milestone `0.9.0`, Gateway readiness MUST validate every Ring
-node against Azure Resource Manager. The actual Storage Account location MUST
-match the signed `region` value, and all Storage Accounts in one active Ring
-MUST occupy distinct Azure regions. A missing resource ID, an unavailable ARM
-check, a region mismatch, or duplicate actual regions MUST fail startup.
+Beginning with milestone `0.9.0`, Gateway and Reconciler startup/readiness MUST
+validate every Ring node against Azure Resource Manager. The actual Storage
+Account location MUST match the signed `region` value, and all Storage Accounts
+in one active Ring MUST occupy distinct Azure regions. A missing resource ID,
+an unavailable or unauthorized ARM check, a region mismatch, or duplicate
+actual regions MUST fail startup.
 
 ### 3.3 Fail Closed
 
@@ -843,6 +844,13 @@ operational checkpoint and MUST NOT unconditionally process all heads. An
 explicit full-scan audit mode MUST remain available. Each discovered logical
 blob is reconciled only on the RF=2 replicas selected by the active Ring,
 including when the Ring contains more than two nodes.
+
+Discovery checkpoints MUST be signed, Ring-version-bound control-plane
+objects replicated across the Ring backends. They MUST NOT depend on a local
+gateway or job filesystem. Cursor publication MUST use backend preconditions,
+must fail closed on invalid signatures or malformed state, and may replay work
+after an interrupted or concurrent publication but MUST NOT silently skip
+unprocessed pages.
 
 The reconciler identity is the most privileged runtime data identity. It
 requires read and repair access to every customer container and controlled

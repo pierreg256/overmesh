@@ -9,6 +9,9 @@ controlIdentity:
   provider: localTest
   testTokenPath: ../../.harness/gateway-control-token.jwt
   allowTestToken: true
+topologyValidation:
+  provider: disabled
+  allowDisabled: true
 ring:
   documentPath: ../../harness/rings/ring-v1-three-node.yaml
   signaturePath: ../../harness/rings/ring-v1-three-node.sig

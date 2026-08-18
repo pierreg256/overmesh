@@ -20,7 +20,7 @@ use crate::{
     identity::SharedControlTokenProvider,
     manifest::{ManifestSigner, ManifestState},
     read::BlobMetadata,
-    ring::RingDocument,
+    ring::SignedRing,
 };
 
 pub const DEFAULT_MAX_RESULTS: u32 = 5_000;
@@ -94,7 +94,7 @@ pub enum ListingError {
 #[derive(Clone)]
 pub struct ListingService {
     logical_account: String,
-    ring: Arc<RingDocument>,
+    ring: Arc<SignedRing>,
     backends: BTreeMap<String, SharedBackend>,
     signer: Arc<dyn ManifestSigner>,
     control_tokens: SharedControlTokenProvider,
@@ -143,7 +143,7 @@ impl ListingService {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         logical_account: impl Into<String>,
-        ring: Arc<RingDocument>,
+        ring: Arc<SignedRing>,
         backends: std::collections::HashMap<String, SharedBackend>,
         signer: Arc<dyn ManifestSigner>,
         control_tokens: SharedControlTokenProvider,
@@ -486,7 +486,7 @@ impl ListingService {
             Ok(value) => value,
             Err(_) => return Ok(None),
         };
-        let replicas = match self.ring.replicas_for(logical_blob.canonical()) {
+        let replicas = match self.ring.replicas_for(&logical_blob) {
             Ok(value) if value.len() == 2 => value,
             _ => return Ok(None),
         };
@@ -496,15 +496,31 @@ impl ListingService {
         let Some(secondary) = self.backends.get(&replicas[1].id) else {
             return Ok(None);
         };
-        let (primary_catalog, secondary_catalog) = tokio::try_join!(
+        let head_key = format!("heads/{}.json", logical_blob.path_hash());
+        let (primary_catalog, secondary_catalog, primary_head, secondary_head) = tokio::try_join!(
             primary.control_get_object(object_key, token),
-            secondary.control_get_object(object_key, token)
+            secondary.control_get_object(object_key, token),
+            primary.control_get_object(&head_key, token),
+            secondary.control_get_object(&head_key, token)
         )?;
-        let (Some(primary_catalog), Some(secondary_catalog)) = (primary_catalog, secondary_catalog)
+        let (
+            Some(primary_catalog),
+            Some(secondary_catalog),
+            Some(primary_head),
+            Some(secondary_head),
+        ) = (
+            primary_catalog,
+            secondary_catalog,
+            primary_head,
+            secondary_head,
+        )
         else {
             return Ok(None);
         };
-        if primary_catalog.bytes != secondary_catalog.bytes {
+        if primary_catalog.bytes != secondary_catalog.bytes
+            || primary_catalog.bytes != primary_head.bytes
+            || primary_catalog.bytes != secondary_head.bytes
+        {
             return Ok(None);
         }
         let entry = match validate_catalog_entry(

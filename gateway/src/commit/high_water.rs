@@ -202,8 +202,8 @@ impl CommitCoordinator {
         let bytes = committed_bytes.to_vec();
         let history_key = Self::high_water_history_key(path_hash, &committed.payload);
         tokio::try_join!(
-            put_bytes_idempotent(primary, &history_key, bytes.clone(), control_token),
-            put_bytes_idempotent(secondary, &history_key, bytes.clone(), control_token)
+            control_put_bytes_idempotent(primary, &history_key, bytes.clone(), control_token),
+            control_put_bytes_idempotent(secondary, &history_key, bytes.clone(), control_token)
         )?;
         let current_key = Self::high_water_current_key(path_hash);
         let primary_condition =
@@ -324,7 +324,8 @@ impl CommitCoordinator {
         control_token: &ControlToken,
     ) -> Result<(), CommitError> {
         let history_key = Self::high_water_history_key(path_hash, &value.signed.payload);
-        put_bytes_idempotent(backend, &history_key, value.bytes.clone(), control_token).await?;
+        control_put_bytes_idempotent(backend, &history_key, value.bytes.clone(), control_token)
+            .await?;
         backend
             .control_put_bytes(
                 &Self::high_water_current_key(path_hash),

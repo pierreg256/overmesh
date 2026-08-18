@@ -13,6 +13,8 @@ const ARM_SCOPE: &str = "https://management.azure.com/.default";
 const AUTHORIZATION_API_VERSION: &str = "2022-04-01";
 const STORAGE_API_VERSION: &str = "2023-05-01";
 const SYSTEM_CONTAINER: &str = "overmesh-system";
+const BLOB_PATH_ATTRIBUTE_FRAGMENT: &str = "blobservices/containers/blobs:path";
+const BLOB_PREFIX_ATTRIBUTE_FRAGMENT: &str = "blobservices/containers/blobs/prefix";
 const BLOB_DATA_OPERATIONS: &[&str] = &[
     "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
     "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
@@ -192,13 +194,28 @@ impl AzureArmRbacPostureAuditor {
             "backend {} does not expose the reserved system container through Azure ARM",
             account.backend_id
         );
+        let subscription_scope = subscription_scope(&account.resource_id)?;
+        let resource_group_scope = resource_group_scope(&account.resource_id)?;
+        let (subscription_assignments, resource_group_assignments, account_assignments) = tokio::try_join!(
+            self.list_assignments(&subscription_scope, token),
+            self.list_assignments(&resource_group_scope, token),
+            self.list_assignments(&account.resource_id, token),
+        )?;
+        let inherited_assignments = dedupe_assignments(
+            subscription_assignments
+                .into_iter()
+                .chain(resource_group_assignments)
+                .chain(account_assignments),
+        );
         let mut result = BTreeMap::new();
         for container in containers {
-            let scope = format!(
-                "{}/blobServices/default/containers/{container}",
-                account.resource_id
+            let scope = container_scope(&account.resource_id, &container);
+            let assignments = dedupe_assignments(
+                inherited_assignments
+                    .iter()
+                    .cloned()
+                    .chain(self.list_assignments(&scope, token).await?),
             );
-            let assignments = self.list_assignments(&scope, token).await?;
             let mut effective = BTreeSet::new();
             for assignment in assignments {
                 let role_id = assignment
@@ -215,21 +232,11 @@ impl AzureArmRbacPostureAuditor {
                     role_cache.insert(role_id.clone(), value.clone());
                     value
                 };
-                if operations.is_empty() {
-                    continue;
+                if let Some(fingerprint) =
+                    assignment_fingerprint(&assignment, &account.resource_id, &scope, operations)?
+                {
+                    effective.insert(fingerprint);
                 }
-                effective.insert(AssignmentFingerprint {
-                    principal_id: assignment.properties.principal_id.to_ascii_lowercase(),
-                    role_definition_id: role_definition_guid(&role_id)?,
-                    condition: normalize_condition(assignment.properties.condition.as_deref()),
-                    condition_version: assignment.properties.condition_version.unwrap_or_default(),
-                    scope_kind: scope_kind(
-                        assignment.properties.scope.as_deref(),
-                        &account.resource_id,
-                        &scope,
-                    ),
-                    operations,
-                });
             }
             result.insert(container, effective);
         }
@@ -322,6 +329,7 @@ fn evaluate_snapshots(
                 snapshot.backend_id
             );
         }
+        ensure_customer_container_conditions_are_path_independent(snapshot)?;
     }
     let first = &snapshots[0];
     for other in &snapshots[1..] {
@@ -342,6 +350,36 @@ fn evaluate_snapshots(
                 first.backend_id,
                 other.backend_id
             );
+        }
+    }
+    Ok(())
+}
+
+fn ensure_customer_container_conditions_are_path_independent(
+    snapshot: &AccountSnapshot,
+) -> Result<()> {
+    for (container, assignments) in &snapshot.containers {
+        if container == SYSTEM_CONTAINER {
+            continue;
+        }
+        for assignment in assignments {
+            match classify_condition_path_dependency(&assignment.condition) {
+                ConditionPathDependency::PathIndependent => {}
+                ConditionPathDependency::PathDependent => bail!(
+                    "role assignment condition depends on blob path for customer container {container} on backend {} (principal {}, role {}, scope {})",
+                    snapshot.backend_id,
+                    assignment.principal_id,
+                    assignment.role_definition_id,
+                    assignment.scope_kind,
+                ),
+                ConditionPathDependency::Unknown => bail!(
+                    "role assignment condition could not be proven path-independent for customer container {container} on backend {} (principal {}, role {}, scope {})",
+                    snapshot.backend_id,
+                    assignment.principal_id,
+                    assignment.role_definition_id,
+                    assignment.scope_kind,
+                ),
+            }
         }
     }
     Ok(())
@@ -410,6 +448,26 @@ fn normalize_condition(condition: Option<&str>) -> String {
         .join(" ")
 }
 
+fn container_scope(account_scope: &str, container: &str) -> String {
+    format!("{account_scope}/blobServices/default/containers/{container}")
+}
+
+fn subscription_scope(resource_id: &str) -> Result<String> {
+    scope_prefix(resource_id, "/resourcegroups/", "resource group")
+}
+
+fn resource_group_scope(resource_id: &str) -> Result<String> {
+    scope_prefix(resource_id, "/providers/", "resource provider")
+}
+
+fn scope_prefix(resource_id: &str, marker: &str, name: &str) -> Result<String> {
+    let lower = resource_id.to_ascii_lowercase();
+    let Some(index) = lower.find(marker) else {
+        bail!("Azure resource ID has no {name} segment: {resource_id}");
+    };
+    Ok(resource_id[..index].to_owned())
+}
+
 fn scope_kind(scope: Option<&str>, account_scope: &str, container_scope: &str) -> String {
     let Some(scope) = scope else {
         return "unknown".to_owned();
@@ -429,6 +487,205 @@ fn scope_kind(scope: Option<&str>, account_scope: &str, container_scope: &str) -
     }
 }
 
+fn assignment_fingerprint(
+    assignment: &ArmRoleAssignment,
+    account_scope: &str,
+    container_scope: &str,
+    operations: BTreeSet<String>,
+) -> Result<Option<AssignmentFingerprint>> {
+    if operations.is_empty() {
+        return Ok(None);
+    }
+    let role_definition_id = assignment
+        .properties
+        .role_definition_id
+        .to_ascii_lowercase();
+    Ok(Some(AssignmentFingerprint {
+        principal_id: assignment.properties.principal_id.to_ascii_lowercase(),
+        role_definition_id: role_definition_guid(&role_definition_id)?,
+        condition: normalize_condition(assignment.properties.condition.as_deref()),
+        condition_version: assignment
+            .properties
+            .condition_version
+            .clone()
+            .unwrap_or_default(),
+        scope_kind: scope_kind(
+            assignment.properties.scope.as_deref(),
+            account_scope,
+            container_scope,
+        ),
+        operations,
+    }))
+}
+
+fn dedupe_assignments(
+    assignments: impl IntoIterator<Item = ArmRoleAssignment>,
+) -> Vec<ArmRoleAssignment> {
+    let mut deduped = Vec::new();
+    let mut seen = HashSet::new();
+    for assignment in assignments {
+        if seen.insert(assignment_identity(&assignment)) {
+            deduped.push(assignment);
+        }
+    }
+    deduped
+}
+
+fn assignment_identity(assignment: &ArmRoleAssignment) -> String {
+    if !assignment.id.is_empty() {
+        return assignment.id.to_ascii_lowercase();
+    }
+    format!(
+        "{}|{}|{}|{}|{}",
+        assignment
+            .properties
+            .scope
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase(),
+        assignment
+            .properties
+            .role_definition_id
+            .to_ascii_lowercase(),
+        assignment.properties.principal_id.to_ascii_lowercase(),
+        normalize_condition(assignment.properties.condition.as_deref()),
+        assignment
+            .properties
+            .condition_version
+            .as_deref()
+            .unwrap_or_default()
+            .to_ascii_lowercase(),
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConditionPathDependency {
+    PathIndependent,
+    PathDependent,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConditionAttributeSource {
+    Environment,
+    Principal,
+    Request,
+    Resource,
+}
+
+fn classify_condition_path_dependency(condition: &str) -> ConditionPathDependency {
+    if condition.is_empty() {
+        return ConditionPathDependency::PathIndependent;
+    }
+    let bytes = condition.as_bytes();
+    let mut index = 0;
+    let mut in_string = false;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\'' => {
+                if in_string && bytes.get(index + 1) == Some(&b'\'') {
+                    index += 2;
+                    continue;
+                }
+                in_string = !in_string;
+                index += 1;
+            }
+            b'@' if !in_string => {
+                let Some((source, body, next_index)) = parse_attribute_reference(condition, index)
+                else {
+                    return ConditionPathDependency::Unknown;
+                };
+                match classify_attribute_path_dependency(source, body) {
+                    ConditionPathDependency::PathIndependent => {}
+                    other => return other,
+                }
+                index = next_index;
+            }
+            _ => index += 1,
+        }
+    }
+    if in_string {
+        ConditionPathDependency::Unknown
+    } else {
+        ConditionPathDependency::PathIndependent
+    }
+}
+
+fn parse_attribute_reference(
+    condition: &str,
+    at_sign_index: usize,
+) -> Option<(ConditionAttributeSource, &str, usize)> {
+    let mut index = at_sign_index + 1;
+    let (source, source_len) = match_attribute_source(condition, index)?;
+    index += source_len;
+    while condition
+        .as_bytes()
+        .get(index)
+        .is_some_and(|byte| byte.is_ascii_whitespace())
+    {
+        index += 1;
+    }
+    if condition.as_bytes().get(index) != Some(&b'[') {
+        return None;
+    }
+    index += 1;
+    let body_start = index;
+    while let Some(byte) = condition.as_bytes().get(index) {
+        if *byte == b']' {
+            return Some((source, &condition[body_start..index], index + 1));
+        }
+        index += 1;
+    }
+    None
+}
+
+fn match_attribute_source(
+    condition: &str,
+    index: usize,
+) -> Option<(ConditionAttributeSource, usize)> {
+    [
+        ("Environment", ConditionAttributeSource::Environment),
+        ("Principal", ConditionAttributeSource::Principal),
+        ("Request", ConditionAttributeSource::Request),
+        ("Resource", ConditionAttributeSource::Resource),
+    ]
+    .into_iter()
+    .find_map(|(candidate, source)| {
+        let end = index + candidate.len();
+        condition
+            .get(index..end)
+            .filter(|value| value.eq_ignore_ascii_case(candidate))
+            .map(|_| (source, candidate.len()))
+    })
+}
+
+fn classify_attribute_path_dependency(
+    source: ConditionAttributeSource,
+    body: &str,
+) -> ConditionPathDependency {
+    if matches!(
+        source,
+        ConditionAttributeSource::Environment | ConditionAttributeSource::Principal
+    ) {
+        return ConditionPathDependency::PathIndependent;
+    }
+    let normalized = body
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if normalized.is_empty() {
+        return ConditionPathDependency::Unknown;
+    }
+    if normalized.contains(BLOB_PATH_ATTRIBUTE_FRAGMENT)
+        || normalized.contains(BLOB_PREFIX_ATTRIBUTE_FRAGMENT)
+    {
+        ConditionPathDependency::PathDependent
+    } else {
+        ConditionPathDependency::PathIndependent
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct ArmList<T> {
     value: Vec<T>,
@@ -441,12 +698,14 @@ struct ArmContainer {
     name: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct ArmRoleAssignment {
+    #[serde(default)]
+    id: String,
     properties: ArmRoleAssignmentProperties,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ArmRoleAssignmentProperties {
     role_definition_id: String,
@@ -481,12 +740,20 @@ mod tests {
     use super::*;
 
     fn assignment(principal: &str) -> AssignmentFingerprint {
+        conditioned_assignment(principal, "container", "")
+    }
+
+    fn conditioned_assignment(
+        principal: &str,
+        scope_kind: &str,
+        condition: &str,
+    ) -> AssignmentFingerprint {
         AssignmentFingerprint {
             principal_id: principal.to_owned(),
             role_definition_id: "role".to_owned(),
-            condition: String::new(),
+            condition: normalize_condition(Some(condition)),
             condition_version: String::new(),
-            scope_kind: "container".to_owned(),
+            scope_kind: scope_kind.to_owned(),
             operations: BTreeSet::from([BLOB_DATA_OPERATIONS[0].to_owned()]),
         }
     }
@@ -559,5 +826,279 @@ mod tests {
         let operations = effective_blob_operations(&definition);
         assert!(operations.contains(BLOB_DATA_OPERATIONS[0]));
         assert!(!operations.contains(BLOB_DATA_OPERATIONS[2]));
+    }
+
+    #[test]
+    fn rejects_direct_path_dependent_customer_container_condition() {
+        let condition = "(
+            (
+                !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+            )
+            OR
+            (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path]
+                StringLike '/photos/private/*'
+            )
+        )";
+        let snapshots = [
+            AccountSnapshot {
+                backend_id: "storage-a".to_owned(),
+                containers: BTreeMap::from([
+                    (
+                        SYSTEM_CONTAINER.to_owned(),
+                        BTreeSet::from([assignment("system")]),
+                    ),
+                    (
+                        "photos".to_owned(),
+                        BTreeSet::from([
+                            assignment("system"),
+                            conditioned_assignment("caller", "container", condition),
+                        ]),
+                    ),
+                ]),
+            },
+            AccountSnapshot {
+                backend_id: "storage-b".to_owned(),
+                containers: BTreeMap::from([
+                    (
+                        SYSTEM_CONTAINER.to_owned(),
+                        BTreeSet::from([assignment("system")]),
+                    ),
+                    (
+                        "photos".to_owned(),
+                        BTreeSet::from([
+                            assignment("system"),
+                            conditioned_assignment("caller", "container", condition),
+                        ]),
+                    ),
+                ]),
+            },
+        ];
+        assert!(evaluate_snapshots(&snapshots, &HashSet::from(["system".to_owned()])).is_err());
+    }
+
+    #[test]
+    fn rejects_inherited_path_dependent_customer_container_condition() {
+        let condition = "(
+            (
+                !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+            )
+            OR
+            (
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path]
+                StringEquals '/photos/report.csv'
+            )
+        )";
+        let snapshots = [
+            AccountSnapshot {
+                backend_id: "storage-a".to_owned(),
+                containers: BTreeMap::from([
+                    (
+                        SYSTEM_CONTAINER.to_owned(),
+                        BTreeSet::from([assignment("system")]),
+                    ),
+                    (
+                        "photos".to_owned(),
+                        BTreeSet::from([
+                            assignment("system"),
+                            conditioned_assignment("caller", "account", condition),
+                        ]),
+                    ),
+                ]),
+            },
+            AccountSnapshot {
+                backend_id: "storage-b".to_owned(),
+                containers: BTreeMap::from([
+                    (
+                        SYSTEM_CONTAINER.to_owned(),
+                        BTreeSet::from([assignment("system")]),
+                    ),
+                    (
+                        "photos".to_owned(),
+                        BTreeSet::from([
+                            assignment("system"),
+                            conditioned_assignment("caller", "account", condition),
+                        ]),
+                    ),
+                ]),
+            },
+        ];
+        assert!(evaluate_snapshots(&snapshots, &HashSet::from(["system".to_owned()])).is_err());
+    }
+
+    #[test]
+    fn rejects_unparseable_customer_container_condition_fail_closed() {
+        let snapshots = [
+            AccountSnapshot {
+                backend_id: "storage-a".to_owned(),
+                containers: BTreeMap::from([
+                    (
+                        SYSTEM_CONTAINER.to_owned(),
+                        BTreeSet::from([assignment("system")]),
+                    ),
+                    (
+                        "photos".to_owned(),
+                        BTreeSet::from([
+                            assignment("system"),
+                            conditioned_assignment(
+                                "caller",
+                                "account",
+                                "@Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path",
+                            ),
+                        ]),
+                    ),
+                ]),
+            },
+            AccountSnapshot {
+                backend_id: "storage-b".to_owned(),
+                containers: BTreeMap::from([
+                    (
+                        SYSTEM_CONTAINER.to_owned(),
+                        BTreeSet::from([assignment("system")]),
+                    ),
+                    (
+                        "photos".to_owned(),
+                        BTreeSet::from([
+                            assignment("system"),
+                            conditioned_assignment(
+                                "caller",
+                                "account",
+                                "@Resource[Microsoft.Storage/storageAccounts/blobServices/containers/blobs:path",
+                            ),
+                        ]),
+                    ),
+                ]),
+            },
+        ];
+        assert!(evaluate_snapshots(&snapshots, &HashSet::from(["system".to_owned()])).is_err());
+    }
+
+    #[test]
+    fn accepts_path_independent_conditions() {
+        let condition = "(
+            (
+                !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+            )
+            OR
+            (
+                @Environment[UtcNow] DateTimeGreaterThan '2024-01-01T00:00:00Z'
+                AND
+                @Principal[Microsoft.Directory/CustomSecurityAttributes/Id:Project]
+                StringEquals 'alpha'
+                AND
+                @Resource[Microsoft.Storage/storageAccounts/blobServices/containers:name]
+                StringEquals 'photos'
+            )
+        )";
+        let snapshots = [
+            AccountSnapshot {
+                backend_id: "storage-a".to_owned(),
+                containers: BTreeMap::from([
+                    (
+                        SYSTEM_CONTAINER.to_owned(),
+                        BTreeSet::from([assignment("system")]),
+                    ),
+                    (
+                        "photos".to_owned(),
+                        BTreeSet::from([
+                            assignment("system"),
+                            conditioned_assignment("caller", "account", condition),
+                        ]),
+                    ),
+                ]),
+            },
+            AccountSnapshot {
+                backend_id: "storage-b".to_owned(),
+                containers: BTreeMap::from([
+                    (
+                        SYSTEM_CONTAINER.to_owned(),
+                        BTreeSet::from([assignment("system")]),
+                    ),
+                    (
+                        "photos".to_owned(),
+                        BTreeSet::from([
+                            assignment("system"),
+                            conditioned_assignment("caller", "account", condition),
+                        ]),
+                    ),
+                ]),
+            },
+        ];
+        evaluate_snapshots(&snapshots, &HashSet::from(["system".to_owned()]))
+            .expect("path-independent condition");
+    }
+
+    #[test]
+    fn classifies_path_conditions_case_insensitively_after_normalization() {
+        let condition = normalize_condition(Some(
+            "(
+                (
+                    !(ActionMatches{'Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read'})
+                )
+                OR
+                (
+                    @ReSoUrCe[ Microsoft.Storage/storageAccounts/blobServices/containers/blobs : path ]
+                    StringLike '/photos/private/*'
+                )
+            )",
+        ));
+        assert_eq!(
+            classify_condition_path_dependency(&condition),
+            ConditionPathDependency::PathDependent
+        );
+    }
+
+    #[test]
+    fn dedupes_duplicate_assignment_loads_and_preserves_direct_and_inherited_fingerprints() {
+        let account_scope =
+            "/subscriptions/sub/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/a";
+        let container_scope = container_scope(account_scope, "photos");
+        let inherited = ArmRoleAssignment {
+            id: "/subscriptions/sub/providers/Microsoft.Authorization/roleAssignments/shared"
+                .to_owned(),
+            properties: ArmRoleAssignmentProperties {
+                role_definition_id:
+                    "/providers/Microsoft.Authorization/roleDefinitions/11111111-1111-1111-1111-111111111111"
+                        .to_owned(),
+                principal_id: "caller".to_owned(),
+                scope: Some(account_scope.to_owned()),
+                condition: None,
+                condition_version: None,
+            },
+        };
+        let direct = ArmRoleAssignment {
+            id: "/subscriptions/sub/providers/Microsoft.Authorization/roleAssignments/direct"
+                .to_owned(),
+            properties: ArmRoleAssignmentProperties {
+                role_definition_id:
+                    "/providers/Microsoft.Authorization/roleDefinitions/11111111-1111-1111-1111-111111111111"
+                        .to_owned(),
+                principal_id: "caller".to_owned(),
+                scope: Some(container_scope.clone()),
+                condition: None,
+                condition_version: None,
+            },
+        };
+        let assignments =
+            dedupe_assignments(vec![inherited.clone(), inherited, direct.clone(), direct]);
+        assert_eq!(assignments.len(), 2);
+        let fingerprints = assignments
+            .into_iter()
+            .map(|assignment| {
+                assignment_fingerprint(
+                    &assignment,
+                    account_scope,
+                    &container_scope,
+                    BTreeSet::from([BLOB_DATA_OPERATIONS[0].to_owned()]),
+                )
+                .expect("fingerprint")
+                .expect("effective assignment")
+                .scope_kind
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            fingerprints,
+            BTreeSet::from(["account".to_owned(), "container".to_owned()])
+        );
     }
 }

@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::Result;
 use clap::Parser;
@@ -25,22 +26,25 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let config = GatewayConfig::load(&cli.config)?;
     let authenticator = config.load_authenticator()?;
-    let signed_ring = config.load_ring()?;
-    let commit_service = config.load_commit_service(&signed_ring)?;
+    let signed_ring = Arc::new(config.load_ring()?);
+    let topology = config.load_topology_validator(signed_ring.as_ref())?;
+    let topology_report = topology.validate().await?;
+    let commit_service = config.load_commit_service(signed_ring.clone())?;
     commit_service.validate_control_plane().await?;
     let read_service = commit_service.read_service();
     let state = AppState {
         authenticator,
         logical_account: config.logical_account.clone(),
-        ring: std::sync::Arc::new(signed_ring.document),
-        commit_service: Some(std::sync::Arc::new(commit_service)),
-        read_service: Some(std::sync::Arc::new(read_service)),
+        ring: signed_ring,
+        commit_service: Some(Arc::new(commit_service)),
+        read_service: Some(Arc::new(read_service)),
     };
     let listener = tokio::net::TcpListener::bind(config.listen_address).await?;
     info!(
         address = %config.listen_address,
         version = env!("CARGO_PKG_VERSION"),
         ring_version = state.ring.ring_version,
+        storage_regions = topology_report.accounts.len(),
         "Overmesh gateway started"
     );
 

@@ -1,7 +1,8 @@
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use overmesh_gateway::resource::LogicalBlobId;
 use overmesh_reconciler::{
     config::ReconcilerConfig,
     engine::{ReconcilerEngine, ReconcilerOptions, verify_reconciliation_record},
@@ -50,6 +51,11 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let runtime = ReconcilerConfig::load(&cli.config)?.build()?;
+    let topology_report = runtime.topology_validator.validate().await?;
+    info!(
+        storage_regions = topology_report.accounts.len(),
+        "validated Storage Account Ring topology"
+    );
     if let Command::VerifyRecord { path } = &cli.command {
         let payload = verify_reconciliation_record(
             &std::fs::read(path)?,
@@ -64,12 +70,9 @@ async fn main() -> Result<()> {
     let history_compaction_max_versions_per_cycle =
         runtime.history_compaction_max_versions_per_cycle;
     let head_discovery_batch_size = runtime.head_discovery_batch_size;
-    let head_discovery_cursor_path = runtime.head_discovery_cursor_path;
     let staged_block_gc_max_records_per_cycle = runtime.staged_block_gc_max_records_per_cycle;
-    let staged_block_metadata_cursor_path = runtime.staged_block_metadata_cursor_path;
-    let staged_block_marker_cursor_path = runtime.staged_block_marker_cursor_path;
     let engine = ReconcilerEngine::new(
-        Arc::new(runtime.ring.document),
+        runtime.ring.clone(),
         runtime.backends,
         runtime.signer,
         runtime.token_provider,
@@ -78,10 +81,7 @@ async fn main() -> Result<()> {
             physical_collection_delay,
             history_compaction_max_versions_per_cycle,
             head_discovery_batch_size,
-            head_discovery_cursor_path,
             staged_block_gc_max_records_per_cycle,
-            staged_block_metadata_cursor_path,
-            staged_block_marker_cursor_path,
         },
     );
     match cli.command {
@@ -109,9 +109,13 @@ async fn main() -> Result<()> {
             blob,
             source_replica,
         } => {
+            let logical_blob = LogicalBlobId::parse_canonical(&blob)
+                .context("recover --blob must be a canonical logical blob path")?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&engine.recover(&blob, &source_replica).await?)?
+                serde_json::to_string_pretty(
+                    &engine.recover(&logical_blob, &source_replica).await?
+                )?
             );
         }
         Command::AuditRbac => {

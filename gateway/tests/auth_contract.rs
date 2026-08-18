@@ -6,7 +6,9 @@ use axum::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
-use overmesh_gateway::{AppState, Authenticator, RingDocument, build_router, ring::RingNode};
+use overmesh_gateway::{
+    AppState, Authenticator, RingDocument, SignedRing, build_router, ring::RingNode,
+};
 use p256::{
     ecdsa::SigningKey,
     pkcs8::{EncodePrivateKey, LineEnding},
@@ -52,6 +54,7 @@ enum AuthenticationCase {
     None,
     SharedKey,
     ValidBearer,
+    ValidBearerWithoutTrailingSlash,
     ValidBearerRs256,
     WrongAudience,
     WrongTenant,
@@ -99,7 +102,6 @@ impl TestIdentity {
                     "kty": "RSA",
                     "use": "sig",
                     "kid": RSA_KEY_ID,
-                    "alg": "RS256",
                     "n": URL_SAFE_NO_PAD.encode(rsa_public_key.n().to_bytes_be()),
                     "e": URL_SAFE_NO_PAD.encode(rsa_public_key.e().to_bytes_be())
                 }
@@ -119,6 +121,7 @@ impl TestIdentity {
         match authentication {
             AuthenticationCase::None | AuthenticationCase::SharedKey => None,
             AuthenticationCase::ValidBearer
+            | AuthenticationCase::ValidBearerWithoutTrailingSlash
             | AuthenticationCase::ValidBearerRs256
             | AuthenticationCase::WrongAudience
             | AuthenticationCase::WrongTenant
@@ -127,10 +130,12 @@ impl TestIdentity {
                     .duration_since(UNIX_EPOCH)
                     .expect("current Unix time")
                     .as_secs();
-                let audience = if matches!(authentication, AuthenticationCase::WrongAudience) {
-                    "https://management.azure.com/"
-                } else {
-                    AUDIENCE
+                let audience = match authentication {
+                    AuthenticationCase::WrongAudience => "https://management.azure.com/",
+                    AuthenticationCase::ValidBearerWithoutTrailingSlash => {
+                        "https://storage.azure.com"
+                    }
+                    _ => AUDIENCE,
                 };
                 let tenant = if matches!(authentication, AuthenticationCase::WrongTenant) {
                     "another-tenant"
@@ -233,7 +238,7 @@ async fn executes_declarative_gateway_authentication_contract() {
     let app = build_router(AppState {
         authenticator: identity.authenticator.clone(),
         logical_account: "test-account".to_owned(),
-        ring: std::sync::Arc::new(test_ring()),
+        ring: std::sync::Arc::new(SignedRing::from_document(test_ring()).expect("ring")),
         commit_service: None,
         read_service: None,
     });
@@ -294,7 +299,7 @@ async fn health_endpoint_does_not_require_client_authentication() {
     let app = build_router(AppState {
         authenticator: identity.authenticator,
         logical_account: "test-account".to_owned(),
-        ring: std::sync::Arc::new(test_ring()),
+        ring: std::sync::Arc::new(SignedRing::from_document(test_ring()).expect("ring")),
         commit_service: None,
         read_service: None,
     });

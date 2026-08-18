@@ -36,7 +36,7 @@ impl AuthenticatedPrincipal {
 #[derive(Clone)]
 pub struct Authenticator {
     issuer: String,
-    audience: String,
+    audiences: Vec<String>,
     tenant_id: String,
     keys: HashMap<String, TrustedKey>,
 }
@@ -56,7 +56,8 @@ struct JwksDocument {
 struct JsonWebKey {
     kty: String,
     kid: String,
-    alg: String,
+    #[serde(default)]
+    alg: Option<String>,
     #[serde(default)]
     crv: Option<String>,
     #[serde(default)]
@@ -90,8 +91,8 @@ impl Authenticator {
         let document: JwksDocument = serde_json::from_str(jwks_json)?;
         let mut keys = HashMap::new();
         for key in document.keys {
-            let (algorithm, decoding_key) = match (key.kty.as_str(), key.alg.as_str()) {
-                ("EC", "ES256") if key.crv.as_deref() == Some("P-256") => {
+            let (algorithm, decoding_key) = match (key.kty.as_str(), key.alg.as_deref()) {
+                ("EC", Some("ES256") | None) if key.crv.as_deref() == Some("P-256") => {
                     let x = key
                         .x
                         .as_deref()
@@ -102,7 +103,7 @@ impl Authenticator {
                         .ok_or_else(|| anyhow::anyhow!("EC JWK {} is missing y", key.kid))?;
                     (Algorithm::ES256, DecodingKey::from_ec_components(x, y)?)
                 }
-                ("RSA", "RS256") => {
+                ("RSA", Some("RS256") | None) => {
                     let modulus = key
                         .n
                         .as_deref()
@@ -121,7 +122,7 @@ impl Authenticator {
                         "unsupported JWK {} with type {} and algorithm {}",
                         key.kid,
                         key.kty,
-                        key.alg
+                        key.alg.as_deref().unwrap_or("<unspecified>")
                     );
                 }
             };
@@ -142,9 +143,19 @@ impl Authenticator {
             anyhow::bail!("JWKS must contain at least one supported key");
         }
 
+        let audience = audience.into();
+        let audiences = if audience.trim_end_matches('/') == "https://storage.azure.com" {
+            vec![
+                "https://storage.azure.com/".to_owned(),
+                "https://storage.azure.com".to_owned(),
+            ]
+        } else {
+            vec![audience]
+        };
+
         Ok(Self {
             issuer: issuer.into(),
-            audience: audience.into(),
+            audiences,
             tenant_id: tenant_id.into(),
             keys,
         })
@@ -200,7 +211,7 @@ impl Authenticator {
         }
 
         let mut validation = Validation::new(trusted_key.algorithm);
-        validation.set_audience(&[self.audience.as_str()]);
+        validation.set_audience(&self.audiences);
         validation.set_issuer(&[self.issuer.as_str()]);
         validation.validate_exp = true;
         validation.validate_nbf = true;

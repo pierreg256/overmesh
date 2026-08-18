@@ -40,9 +40,9 @@ impl ReconcilerEngine {
             ),
             "repaired target did not validate as the authoritative committed version"
         );
-        let blob = source.head.signed.payload.blob.clone();
+        let logical_blob = &source.head.logical_blob;
         self.write_audit(
-            Some(&blob),
+            Some(logical_blob),
             head_object,
             match health_before {
                 HealthState::Drifted => ReconciliationClassification::Drifted,
@@ -56,13 +56,13 @@ impl ReconcilerEngine {
         )
         .await?;
         info!(
-            blob,
+            blob = logical_blob.canonical(),
             source = source_backend.id(),
             target = target_backend.id(),
             "replica repaired"
         );
         Ok(BlobReport {
-            blob: Some(blob),
+            blob: Some(logical_blob.canonical().to_owned()),
             head_object: head_object.to_owned(),
             health_before,
             health_after: HealthState::Healthy,
@@ -75,15 +75,16 @@ impl ReconcilerEngine {
 
     pub(super) async fn quarantine(
         &self,
-        blob: Option<String>,
+        blob: Option<&LogicalBlobId>,
         head_object: &str,
         reason: String,
         token: &ControlToken,
     ) -> Result<BlobReport> {
         let path_hash = head_hash(head_object)?;
+        let blob_string = blob.map(|logical_blob| logical_blob.canonical().to_owned());
         let record = self
             .signed_record(
-                blob.as_deref(),
+                blob,
                 head_object,
                 ReconciliationClassification::Tampered,
                 ReconciliationRecordAction::Quarantined,
@@ -94,7 +95,7 @@ impl ReconcilerEngine {
             .await?;
         let bytes = record.canonical_bytes()?;
         let quarantine_object = format!("{QUARANTINE_PREFIX}{path_hash}.json");
-        for backend in self.target_backends(blob.as_deref())? {
+        for backend in self.target_backends(blob)? {
             put_current_quarantine(
                 backend.as_ref(),
                 &quarantine_object,
@@ -105,7 +106,7 @@ impl ReconcilerEngine {
             .await?;
         }
         self.write_audit(
-            blob.as_deref(),
+            blob,
             head_object,
             ReconciliationClassification::Tampered,
             ReconciliationRecordAction::Quarantined,
@@ -115,9 +116,9 @@ impl ReconcilerEngine {
             token,
         )
         .await?;
-        error!(blob = ?blob, reason, "blob quarantined");
+        error!(blob = ?blob_string, reason, "blob quarantined");
         Ok(BlobReport {
-            blob,
+            blob: blob_string,
             head_object: head_object.to_owned(),
             health_before: HealthState::Tampered,
             health_after: HealthState::Quarantined,
@@ -184,7 +185,7 @@ impl ReconcilerEngine {
         target: &dyn ReplicaBackend,
         token: &ControlToken,
     ) -> Result<()> {
-        let path_hash = logical_path_hash(&source.head.signed.payload.blob);
+        let path_hash = source.head.logical_blob.path_hash();
         let history_key = format!(
             "high-water/{path_hash}/history/{:020}-{}.json",
             source.head.signed.payload.logical_version,
@@ -305,7 +306,7 @@ impl ReconcilerEngine {
     pub(super) async fn load_quarantine(
         &self,
         path_hash: &str,
-        blob: Option<&str>,
+        blob: Option<&LogicalBlobId>,
         discovered_on: &str,
         token: &ControlToken,
     ) -> Result<Option<SignedDocument<ReconciliationRecord>>> {
@@ -364,8 +365,12 @@ impl ReconcilerEngine {
         }
     }
 
-    pub(super) async fn clear_quarantine(&self, blob: &str, token: &ControlToken) -> Result<()> {
-        let object_key = format!("{QUARANTINE_PREFIX}{}.json", logical_path_hash(blob));
+    pub(super) async fn clear_quarantine(
+        &self,
+        blob: &LogicalBlobId,
+        token: &ControlToken,
+    ) -> Result<()> {
+        let object_key = format!("{QUARANTINE_PREFIX}{}.json", blob.path_hash());
         for backend in self.target_backends(Some(blob))? {
             if let Some(value) = backend.control_get_object(&object_key, token).await? {
                 backend

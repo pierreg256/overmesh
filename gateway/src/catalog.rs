@@ -38,7 +38,7 @@ pub fn catalog_key(logical_blob: &LogicalBlobId) -> String {
 }
 
 pub fn catalog_key_from_canonical(canonical: &str) -> Result<String, CatalogError> {
-    Ok(catalog_key(&logical_blob_from_canonical(canonical)?))
+    Ok(catalog_key(&LogicalBlobId::parse_canonical(canonical)?))
 }
 
 pub fn catalog_container_prefix(container: &str) -> String {
@@ -66,6 +66,27 @@ pub fn validate_catalog_entry(
     signer: &dyn ManifestSigner,
 ) -> Result<ValidatedCatalogEntry, CatalogError> {
     let logical_blob = logical_blob_from_catalog_key(logical_account, object_key)?;
+    validate_catalog_entry_for_logical_blob(
+        &logical_blob,
+        object_key,
+        bytes,
+        ring_version,
+        replica_ids,
+        signer,
+    )
+}
+
+pub fn validate_catalog_entry_for_logical_blob(
+    logical_blob: &LogicalBlobId,
+    object_key: &str,
+    bytes: &[u8],
+    ring_version: u64,
+    replica_ids: [&str; 2],
+    signer: &dyn ManifestSigner,
+) -> Result<ValidatedCatalogEntry, CatalogError> {
+    if object_key != catalog_key(logical_blob) {
+        return Err(CatalogError::InvalidPath);
+    }
     let signed_head = SignedDocument::<CommitManifest>::from_bytes(bytes)?;
     if signed_head.canonical_bytes()? != bytes {
         return Err(CatalogError::VerificationFailed);
@@ -91,12 +112,12 @@ pub fn validate_catalog_entry(
         return Err(CatalogError::VerificationFailed);
     }
     match head.state {
-        ManifestState::Committed => validate_committed(head, &logical_blob)?,
+        ManifestState::Committed => validate_committed(head, logical_blob)?,
         ManifestState::Tombstoned => validate_tombstone(head)?,
         ManifestState::Prepared => return Err(CatalogError::VerificationFailed),
     }
     Ok(ValidatedCatalogEntry {
-        logical_blob,
+        logical_blob: logical_blob.clone(),
         signed_head,
     })
 }
@@ -109,25 +130,15 @@ pub fn validate_catalog_entry_for_blob(
     replica_ids: [&str; 2],
     signer: &dyn ManifestSigner,
 ) -> Result<ValidatedCatalogEntry, CatalogError> {
-    let logical_blob = logical_blob_from_canonical(canonical_blob)?;
-    validate_catalog_entry(
-        logical_blob.account(),
+    let logical_blob = LogicalBlobId::parse_canonical(canonical_blob)?;
+    validate_catalog_entry_for_logical_blob(
+        &logical_blob,
         object_key,
         bytes,
         ring_version,
         replica_ids,
         signer,
     )
-}
-
-fn logical_blob_from_canonical(canonical: &str) -> Result<LogicalBlobId, CatalogError> {
-    let encoded_account = canonical
-        .strip_prefix('/')
-        .and_then(|value| value.split_once('/'))
-        .map(|(account, _)| account)
-        .ok_or(CatalogError::InvalidPath)?;
-    let account = percent_decode(encoded_account)?;
-    Ok(LogicalBlobId::from_canonical(&account, canonical)?)
 }
 
 pub fn logical_blob_from_catalog_key(
@@ -230,26 +241,6 @@ fn percent_encode_blob(value: &str) -> String {
         .map(percent_encode)
         .collect::<Vec<_>>()
         .join("/")
-}
-
-fn percent_decode(value: &str) -> Result<String, CatalogError> {
-    let bytes = value.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            let encoded = bytes
-                .get(index + 1..index + 3)
-                .ok_or(CatalogError::InvalidPath)?;
-            let encoded = std::str::from_utf8(encoded).map_err(|_| CatalogError::InvalidPath)?;
-            decoded.push(u8::from_str_radix(encoded, 16).map_err(|_| CatalogError::InvalidPath)?);
-            index += 3;
-        } else {
-            decoded.push(bytes[index]);
-            index += 1;
-        }
-    }
-    String::from_utf8(decoded).map_err(|_| CatalogError::InvalidPath)
 }
 
 fn valid_hex_digest(value: &str) -> bool {

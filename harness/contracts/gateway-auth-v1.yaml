@@ -97,3 +97,12 @@ cases:
     storageVersion: "2025-11-05"
     expectedStatus: 501
     expectedErrorCode: FeatureNotSupported
+
+  - id: AUTH-012
+    description: The canonical Storage audience without a trailing slash is accepted
+    method: GET
+    path: /container/blob
+    authentication: valid-bearer-without-trailing-slash
+    storageVersion: "2025-11-05"
+    expectedStatus: 501
+    expectedErrorCode: FeatureNotSupported

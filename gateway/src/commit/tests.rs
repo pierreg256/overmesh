@@ -18,7 +18,7 @@ use crate::{
     manifest::LocalTestManifestSigner,
     read::{ReadError, ReadService},
     resource::LogicalBlobId,
-    ring::RingNode,
+    ring::{RingDocument, RingNode, SignedRing},
     upload::spool_body,
 };
 
@@ -42,7 +42,9 @@ struct MemoryState {
     max_control_page_limit: AtomicU64,
     blob_read_auth_calls: AtomicU64,
     blob_write_auth_calls: AtomicU64,
+    caller_data_write_calls: AtomicU64,
     deny_blob_write: AtomicBool,
+    deny_caller_data_write: AtomicBool,
     containers: Mutex<BTreeMap<String, u64>>,
     lease_held: AtomicBool,
     fail_prefix: Mutex<Option<String>>,
@@ -88,6 +90,16 @@ impl MemoryBackend {
 
     fn deny_blob_write(&self, denied: bool) {
         self.state.deny_blob_write.store(denied, Ordering::SeqCst);
+    }
+
+    fn deny_caller_data_write(&self, denied: bool) {
+        self.state
+            .deny_caller_data_write
+            .store(denied, Ordering::SeqCst);
+    }
+
+    fn caller_data_write_count(&self) -> u64 {
+        self.state.caller_data_write_calls.load(Ordering::SeqCst)
     }
 
     fn add_container(&self, name: &str, last_modified_unix_ms: u64) {
@@ -336,6 +348,15 @@ impl ReplicaBackend for MemoryBackend {
         condition: PutCondition,
         _caller_token: &CallerToken,
     ) -> Result<PutResult, BackendError> {
+        self.state
+            .caller_data_write_calls
+            .fetch_add(1, Ordering::SeqCst);
+        if self.state.deny_caller_data_write.load(Ordering::SeqCst) {
+            return Err(BackendError::Http {
+                status: StatusCode::FORBIDDEN,
+                message: "caller data write denied".to_owned(),
+            });
+        }
         self.add_container(container, 1);
         self.put(
             &format!("data/{container}/{object_key}"),
@@ -600,33 +621,35 @@ fn read_fixture(
 ) {
     let storage_a = Arc::new(MemoryBackend::new("storage-a"));
     let storage_b = Arc::new(MemoryBackend::new("storage-b"));
-    let ring = Arc::new(RingDocument {
-        api_version: "overmesh.io/v1".to_owned(),
-        ring_version: 1,
-        root: true,
-        parent_ring_version: None,
-        parent_ring_hash: None,
-        replication_factor: 2,
-        created_at: "2026-08-15T10:00:00Z".to_owned(),
-        signed_at_unix_ms: 1_776_000_000_000,
-        signing_key_id: "test-ring-key-01".to_owned(),
-        ring_hash: "not-used-by-read-tests".to_owned(),
-        nodes: vec![
-            RingNode {
-                id: "storage-a".to_owned(),
-                region: "local-a".to_owned(),
-                weight: 100,
-            },
-            RingNode {
-                id: "storage-b".to_owned(),
-                region: "local-b".to_owned(),
-                weight: 100,
-            },
-        ],
-    });
-    let placed = ring
-        .replicas_for(blob(path).canonical())
-        .expect("read placement");
+    let ring = Arc::new(
+        SignedRing::from_document(RingDocument {
+            api_version: "overmesh.io/v1".to_owned(),
+            ring_version: 1,
+            root: true,
+            parent_ring_version: None,
+            parent_ring_hash: None,
+            replication_factor: 2,
+            created_at: "2026-08-15T10:00:00Z".to_owned(),
+            signed_at_unix_ms: 1_776_000_000_000,
+            signing_key_id: "test-ring-key-01".to_owned(),
+            ring_hash: "not-used-by-read-tests".to_owned(),
+            nodes: vec![
+                RingNode {
+                    id: "storage-a".to_owned(),
+                    region: "local-a".to_owned(),
+                    weight: 100,
+                },
+                RingNode {
+                    id: "storage-b".to_owned(),
+                    region: "local-b".to_owned(),
+                    weight: 100,
+                },
+            ],
+        })
+        .expect("ring"),
+    );
+    let logical_blob = blob(path);
+    let placed = ring.replicas_for(&logical_blob).expect("read placement");
     let primary = if placed[0].id == "storage-a" {
         storage_a.clone()
     } else {
@@ -711,7 +734,7 @@ fn service_fixture_parts_with_staging_lifetime(
         ("storage-b".to_owned(), storage_b.clone() as SharedBackend),
     ]);
     let service = Arc::new(CommitService::new_with_options(
-        Arc::new(ring),
+        Arc::new(SignedRing::from_document(ring).expect("ring")),
         backends,
         signer,
         Arc::new(TestControlTokenProvider),
@@ -1089,7 +1112,7 @@ async fn put_block_list_retry_recovers_a_w1_head_publication() {
         listing::{BlobListEntry, ListRequest},
     };
 
-    let (service, _storage_a, storage_b) = service_fixture_parts();
+    let (service, storage_a, storage_b) = service_fixture_parts();
     let blocks = service.block_service();
     let logical_blob = blob("/container/w1-block-list");
     let content = spool_body(Body::from("w1 content"), 4)
@@ -1125,6 +1148,26 @@ async fn put_block_list_retry_recovers_a_w1_head_publication() {
             .is_err()
     );
     storage_b.clear_failure();
+    let catalog_key = crate::catalog::catalog_key(&logical_blob);
+    storage_b.remove_object(&catalog_key);
+    storage_b.fail_on_prefix(&catalog_key);
+    assert!(
+        blocks
+            .put_block_list(
+                &logical_blob,
+                &principal(),
+                "w1-upload",
+                "w1-upload",
+                &selections,
+                LogicalCondition::None,
+            )
+            .await
+            .is_err()
+    );
+    let head_key = format!("heads/{}.json", logical_blob.path_hash());
+    assert!(storage_a.object(&head_key).is_some());
+    assert!(storage_b.object(&head_key).is_none());
+    storage_b.clear_failure();
     storage_b.deny_blob_write(true);
     assert!(matches!(
         blocks
@@ -1144,11 +1187,7 @@ async fn put_block_list_retry_recovers_a_w1_head_publication() {
             }
         )))
     ));
-    assert!(
-        storage_b
-            .object(&format!("heads/{}.json", logical_blob.path_hash()))
-            .is_none()
-    );
+    assert!(storage_b.object(&head_key).is_none());
     storage_b.deny_blob_write(false);
     assert!(
         blocks
@@ -1178,6 +1217,40 @@ async fn put_block_list_retry_recovers_a_w1_head_publication() {
         page.entries.as_slice(),
         [BlobListEntry::Blob(blob)] if blob.name == "w1-block-list"
     ));
+}
+
+#[tokio::test]
+async fn retry_does_not_spread_an_invalid_one_sided_commit_manifest() {
+    let (service, primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/invalid-one-sided-manifest");
+    let write_id = "invalid-one-sided-manifest";
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    let digest = content
+        .content_sha256
+        .strip_prefix("sha256:")
+        .expect("sha256 digest");
+    let prepared_key = format!(
+        "objects/{}/versions/{}/{digest}/prepared.json",
+        logical_blob.path_hash(),
+        stable_component(write_id)
+    );
+    primary
+        .put(&prepared_key, b"{}".to_vec(), PutCondition::IfAbsent)
+        .expect("tampered one-sided manifest");
+
+    assert!(
+        service
+            .put_blob(
+                &logical_blob,
+                &principal(),
+                write_id,
+                &content,
+                LogicalCondition::None,
+            )
+            .await
+            .is_err()
+    );
+    assert!(secondary.object(&prepared_key).is_none());
 }
 
 #[tokio::test]
@@ -1458,7 +1531,6 @@ async fn logical_listing_hides_stages_and_paginates_with_signed_markers() {
         ("/container/a", "list-a"),
         ("/container/dir/b", "list-b"),
         ("/container/dir/c", "list-c"),
-        ("/container/.overmesh/internal", "list-internal"),
     ] {
         let content = spool_body(Body::from(path.to_owned()), 4)
             .await
@@ -1619,7 +1691,7 @@ async fn listing_uses_bounded_catalog_pages_without_blob_read_probes() {
             .values()
             .sum::<u64>()
             - primary_gets_before,
-        3
+        6
     );
     assert_eq!(
         secondary
@@ -1630,7 +1702,7 @@ async fn listing_uses_bounded_catalog_pages_without_blob_read_probes() {
             .values()
             .sum::<u64>()
             - secondary_gets_before,
-        3
+        6
     );
 }
 
@@ -2003,6 +2075,9 @@ async fn retry_repairs_one_sided_catalog_publication_with_exact_signed_bytes() {
             .await,
         Err(CommitError::Ambiguous)
     ));
+    let head_key = format!("heads/{}.json", logical_blob.path_hash());
+    assert!(primary.object(&head_key).is_none());
+    assert!(secondary.object(&head_key).is_none());
     secondary.clear_failure();
     let retry = service
         .put_blob(
@@ -2014,17 +2089,135 @@ async fn retry_repairs_one_sided_catalog_publication_with_exact_signed_bytes() {
         )
         .await
         .expect("retry");
-    assert!(retry.idempotent_replay);
+    assert!(!retry.idempotent_replay);
     let primary_catalog = primary.object(&key).expect("primary catalog");
     let secondary_catalog = secondary.object(&key).expect("secondary catalog");
     assert_eq!(primary_catalog.bytes, secondary_catalog.bytes);
     assert_eq!(
         primary_catalog.bytes,
-        primary
-            .object(&format!("heads/{}.json", logical_blob.path_hash()))
-            .expect("head")
-            .bytes
+        primary.object(&head_key).expect("head").bytes
     );
+}
+
+#[tokio::test]
+async fn listing_hides_a_catalog_generation_until_both_heads_publish() {
+    use crate::{catalog::catalog_key, listing::ListRequest};
+
+    let (service, primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/catalog-before-head");
+    let key = catalog_key(&logical_blob);
+    let head_key = format!("heads/{}.json", logical_blob.path_hash());
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    secondary.fail_on_prefix(&head_key);
+
+    assert!(matches!(
+        service
+            .put_blob(
+                &logical_blob,
+                &principal(),
+                "catalog-before-head",
+                &content,
+                LogicalCondition::None,
+            )
+            .await,
+        Err(CommitError::Ambiguous)
+    ));
+    assert_eq!(
+        primary.object(&key).expect("primary catalog").bytes,
+        secondary.object(&key).expect("secondary catalog").bytes
+    );
+    assert!(primary.object(&head_key).is_some());
+    assert!(secondary.object(&head_key).is_none());
+
+    let page = service
+        .listing_service("test-account")
+        .list_blobs(
+            "container",
+            &ListRequest::new(String::new(), String::new(), None, Some(10), Vec::new())
+                .expect("request"),
+            &principal(),
+        )
+        .await
+        .expect("listing");
+    assert!(page.entries.is_empty());
+}
+
+#[tokio::test]
+async fn delete_retry_repairs_catalog_before_publishing_tombstone_heads() {
+    use crate::{
+        catalog::catalog_key,
+        listing::{BlobListEntry, ListRequest},
+    };
+
+    let (service, primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/delete-catalog-retry");
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "delete-catalog-base",
+            &content,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("commit");
+    let key = catalog_key(&logical_blob);
+    let old_head = primary
+        .object(&format!("heads/{}.json", logical_blob.path_hash()))
+        .expect("old head")
+        .bytes;
+    secondary.fail_on_prefix(&key);
+
+    assert!(matches!(
+        service
+            .delete_blob(
+                &logical_blob,
+                &principal(),
+                "delete-catalog-retry",
+                LogicalCondition::None,
+            )
+            .await,
+        Err(CommitError::Ambiguous)
+    ));
+    let head_key = format!("heads/{}.json", logical_blob.path_hash());
+    assert_eq!(
+        primary.object(&head_key).expect("primary head").bytes,
+        old_head
+    );
+    assert_eq!(
+        secondary.object(&head_key).expect("secondary head").bytes,
+        old_head
+    );
+
+    secondary.clear_failure();
+    let result = service
+        .delete_blob(
+            &logical_blob,
+            &principal(),
+            "delete-catalog-retry",
+            LogicalCondition::None,
+        )
+        .await
+        .expect("retry");
+    assert!(!result.idempotent_replay);
+    assert_eq!(
+        primary.object(&key).expect("primary catalog").bytes,
+        secondary.object(&key).expect("secondary catalog").bytes
+    );
+    let page = service
+        .listing_service("test-account")
+        .list_blobs(
+            "container",
+            &ListRequest::new(String::new(), String::new(), None, Some(10), Vec::new())
+                .expect("request"),
+            &principal(),
+        )
+        .await
+        .expect("listing");
+    assert!(!page.entries.iter().any(
+        |entry| matches!(entry, BlobListEntry::Blob(blob) if blob.name == logical_blob.blob())
+    ));
 }
 
 #[tokio::test]
@@ -2115,6 +2308,130 @@ async fn w1_put_blob_recovery_reauthorizes_before_repairing_the_head() {
         }))
     ));
     assert!(secondary.object(&head_key).is_none());
+}
+
+#[tokio::test]
+async fn put_blob_returns_forbidden_after_attempting_the_caller_data_write() {
+    let (service, primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/direct-write-denied");
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    let before = primary.caller_data_write_count() + secondary.caller_data_write_count();
+    primary.deny_caller_data_write(true);
+    secondary.deny_caller_data_write(true);
+
+    assert!(matches!(
+        service
+            .put_blob(
+                &logical_blob,
+                &principal(),
+                "direct-write-denied",
+                &content,
+                LogicalCondition::None,
+            )
+            .await,
+        Err(CommitError::Backend(BackendError::Http {
+            status: StatusCode::FORBIDDEN,
+            ..
+        }))
+    ));
+    assert!(primary.caller_data_write_count() + secondary.caller_data_write_count() > before);
+}
+
+#[tokio::test]
+async fn put_block_returns_forbidden_after_attempting_the_staged_content_write() {
+    let (service, primary, secondary) = service_fixture_parts();
+    let blocks = service.block_service();
+    let logical_blob = blob("/container/staged-write-denied");
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    let before = primary.caller_data_write_count() + secondary.caller_data_write_count();
+    primary.deny_caller_data_write(true);
+    secondary.deny_caller_data_write(true);
+
+    assert!(matches!(
+        blocks
+            .put_block(
+                &logical_blob,
+                &principal(),
+                "upload",
+                "stage",
+                "YQ==",
+                &content,
+            )
+            .await,
+        Err(crate::block::BlockError::Commit(CommitError::Backend(
+            BackendError::Http {
+                status: StatusCode::FORBIDDEN,
+                ..
+            }
+        )))
+    ));
+    assert!(primary.caller_data_write_count() + secondary.caller_data_write_count() > before);
+}
+
+#[tokio::test]
+async fn put_block_list_returns_forbidden_after_loading_uncommitted_blocks() {
+    use crate::block::{BlockListType, BlockSelection, BlockSelectionKind};
+
+    let (service, primary, secondary) = service_fixture_parts();
+    let blocks = service.block_service();
+    let logical_blob = blob("/container/block-list-write-denied");
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    blocks
+        .put_block(
+            &logical_blob,
+            &principal(),
+            "upload",
+            "stage",
+            "YQ==",
+            &content,
+        )
+        .await
+        .expect("stage");
+    let selections = [BlockSelection {
+        kind: BlockSelectionKind::Latest,
+        block_id: "YQ==".to_owned(),
+    }];
+    primary.deny_caller_data_write(true);
+    secondary.deny_caller_data_write(true);
+
+    let staged = blocks
+        .get_block_list(
+            &logical_blob,
+            &principal(),
+            Some("upload"),
+            BlockListType::Uncommitted,
+        )
+        .await
+        .expect("uncommitted list");
+    assert_eq!(
+        staged
+            .uncommitted
+            .iter()
+            .map(|block| block.block_id.as_str())
+            .collect::<Vec<_>>(),
+        ["YQ=="]
+    );
+
+    let before = primary.caller_data_write_count() + secondary.caller_data_write_count();
+    assert!(matches!(
+        blocks
+            .put_block_list(
+                &logical_blob,
+                &principal(),
+                "upload",
+                "commit",
+                &selections,
+                LogicalCondition::None,
+            )
+            .await,
+        Err(crate::block::BlockError::Commit(CommitError::Backend(
+            BackendError::Http {
+                status: StatusCode::FORBIDDEN,
+                ..
+            }
+        )))
+    ));
+    assert!(primary.caller_data_write_count() + secondary.caller_data_write_count() > before);
 }
 
 #[tokio::test]
@@ -2924,7 +3241,7 @@ async fn verifies_an_existing_immutable_object_only_after_a_create_conflict() {
         )
         .expect("seed content");
 
-    put_file_idempotent(
+    caller_put_file_idempotent(
         &backend,
         "container",
         "existing",

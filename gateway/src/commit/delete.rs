@@ -69,6 +69,7 @@ impl CommitCoordinator {
         };
         if current.signed.payload.state == ManifestState::Tombstoned {
             if current.signed.payload.write_id == write_id {
+                // Listing exposes this tombstone only after both heads contain these exact bytes.
                 publish_catalog_current(
                     self.primary.as_ref(),
                     self.secondary.as_ref(),
@@ -112,7 +113,7 @@ impl CommitCoordinator {
         );
         let prepared_manifest_key = format!("{version_prefix}/prepared.json");
         let committed_manifest_key = format!("{version_prefix}/committed.json");
-        let prepared_payload = CommitManifest {
+        let mut prepared_payload = CommitManifest {
             blob: logical_blob.canonical().to_owned(),
             caller: principal.identity(),
             write_id: write_id.to_owned(),
@@ -133,27 +134,46 @@ impl CommitCoordinator {
             prepared_replicas: Vec::new(),
             signing_key_id: self.signer.key_id().to_owned(),
         };
-        let signed_prepared = SignedDocument::create(
-            prepared_payload,
-            SignatureDomain::CommitManifest,
-            self.signer.as_ref(),
-        )
-        .await?;
-        let prepared_bytes = signed_prepared.canonical_bytes()?;
-        tokio::try_join!(
-            put_bytes_idempotent(
+        let (signed_prepared, prepared_bytes) = if let Some((signed, bytes)) =
+            load_or_repair_commit_manifest(
                 self.primary.as_ref(),
-                &prepared_manifest_key,
-                prepared_bytes.clone(),
-                control_token
-            ),
-            put_bytes_idempotent(
                 self.secondary.as_ref(),
                 &prepared_manifest_key,
-                prepared_bytes.clone(),
-                control_token
+                control_token,
+                self.signer.as_ref(),
             )
-        )?;
+            .await?
+        {
+            prepared_payload.committed_at_unix_ms = signed.payload.committed_at_unix_ms;
+            prepared_payload.deleted_at_unix_ms = signed.payload.deleted_at_unix_ms;
+            if signed.payload != prepared_payload {
+                return Err(CommitError::IdempotencyConflict);
+            }
+            (signed, bytes)
+        } else {
+            let signed = SignedDocument::create(
+                prepared_payload,
+                SignatureDomain::CommitManifest,
+                self.signer.as_ref(),
+            )
+            .await?;
+            let bytes = signed.canonical_bytes()?;
+            tokio::try_join!(
+                control_put_bytes_idempotent(
+                    self.primary.as_ref(),
+                    &prepared_manifest_key,
+                    bytes.clone(),
+                    control_token
+                ),
+                control_put_bytes_idempotent(
+                    self.secondary.as_ref(),
+                    &prepared_manifest_key,
+                    bytes.clone(),
+                    control_token
+                )
+            )?;
+            (signed, bytes)
+        };
         verify_identical_objects(
             self.primary.as_ref(),
             self.secondary.as_ref(),
@@ -162,6 +182,10 @@ impl CommitCoordinator {
             control_token,
         )
         .await?;
+        let deleted_at_unix_ms = signed_prepared
+            .payload
+            .deleted_at_unix_ms
+            .ok_or(CommitError::VerificationFailed)?;
 
         let tombstone_payload = CommitManifest {
             state: ManifestState::Tombstoned,
@@ -169,27 +193,55 @@ impl CommitCoordinator {
             committed_at_unix_ms: deleted_at_unix_ms,
             ..signed_prepared.payload
         };
-        let signed_tombstone = SignedDocument::create(
-            tombstone_payload,
-            SignatureDomain::CommitManifest,
+        let (signed_tombstone, tombstone_bytes) = if let Some((signed, bytes)) =
+            load_or_repair_commit_manifest(
+                self.primary.as_ref(),
+                self.secondary.as_ref(),
+                &committed_manifest_key,
+                control_token,
+                self.signer.as_ref(),
+            )
+            .await?
+        {
+            if signed.payload != tombstone_payload {
+                return Err(CommitError::IdempotencyConflict);
+            }
+            (signed, bytes)
+        } else {
+            let signed = SignedDocument::create(
+                tombstone_payload,
+                SignatureDomain::CommitManifest,
+                self.signer.as_ref(),
+            )
+            .await?;
+            let bytes = signed.canonical_bytes()?;
+            tokio::try_join!(
+                control_put_bytes_idempotent(
+                    self.primary.as_ref(),
+                    &committed_manifest_key,
+                    bytes.clone(),
+                    control_token
+                ),
+                control_put_bytes_idempotent(
+                    self.secondary.as_ref(),
+                    &committed_manifest_key,
+                    bytes.clone(),
+                    control_token
+                )
+            )?;
+            (signed, bytes)
+        };
+
+        publish_catalog_current(
+            self.primary.as_ref(),
+            self.secondary.as_ref(),
+            logical_blob,
+            &signed_tombstone,
+            &tombstone_bytes,
+            control_token,
             self.signer.as_ref(),
         )
         .await?;
-        let tombstone_bytes = signed_tombstone.canonical_bytes()?;
-        tokio::try_join!(
-            put_bytes_idempotent(
-                self.primary.as_ref(),
-                &committed_manifest_key,
-                tombstone_bytes.clone(),
-                control_token
-            ),
-            put_bytes_idempotent(
-                self.secondary.as_ref(),
-                &committed_manifest_key,
-                tombstone_bytes.clone(),
-                control_token
-            )
-        )?;
 
         let (primary_publish, secondary_publish) = tokio::join!(
             self.primary.control_put_bytes(
@@ -235,16 +287,6 @@ impl CommitCoordinator {
             self.primary.as_ref(),
             self.secondary.as_ref(),
             &path_hash,
-            &signed_tombstone,
-            &tombstone_bytes,
-            control_token,
-            self.signer.as_ref(),
-        )
-        .await?;
-        publish_catalog_current(
-            self.primary.as_ref(),
-            self.secondary.as_ref(),
-            logical_blob,
             &signed_tombstone,
             &tombstone_bytes,
             control_token,

@@ -1,7 +1,7 @@
 use super::*;
 use crate::engine::staging::{
     STAGED_BLOCK_GC_PREFIX, STAGED_BLOCK_PREFIX, STAGED_MARKER_CURSOR_API_VERSION,
-    STAGED_METADATA_CURSOR_API_VERSION,
+    STAGED_MARKER_CURSOR_KEY, STAGED_METADATA_CURSOR_API_VERSION, STAGED_METADATA_CURSOR_KEY,
 };
 use overmesh_gateway::{
     identity::CallerIdentity,
@@ -12,26 +12,15 @@ struct StageFixture {
     engine: ReconcilerEngine,
     first: TestBackend,
     second: TestBackend,
+    logical_blob: LogicalBlobId,
     metadata_key: String,
     container: String,
     content_key: String,
     metadata_bytes: Vec<u8>,
 }
 
-impl Drop for StageFixture {
-    fn drop(&mut self) {
-        for path in [
-            &self.engine.head_discovery_cursor_path,
-            &self.engine.staged_block_metadata_cursor_path,
-            &self.engine.staged_block_marker_cursor_path,
-        ] {
-            let _ = fs::remove_file(path);
-        }
-    }
-}
-
 async fn stage_fixture(expires_at_unix_ms: u64) -> StageFixture {
-    let ring = Arc::new(test_ring(&["storage-a", "storage-b"]));
+    let ring = signed_test_ring(&["storage-a", "storage-b"]);
     let first = TestBackend::new("storage-a");
     let second = TestBackend::new("storage-b");
     let backends = HashMap::from([
@@ -46,7 +35,6 @@ async fn stage_fixture(expires_at_unix_ms: u64) -> StageFixture {
         )
         .expect("signer"),
     );
-    let cursor_suffix = Uuid::new_v4().simple().to_string();
     let engine = ReconcilerEngine::new(
         ring,
         backends,
@@ -57,22 +45,14 @@ async fn stage_fixture(expires_at_unix_ms: u64) -> StageFixture {
             physical_collection_delay: Duration::ZERO,
             history_compaction_max_versions_per_cycle: 64,
             head_discovery_batch_size: 64,
-            head_discovery_cursor_path: PathBuf::from(format!(
-                "target/staging-head-{cursor_suffix}.json"
-            )),
             staged_block_gc_max_records_per_cycle: 64,
-            staged_block_metadata_cursor_path: PathBuf::from(format!(
-                "target/staging-metadata-{cursor_suffix}.json"
-            )),
-            staged_block_marker_cursor_path: PathBuf::from(format!(
-                "target/staging-marker-{cursor_suffix}.json"
-            )),
         },
     );
     let blob = "/test-account/container/staged";
+    let logical_blob = LogicalBlobId::parse_canonical(blob).expect("logical blob");
     let upload_id = "upload-1";
     let block_id = "YmxvY2stMDAwMQ==";
-    let path_hash = logical_path_hash(blob);
+    let path_hash = logical_blob.path_hash();
     let metadata_key = format!(
         "staged-blocks/{}/{}/{}.json",
         path_hash,
@@ -86,11 +66,11 @@ async fn stage_fixture(expires_at_unix_ms: u64) -> StageFixture {
         stable_component(upload_id)
     );
     let content = b"staged content".to_vec();
-    let replicas = engine.ring.replicas_for(blob).expect("placement");
+    let replicas = engine.ring.replicas_for(&logical_blob).expect("placement");
     let signed = SignedDocument::create(
         StagedBlock {
             api_version: "overmesh.io/staged-block/v1".to_owned(),
-            blob: blob.to_owned(),
+            blob: logical_blob.canonical().to_owned(),
             upload_id: upload_id.to_owned(),
             write_id: upload_id.to_owned(),
             block_id: block_id.to_owned(),
@@ -128,6 +108,7 @@ async fn stage_fixture(expires_at_unix_ms: u64) -> StageFixture {
         engine,
         first,
         second,
+        logical_blob,
         metadata_key,
         container,
         content_key,
@@ -171,10 +152,7 @@ async fn performs_zero_deletes_when_stage_content_is_tampered() {
         .expect("reconcile");
     assert_eq!(fixture.first.delete_calls(), 0);
     assert_eq!(fixture.second.delete_calls(), 0);
-    let quarantine_key = format!(
-        "quarantine/{}.json",
-        logical_path_hash("/test-account/container/staged")
-    );
+    let quarantine_key = format!("quarantine/{}.json", fixture.logical_blob.path_hash());
     assert!(fixture.first.control(&quarantine_key).is_some());
     assert!(fixture.second.control(&quarantine_key).is_some());
 }
@@ -268,7 +246,7 @@ async fn independent_staged_cursors_advance_past_persistent_early_records() {
         .engine
         .discover_staged_page(
             STAGED_BLOCK_PREFIX,
-            &fixture.engine.staged_block_metadata_cursor_path,
+            STAGED_METADATA_CURSOR_KEY,
             STAGED_METADATA_CURSOR_API_VERSION,
             &token,
         )
@@ -277,16 +255,14 @@ async fn independent_staged_cursors_advance_past_persistent_early_records() {
     assert_eq!(first_metadata, ["staged-blocks/000-early.json"]);
     fixture
         .engine
-        .persist_staged_cursor(
-            &fixture.engine.staged_block_metadata_cursor_path,
-            &metadata_cursor,
-        )
+        .persist_cursor(metadata_cursor, &token)
+        .await
         .expect("persist metadata cursor");
     let (second_metadata, _) = fixture
         .engine
         .discover_staged_page(
             STAGED_BLOCK_PREFIX,
-            &fixture.engine.staged_block_metadata_cursor_path,
+            STAGED_METADATA_CURSOR_KEY,
             STAGED_METADATA_CURSOR_API_VERSION,
             &token,
         )
@@ -298,7 +274,7 @@ async fn independent_staged_cursors_advance_past_persistent_early_records() {
         .engine
         .discover_staged_page(
             STAGED_BLOCK_GC_PREFIX,
-            &fixture.engine.staged_block_marker_cursor_path,
+            STAGED_MARKER_CURSOR_KEY,
             STAGED_MARKER_CURSOR_API_VERSION,
             &token,
         )
@@ -307,23 +283,18 @@ async fn independent_staged_cursors_advance_past_persistent_early_records() {
     assert_eq!(first_marker, ["staged-block-gc/000-early.json"]);
     fixture
         .engine
-        .persist_staged_cursor(
-            &fixture.engine.staged_block_marker_cursor_path,
-            &marker_cursor,
-        )
+        .persist_cursor(marker_cursor, &token)
+        .await
         .expect("persist marker cursor");
     let (second_marker, _) = fixture
         .engine
         .discover_staged_page(
             STAGED_BLOCK_GC_PREFIX,
-            &fixture.engine.staged_block_marker_cursor_path,
+            STAGED_MARKER_CURSOR_KEY,
             STAGED_MARKER_CURSOR_API_VERSION,
             &token,
         )
         .await
         .expect("second marker page");
     assert_eq!(second_marker, ["staged-block-gc/zzz-late.json"]);
-
-    let _ = fs::remove_file(&fixture.engine.staged_block_metadata_cursor_path);
-    let _ = fs::remove_file(&fixture.engine.staged_block_marker_cursor_path);
 }

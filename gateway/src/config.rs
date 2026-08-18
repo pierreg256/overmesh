@@ -21,6 +21,10 @@ use crate::{
     identity::{AzureControlTokenProvider, LocalControlTokenProvider, SharedControlTokenProvider},
     manifest::{KeyValidity, KeyVaultManifestSigner, LocalTestManifestSigner, ManifestSigner},
     ring::{SignedRing, TrustedRingKey, TrustedRingPredecessor},
+    topology::{
+        AzureArmStorageTopologyValidator, DisabledStorageTopologyValidator,
+        SharedStorageTopologyValidator, StorageAccountBinding,
+    },
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -34,9 +38,40 @@ pub struct GatewayConfig {
     pub backends: Vec<BackendConfig>,
     pub signing: SigningConfig,
     #[serde(default)]
+    pub topology_validation: TopologyValidationConfig,
+    #[serde(default)]
     pub listing: ListingConfig,
     #[serde(default)]
     pub staged_blocks: StagedBlocksConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TopologyValidationConfig {
+    #[serde(default)]
+    pub provider: TopologyValidationProvider,
+    #[serde(default = "default_management_endpoint")]
+    pub management_endpoint: String,
+    #[serde(default)]
+    pub allow_disabled: bool,
+}
+
+impl Default for TopologyValidationConfig {
+    fn default() -> Self {
+        Self {
+            provider: TopologyValidationProvider::AzureArm,
+            management_endpoint: default_management_endpoint(),
+            allow_disabled: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TopologyValidationProvider {
+    #[default]
+    AzureArm,
+    Disabled,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -88,7 +123,7 @@ pub struct ControlIdentityConfig {
     pub allow_test_token: bool,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ControlIdentityProvider {
     ManagedIdentity,
@@ -248,7 +283,7 @@ impl GatewayConfig {
         )
     }
 
-    pub fn load_commit_service(&self, signed_ring: &SignedRing) -> Result<CommitService> {
+    pub fn load_commit_service(&self, signed_ring: Arc<SignedRing>) -> Result<CommitService> {
         anyhow::ensure!(
             (60..=24 * 60 * 60).contains(&self.listing.continuation_token_lifetime_seconds),
             "listing.continuationTokenLifetimeSeconds must be between 60 and 86400"
@@ -276,7 +311,7 @@ impl GatewayConfig {
         let signer = build_manifest_signer(&self.signing)?;
         let control_tokens = build_control_token_provider(&self.control_identity)?;
         Ok(CommitService::new_with_options(
-            Arc::new(signed_ring.document.clone()),
+            signed_ring,
             backends,
             signer,
             control_tokens,
@@ -290,36 +325,95 @@ impl GatewayConfig {
             },
         ))
     }
+
+    pub fn load_topology_validator(
+        &self,
+        signed_ring: &SignedRing,
+    ) -> Result<SharedStorageTopologyValidator> {
+        match self.topology_validation.provider {
+            TopologyValidationProvider::AzureArm => {
+                let accounts = signed_ring
+                    .document
+                    .nodes
+                    .iter()
+                    .map(|node| {
+                        let backend = self
+                            .backends
+                            .iter()
+                            .find(|backend| backend.id == node.id)
+                            .with_context(|| {
+                                format!("Ring node {} has no backend configuration", node.id)
+                            })?;
+                        Ok(StorageAccountBinding {
+                            backend_id: node.id.clone(),
+                            resource_id: required(
+                                backend.resource_id.clone(),
+                                &format!("backends[{}].resourceId", backend.id),
+                            )?,
+                            expected_region: node.region.clone(),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let credential = build_control_credential(&self.control_identity)?.context(
+                    "Azure ARM topology validation requires managed or workload identity",
+                )?;
+                Ok(Arc::new(AzureArmStorageTopologyValidator::new(
+                    credential,
+                    &self.topology_validation.management_endpoint,
+                    accounts,
+                )?))
+            }
+            TopologyValidationProvider::Disabled => {
+                anyhow::ensure!(
+                    self.topology_validation.allow_disabled
+                        && self.control_identity.provider == ControlIdentityProvider::LocalTest,
+                    "topology validation may be disabled only for an explicitly allowed local test identity"
+                );
+                Ok(Arc::new(DisabledStorageTopologyValidator))
+            }
+        }
+    }
 }
 
 fn build_control_token_provider(
     identity: &ControlIdentityConfig,
 ) -> Result<SharedControlTokenProvider> {
-    let provider: SharedControlTokenProvider = match identity.provider {
-        ControlIdentityProvider::ManagedIdentity => {
-            let credential: Arc<dyn TokenCredential> =
-                ManagedIdentityCredential::new(Some(ManagedIdentityCredentialOptions {
-                    user_assigned_id: identity
-                        .managed_identity_client_id
-                        .clone()
-                        .map(UserAssignedId::ClientId),
-                    ..Default::default()
-                }))?;
-            Arc::new(AzureControlTokenProvider::new(credential))
+    let provider: SharedControlTokenProvider = match build_control_credential(identity)? {
+        Some(credential) => Arc::new(AzureControlTokenProvider::new(credential)),
+        None => {
+            anyhow::ensure!(
+                identity.provider == ControlIdentityProvider::LocalTest,
+                "Azure control identity credential is unavailable"
+            );
+            Arc::new(LocalControlTokenProvider::new(
+                required(
+                    identity.test_token_path.clone(),
+                    "controlIdentity.testTokenPath",
+                )?,
+                identity.allow_test_token,
+            )?)
         }
-        ControlIdentityProvider::WorkloadIdentity => {
-            let credential: Arc<dyn TokenCredential> = WorkloadIdentityCredential::new(None)?;
-            Arc::new(AzureControlTokenProvider::new(credential))
-        }
-        ControlIdentityProvider::LocalTest => Arc::new(LocalControlTokenProvider::new(
-            required(
-                identity.test_token_path.clone(),
-                "controlIdentity.testTokenPath",
-            )?,
-            identity.allow_test_token,
-        )?),
     };
     Ok(provider)
+}
+
+fn build_control_credential(
+    identity: &ControlIdentityConfig,
+) -> Result<Option<Arc<dyn TokenCredential>>> {
+    let credential: Option<Arc<dyn TokenCredential>> = match identity.provider {
+        ControlIdentityProvider::ManagedIdentity => Some(ManagedIdentityCredential::new(Some(
+            ManagedIdentityCredentialOptions {
+                user_assigned_id: identity
+                    .managed_identity_client_id
+                    .clone()
+                    .map(UserAssignedId::ClientId),
+                ..Default::default()
+            },
+        ))?),
+        ControlIdentityProvider::WorkloadIdentity => Some(WorkloadIdentityCredential::new(None)?),
+        ControlIdentityProvider::LocalTest => None,
+    };
+    Ok(credential)
 }
 
 pub fn build_manifest_signer(signing: &SigningConfig) -> Result<Arc<dyn ManifestSigner>> {
@@ -411,6 +505,10 @@ const fn default_continuation_token_lifetime_seconds() -> u64 {
 
 const fn default_staged_block_retention_seconds() -> u64 {
     7 * 24 * 60 * 60
+}
+
+fn default_management_endpoint() -> String {
+    "https://management.azure.com".to_owned()
 }
 
 #[cfg(test)]

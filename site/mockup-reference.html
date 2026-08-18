@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Why Overmesh — Overmesh</title>
+    <meta name="theme-color" content="#0b0b0f" />
+    <link rel="stylesheet" href="mockup.css" />
+  </head>
+
+  <body>
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <defs>
+        <linearGradient id="ramp" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#4fc3ff" />
+          <stop offset="45%" stop-color="#4a5bff" />
+          <stop offset="100%" stop-color="#c43bff" />
+        </linearGradient>
+        <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="2.4" result="b" />
+          <feMerge>
+            <feMergeNode in="b" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        <g id="ring-art">
+          <g class="halo">
+            <circle cx="100" cy="100" r="84" fill="none" stroke="url(#ramp)" stroke-width="8" stroke-dasharray="0.1 5.5" stroke-linecap="round" opacity=".5" />
+            <circle cx="100" cy="100" r="73" fill="none" stroke="url(#ramp)" stroke-width="6" stroke-dasharray="0.1 5" stroke-linecap="round" opacity=".28" />
+          </g>
+          <g class="orbits" filter="url(#glow)" opacity=".95">
+            <ellipse cx="100" cy="100" rx="79" ry="41" fill="none" stroke="url(#ramp)" stroke-width="1.7" transform="rotate(22 100 100)" />
+            <ellipse cx="100" cy="100" rx="79" ry="41" fill="none" stroke="url(#ramp)" stroke-width="1.7" transform="rotate(-38 100 100)" />
+            <ellipse cx="100" cy="100" rx="79" ry="41" fill="none" stroke="url(#ramp)" stroke-width="1.7" transform="rotate(84 100 100)" />
+          </g>
+          <g filter="url(#glow)">
+            <circle cx="100" cy="21" r="5.5" fill="#eaf7ff" />
+            <circle cx="168" cy="61" r="5.5" fill="#dfe6ff" />
+            <circle cx="168" cy="139" r="5.5" fill="#f0dcff" />
+            <circle cx="100" cy="179" r="5.5" fill="#eaf7ff" />
+            <circle cx="32" cy="139" r="5.5" fill="#dfe6ff" />
+            <circle cx="32" cy="61" r="5.5" fill="#eaf7ff" />
+          </g>
+        </g>
+      </defs>
+    </svg>
+
+    <nav class="nav">
+      <a class="nav__brand" href="mockup-landing.html">
+        <svg class="ring" viewBox="0 0 200 200" aria-hidden="true">
+          <use href="#ring-art" />
+        </svg>
+        Overmesh
+      </a>
+      <div class="nav__links">
+        <a href="mockup-reference.html" aria-current="page">Why</a>
+        <a href="#">Specification</a>
+        <a href="#">Compatibility</a>
+        <a href="#">Decisions</a>
+        <a href="#">GitHub</a>
+      </div>
+    </nav>
+
+    <div class="docs">
+      <!-- ================================================================ -->
+      <aside class="rail">
+        <div class="rail__group">
+          <p class="rail__label">Overview</p>
+          <ul>
+            <li><a href="#" aria-current="page">Why Overmesh</a></li>
+            <li><a href="#">Compatibility matrix</a></li>
+          </ul>
+        </div>
+        <div class="rail__group">
+          <p class="rail__label">Specifications</p>
+          <ul>
+            <li><a href="#">Overmesh V1</a></li>
+            <li><a href="#">Development harness</a></li>
+          </ul>
+        </div>
+        <div class="rail__group">
+          <p class="rail__label">Decisions</p>
+          <ul>
+            <li><a href="#">0001 · Identity separation</a></li>
+            <li><a href="#">0002 · Content placement</a></li>
+            <li><a href="#">0003 · Authorization probes</a></li>
+            <li><a href="#">0004 · High-water records</a></li>
+          </ul>
+        </div>
+      </aside>
+
+      <!-- ================================================================ -->
+      <article class="article">
+        <p class="breadcrumb">
+          <a href="#">Docs</a> / <a href="#">Overview</a> / Why Overmesh
+        </p>
+
+        <h1>Why Overmesh</h1>
+
+        <blockquote>
+          No Region Left Behind.<br />
+          No Storage Keys Required.
+        </blockquote>
+
+        <div class="callout">
+          <span class="callout__title"
+            >Status: work in progress — not an input to development</span
+          >
+          <p>
+            This document is a draft. Its arguments are still being formed,
+            several of its figures are estimated rather than measured, and its
+            conclusions may change.
+          </p>
+          <p>
+            It records current thinking about why the project exists. It is
+            <strong>not</strong> a specification, <strong>not</strong> a
+            commitment, and <strong>not</strong> a source of requirements.
+          </p>
+        </div>
+
+        <h2 id="problem">
+          The problem<a class="anchor" href="#problem" aria-label="Link">#</a>
+        </h2>
+
+        <p>
+          Three limits of Azure Storage compound at enterprise scale. Each is a
+          documented product behaviour, not a defect.
+        </p>
+
+        <p>
+          <strong>A storage account has a ceiling.</strong> A standard
+          general-purpose v2 account is capped at five petabytes of capacity and
+          20,000 requests per second. Ingress and egress limits can be raised by
+          support request; capacity and request rate are the hard boundary. Past
+          that point you do not tune an account — you add accounts.
+        </p>
+
+        <p>
+          <strong>You do not choose the secondary region.</strong> For GRS and
+          GZRS, the secondary region is derived from the primary region and
+          cannot be changed. If data residency, contractual commitments, or
+          latency require a specific second region, Azure geo-redundancy has no
+          answer. You either accept the assigned pair or you build the
+          replication yourself.
+        </p>
+
+        <p>
+          <strong>Failover is an event, and it is destructive.</strong> A
+          customer-managed unplanned failover converts the storage account to
+          LRS in the new primary region and deletes the copy in the original
+          primary region. Re-establishing geo-redundancy afterwards is a
+          separate operation that costs time and money.
+        </p>
+
+        <h2 id="azure">
+          What Azure already provides<a class="anchor" href="#azure" aria-label="Link">#</a>
+        </h2>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Option</th>
+                <th>Protects against</th>
+                <th>Secondary is</th>
+                <th>Cross-region RPO</th>
+                <th>Solves capacity</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>LRS</td>
+                <td>Disk, rack</td>
+                <td>—</td>
+                <td>—</td>
+                <td>No</td>
+              </tr>
+              <tr>
+                <td>ZRS</td>
+                <td>Zone loss</td>
+                <td>—</td>
+                <td>—</td>
+                <td>No</td>
+              </tr>
+              <tr>
+                <td>GRS / GZRS</td>
+                <td>Region loss</td>
+                <td>Assigned, not writable</td>
+                <td>&lt; 15 min, no SLA</td>
+                <td>No</td>
+              </tr>
+              <tr>
+                <td>RA-GRS / RA-GZRS</td>
+                <td>Region loss</td>
+                <td>Assigned, readable, stale</td>
+                <td>&lt; 15 min, no SLA</td>
+                <td>No</td>
+              </tr>
+              <tr>
+                <td>Geo priority replication</td>
+                <td>Region loss</td>
+                <td>Assigned</td>
+                <td>SLA: lag ≤ 15 min</td>
+                <td>No</td>
+              </tr>
+              <tr>
+                <td>Object replication</td>
+                <td>Region loss</td>
+                <td>Chosen, per container</td>
+                <td>Async, no guarantee</td>
+                <td>No</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          Every geo option is <strong>asynchronous</strong>. Even geo priority
+          replication, which adds a service level agreement on replication lag,
+          remains asynchronous by design; an RPO of zero is not achievable
+          through it. Under sustained write load the lag is exactly when you
+          least want it.
+        </p>
+
+        <h2 id="sharding">
+          What enterprises do instead<a class="anchor" href="#sharding" aria-label="Link">#</a>
+        </h2>
+
+        <p>
+          The usual answer is application-level sharding with a dual write: pick
+          a naming convention, route to account A or B in code, write to both,
+          move on. It works until the first partial failure. Then the following
+          problems arrive at once, and they are distributed-systems problems,
+          not application problems:
+        </p>
+
+        <ul>
+          <li>
+            <strong>Atomicity.</strong> The write succeeded on A and failed on
+            B. What is the state of the object now, and what does the reader
+            see?
+          </li>
+          <li>
+            <strong>Ambiguity.</strong> The client timed out. The write may or
+            may not have committed. Retrying may create a second version.
+          </li>
+          <li>
+            <strong>Idempotency.</strong> A retry must produce the original
+            outcome, not a new one — which requires a stable write identity the
+            SDK does not provide by default.
+          </li>
+          <li>
+            <strong>Divergence detection.</strong> Nothing tells you that A and
+            B stopped agreeing. You find out when a reader gets the wrong bytes.
+          </li>
+        </ul>
+
+        <h3 id="ring-config">
+          The Ring is a document, not a service<a class="anchor" href="#ring-config" aria-label="Link">#</a>
+        </h3>
+
+        <p>
+          Placement is consistent hashing over weighted virtual nodes, with the
+          two replicas of any object forced into distinct regions. Adding an
+          account is a signed Ring revision. The client endpoint never changes.
+        </p>
+
+        <pre><code><span class="tok-com"># ring-v2.yaml</span>
+<span class="tok-key">apiVersion</span>: overmesh.io/v1
+<span class="tok-key">ringVersion</span>: 2
+<span class="tok-key">replicationFactor</span>: 2
+<span class="tok-key">signingKeyId</span>: ring-key-2026-01
+<span class="tok-key">nodes</span>:
+  - <span class="tok-key">id</span>: stfrance01
+    <span class="tok-key">region</span>: francecentral
+    <span class="tok-key">weight</span>: 100
+  - <span class="tok-key">id</span>: stsweden01
+    <span class="tok-key">region</span>: swedencentral
+    <span class="tok-key">weight</span>: 100</code></pre>
+
+        <p>
+          At startup a gateway downloads the Ring, verifies its hash and
+          signature, validates its schema and invariants, checks it against the
+          minimum trusted version, and loads it into memory. It refuses to start
+          if any step fails.
+        </p>
+
+        <h2 id="cost">
+          What it costs<a class="anchor" href="#cost" aria-label="Link">#</a>
+        </h2>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Cost</th>
+                <th>Magnitude</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Storage</td>
+                <td>2×, plus uncollected generations</td>
+                <td>Inherent to RF=2</td>
+              </tr>
+              <tr>
+                <td>Write latency</td>
+                <td>~35 round trips, 4 Key Vault signatures per PUT</td>
+                <td>Being reduced</td>
+              </tr>
+              <tr>
+                <td>Listing</td>
+                <td>Per-entry cross-replica validation on every page</td>
+                <td>Being reduced</td>
+              </tr>
+              <tr>
+                <td>Write availability</td>
+                <td>Writes stop while either region is unavailable</td>
+                <td>Hinted handoff, post-V1</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>
+          The write-availability line deserves emphasis, because it is the one
+          place where Overmesh is currently <em>worse</em> than the alternative
+          it replaces. A single ZRS account survives the loss of an availability
+          zone and keeps accepting writes. That is a deliberate exchange, and
+          hinted handoff is the planned way to buy the availability back without
+          giving up the guarantee.
+        </p>
+
+        <div class="pager">
+          <a class="prev" href="#">
+            <small>Previous</small>
+            Overview
+          </a>
+          <a class="next" href="#">
+            <small>Next</small>
+            Compatibility matrix
+          </a>
+        </div>
+      </article>
+
+      <!-- ================================================================ -->
+      <aside class="toc">
+        <p class="toc__label">On this page</p>
+        <ul>
+          <li><a href="#problem" aria-current="true">The problem</a></li>
+          <li><a href="#azure">What Azure already provides</a></li>
+          <li><a href="#sharding">What enterprises do instead</a></li>
+          <li><a href="#ring-config">The Ring is a document</a></li>
+          <li><a href="#cost">What it costs</a></li>
+        </ul>
+      </aside>
+    </div>
+  </body>
+</html>

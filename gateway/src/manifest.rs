@@ -31,6 +31,7 @@ const CONTINUATION_TOKEN_DOMAIN: &[u8] = b"overmesh:continuation-token:v1\0";
 const UPLOAD_GENERATION_DOMAIN: &[u8] = b"overmesh:upload-generation:v1\0";
 const STAGED_BLOCK_DOMAIN: &[u8] = b"overmesh:staged-block:v1\0";
 const STAGED_BLOCK_GC_MARKER_DOMAIN: &[u8] = b"overmesh:staged-block-gc-marker:v1\0";
+const RECONCILER_CURSOR_DOMAIN: &[u8] = b"overmesh:reconciler-cursor:v1\0";
 const LOCAL_TEST_MANIFEST_KEY: [u8; 32] = [11; 32];
 pub const BLOCK_MANIFEST_PAGE_SIZE: u32 = 1024;
 
@@ -298,6 +299,7 @@ pub enum SignatureDomain {
     UploadGeneration,
     StagedBlock,
     StagedBlockGcMarker,
+    ReconcilerCursor,
 }
 
 impl SignatureDomain {
@@ -312,6 +314,7 @@ impl SignatureDomain {
             Self::UploadGeneration => UPLOAD_GENERATION_DOMAIN,
             Self::StagedBlock => STAGED_BLOCK_DOMAIN,
             Self::StagedBlockGcMarker => STAGED_BLOCK_GC_MARKER_DOMAIN,
+            Self::ReconcilerCursor => RECONCILER_CURSOR_DOMAIN,
         }
     }
 }
