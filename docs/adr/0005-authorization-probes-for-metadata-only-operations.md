@@ -246,12 +246,15 @@ logical resource".
 - `harness/environments/azure/validate-storage-authorization.sh` — `HEAD` on an
   absent blob and `DELETE` of an absent snapshot, each with an allowed and a
   deliberately denied principal, across supported Storage API versions
-- *(pending)* the same gate, extended with denied-principal `Put Blob`,
-  `Put Block`, `Put Block List` and idempotent-replay cases
-- `delete_authorization_probe_outcome` unit tests — only the documented
-  terminal status counts as authorized (`gateway/src/backend.rs`)
-- `reconciler/src/posture.rs` — enumerates every container per account with
-  each assignment's condition, and fails closed on an unapproved posture
-- `gateway/tests/auth_contract.rs` — the declarative authentication contract
-- `harness/src/identity.rs` — distinct caller, gateway, reconciler and denied
-  principals, so a mis-wired credential is observable
+- `gateway/src/backend.rs::delete_authorization_probe_statuses_fail_closed` —
+  only the documented terminal status counts as authorized
+- `gateway/src/commit/tests.rs::put_blob_returns_forbidden_after_attempting_the_caller_data_write`
+  — caller-authorized content writes fail closed
+- `gateway/src/commit/tests.rs::put_blob_replay_reauthorizes_and_rejects_a_different_caller`
+  — idempotent replay rechecks the caller's authorization
+- `reconciler/src/posture.rs::rejects_unapproved_system_container_access` —
+  posture validation fails closed on unapproved assignments
+- `gateway/tests/auth_contract.rs::executes_declarative_gateway_authentication_contract`
+  — the declarative authentication contract exercises denied principals
+- `harness/src/identity.rs::local_runtime_principals_are_distinct` — local
+  caller, gateway, reconciler and denied principals remain distinguishable

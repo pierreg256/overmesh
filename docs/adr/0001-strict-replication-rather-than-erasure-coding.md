@@ -120,10 +120,10 @@ egress and latency rather than against an estimate.
 
 ## Verified by
 
-- `RingDocument::validate` rejects any Ring with `replicationFactor != 2`
-  (`gateway/src/ring.rs`)
+- `gateway/src/ring.rs` — Ring validation rejects any
+  `replicationFactor != 2`
 - `INVARIANT-002` — healthy replicas hold identical content digests
-- `commit-success-001` — an acknowledged write is byte-identical on both
+- `COMMIT-SUCCESS-001` — an acknowledged write is byte-identical on both
   replicas
 - `harness/scripts/placement-smoke.sh` — three-node Ring, two replicas per
   object, in distinct regions

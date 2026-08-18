@@ -232,12 +232,13 @@ simplified.
 
 ## Verified by
 
-- `validate_committed_head` — the committed head's `content_object` must begin
-  with `.overmesh/objects/{path_hash}/` (`gateway/src/read.rs`)
-- The reconciler's collection planner rejects any historical manifest whose
-  content or metadata falls outside the logical blob's namespace before
-  deleting anything (`reconciler/src/engine.rs`)
-- `listing.rs` excludes `.overmesh` and everything beneath it from listing
-  results
+- `gateway/src/resource.rs::rejects_the_reserved_internal_namespace` — client
+  blob names cannot enter the reserved top-level namespace
+- `gateway/src/commit/tests.rs::verifies_an_existing_immutable_object_only_after_a_create_conflict`
+  — immutable content is verified rather than overwritten after a collision
+- `reconciler/src/engine.rs` — collection rejects historical objects outside
+  the logical blob's namespace before deleting anything
+- `gateway/src/listing.rs::recognizes_only_canonical_quarantine_keys` — listing
+  recognizes only canonical internal keys
 - `harness/scripts/gateway-smoke.sh` — reads the content object back from both
   replicas at the container and key advertised by the signed manifest

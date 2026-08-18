@@ -174,9 +174,14 @@ land with them.
   each object's head is asserted present on exactly its two assigned accounts
   and absent from the third; with one account offline, only the objects placed
   on it become unwritable
-- Ring validation tests — rollback below the minimum version, invalid
-  signature, single-region topology, hash mismatch, root and successor lineage
-  rules (`gateway/src/ring.rs`)
+- `gateway/src/ring.rs::rejects_ring_rollback` — rollback below the minimum
+  trusted version is refused
+- `gateway/src/ring.rs::rejects_invalid_signature` — invalid signatures are
+  refused
+- `gateway/src/ring.rs::rejects_single_region_topology` — replica placement
+  requires distinct regions
+- `gateway/src/ring.rs::cached_signed_ring_placement_is_deterministic_and_cross_region`
+  — cached placement is deterministic and cross-region
 - `harness/rings/ring-rollback.yaml` — the rollback fixture
-- `listing/ring-rollover-001` — a continuation token issued under one Ring
+- `LIST-RING-ROLLOVER-001` — a continuation token issued under one Ring
   version is refused after a Ring change

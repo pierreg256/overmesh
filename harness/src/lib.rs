@@ -1,5 +1,6 @@
 pub mod crypto;
 pub mod dataset;
+pub mod doc_check;
 pub mod environment;
 pub mod fault;
 pub mod identity;

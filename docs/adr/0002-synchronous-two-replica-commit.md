@@ -133,14 +133,14 @@ restated Invariant 1, and the hint durability and replay design.
 
 ## Verified by
 
-- `commits_identical_heads_to_both_replicas` — both replicas carry the same
-  committed head after an acknowledged write (`gateway/src/commit/tests.rs`)
-- `reports_ambiguous_outcome_when_only_one_head_is_published` — a one-sided
-  publication is never reported as success
-- `retry_completes_a_single_head_publication` — the write ID makes the retry
-  idempotent
+- `gateway/src/commit/tests.rs::commits_identical_heads_to_both_replicas` —
+  both replicas carry the same committed head after an acknowledged write
+- `gateway/src/commit/tests.rs::reports_ambiguous_outcome_when_only_one_head_is_published`
+  — a one-sided publication is never reported as success
+- `gateway/src/commit/tests.rs::retry_completes_a_single_head_publication` —
+  the write ID makes the retry idempotent
 - `INVARIANT-001` — acknowledged writes are committed on both replicas
-- `commit-fail-008` — the commit-state-machine failpoint that leaves one
+- `COMMIT-FAIL-008` — the commit-state-machine failpoint that leaves one
   replica behind resolves to `HEALTHY` only after reconciliation
 - `harness/scripts/placement-smoke.sh` — with one account offline, objects
   placed on it return `503` while objects placed elsewhere still commit

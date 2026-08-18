@@ -10,6 +10,7 @@ use overmesh_gateway::{RingDocument, resource::LogicalBlobId};
 use overmesh_harness::{
     RunOptions,
     dataset::generate,
+    doc_check,
     environment::local_service_statuses,
     identity::{TestPrincipal, TestTokenKind, issue_test_token},
     manifest_validation::{
@@ -59,6 +60,10 @@ enum Command {
     },
     Version,
     VersionCheck,
+    DocCheck {
+        #[arg(long)]
+        json: bool,
+    },
     GenerateDataset {
         output: PathBuf,
         #[arg(long)]
@@ -184,7 +189,7 @@ impl From<ReplicaArgument> for toxiproxy::ProxyReplica {
 #[tokio::main]
 async fn main() -> ExitCode {
     match execute().await {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(exit_code) => exit_code,
         Err(error) => {
             eprintln!("error: {error:#}");
             ExitCode::FAILURE
@@ -192,7 +197,7 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn execute() -> Result<()> {
+async fn execute() -> Result<ExitCode> {
     let cli = Cli::parse();
     let repository_root = env::current_dir().context("failed to determine current directory")?;
 
@@ -276,6 +281,17 @@ async fn execute() -> Result<()> {
             );
             for package in report.workspace_packages {
                 println!("module\t{}\t{}", package.name, package.version);
+            }
+        }
+        Command::DocCheck { json } => {
+            let report = doc_check::check(&repository_root)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report.violations)?);
+            } else if !report.passed() {
+                eprint!("{}", report.text());
+            }
+            if !report.passed() {
+                return Ok(ExitCode::FAILURE);
             }
         }
         Command::GenerateDataset { output, size, seed } => {
@@ -382,7 +398,7 @@ async fn execute() -> Result<()> {
             );
         }
     }
-    Ok(())
+    Ok(ExitCode::SUCCESS)
 }
 
 fn run_one(repository_root: &Path, scenario: &Path, no_report: bool) -> Result<()> {
