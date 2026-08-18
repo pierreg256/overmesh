@@ -927,7 +927,7 @@ fn signed_test_ring(ids: &[&str]) -> Arc<SignedRing> {
 
 fn test_token_provider() -> LocalControlTokenProvider {
     LocalControlTokenProvider::new(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.harness/reconciler-token.jwt"),
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/control-token.txt"),
         true,
     )
     .expect("test token provider")
