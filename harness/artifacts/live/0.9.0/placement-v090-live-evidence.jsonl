@@ -1,0 +1,27 @@
+{"check": "put-/live-v090/placement-00001", "detail": "HTTP 201", "phase": "baseline", "result": "PASS", "timestamp": "2026-08-18T15:03:48Z"}
+{"check": "put-/live-v090/placement-00002", "detail": "HTTP 201", "phase": "baseline", "result": "PASS", "timestamp": "2026-08-18T15:03:49Z"}
+{"check": "put-/live-v090/placement-00000", "detail": "HTTP 201", "phase": "baseline", "result": "PASS", "timestamp": "2026-08-18T15:03:50Z"}
+{"check": "get-/live-v090/placement-00001", "detail": "content matched", "phase": "baseline", "result": "PASS", "timestamp": "2026-08-18T15:03:51Z"}
+{"check": "get-/live-v090/placement-00002", "detail": "content matched", "phase": "baseline", "result": "PASS", "timestamp": "2026-08-18T15:03:51Z"}
+{"check": "get-/live-v090/placement-00000", "detail": "content matched", "phase": "baseline", "result": "PASS", "timestamp": "2026-08-18T15:03:51Z"}
+{"check": "placement-/live-v090/placement-00001", "detail": "head exists only on storage-a and storage-b", "phase": "baseline", "result": "PASS", "timestamp": "2026-08-18T15:03:52Z"}
+{"check": "placement-/live-v090/placement-00002", "detail": "head exists only on storage-a and storage-c", "phase": "baseline", "result": "PASS", "timestamp": "2026-08-18T15:03:52Z"}
+{"check": "placement-/live-v090/placement-00000", "detail": "head exists only on storage-b and storage-c", "phase": "baseline", "result": "PASS", "timestamp": "2026-08-18T15:03:53Z"}
+{"check": "put-/live-v090/placement-00001", "detail": "HTTP 503", "phase": "outage", "result": "PASS", "timestamp": "2026-08-18T15:05:39Z"}
+{"check": "put-/live-v090/placement-00002", "detail": "HTTP 503", "phase": "outage", "result": "PASS", "timestamp": "2026-08-18T15:05:39Z"}
+{"check": "put-/live-v090/placement-00000", "detail": "HTTP 201", "phase": "outage", "result": "PASS", "timestamp": "2026-08-18T15:05:41Z"}
+{"check": "put-/live-v090/placement-00001", "detail": "HTTP 503", "phase": "outage", "result": "PASS", "timestamp": "2026-08-18T15:12:12Z"}
+{"check": "put-/live-v090/placement-00002", "detail": "HTTP 503", "phase": "outage", "result": "PASS", "timestamp": "2026-08-18T15:12:13Z"}
+{"check": "put-/live-v090/placement-00000", "detail": "HTTP 201", "phase": "outage", "result": "PASS", "timestamp": "2026-08-18T15:12:13Z"}
+{"check": "get-/live-v090/placement-00000", "detail": "content matched", "phase": "outage", "result": "PASS", "timestamp": "2026-08-18T15:12:14Z"}
+{"check": "outage-isolation", "detail": "only replica sets containing storage-a failed", "phase": "outage", "result": "PASS", "timestamp": "2026-08-18T15:12:14Z"}
+{"check": "put-/live-v090/placement-00001", "detail": "HTTP 201", "phase": "recovery", "result": "PASS", "timestamp": "2026-08-18T15:16:37Z"}
+{"check": "put-/live-v090/placement-00002", "detail": "HTTP 201", "phase": "recovery", "result": "PASS", "timestamp": "2026-08-18T15:16:38Z"}
+{"check": "put-/live-v090/placement-00000", "detail": "HTTP 201", "phase": "recovery", "result": "PASS", "timestamp": "2026-08-18T15:16:39Z"}
+{"check": "get-/live-v090/placement-00001", "detail": "content matched", "phase": "recovery", "result": "PASS", "timestamp": "2026-08-18T15:16:39Z"}
+{"check": "get-/live-v090/placement-00002", "detail": "content matched", "phase": "recovery", "result": "PASS", "timestamp": "2026-08-18T15:16:39Z"}
+{"check": "get-/live-v090/placement-00000", "detail": "content matched", "phase": "recovery", "result": "PASS", "timestamp": "2026-08-18T15:16:40Z"}
+{"check": "placement-/live-v090/placement-00001", "detail": "head exists only on storage-a and storage-b", "phase": "recovery", "result": "PASS", "timestamp": "2026-08-18T15:16:40Z"}
+{"check": "placement-/live-v090/placement-00002", "detail": "head exists only on storage-a and storage-c", "phase": "recovery", "result": "PASS", "timestamp": "2026-08-18T15:16:41Z"}
+{"check": "placement-/live-v090/placement-00000", "detail": "head exists only on storage-b and storage-c", "phase": "recovery", "result": "PASS", "timestamp": "2026-08-18T15:16:41Z"}
+{"check": "recovery", "detail": "storage-a restored, failed writes retried, canaries deleted", "phase": "recovery", "result": "PASS", "timestamp": "2026-08-18T15:16:45Z"}

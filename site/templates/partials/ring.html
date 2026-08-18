@@ -1,0 +1,35 @@
+<svg class="ring ring-mark" viewBox="0 0 200 200" role="img" aria-labelledby="ring-title ring-description">
+  <title id="ring-title">Overmesh ring</title>
+  <desc id="ring-description">A rotating dotted ring representing deterministic regional placement.</desc>
+  <defs>
+    <linearGradient id="ring-gradient" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="var(--cyan)"/>
+      <stop offset="45%" stop-color="var(--blue)"/>
+      <stop offset="100%" stop-color="var(--magenta)"/>
+    </linearGradient>
+    <filter id="ring-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <g class="halo">
+    <circle cx="100" cy="100" r="84" fill="none" stroke="url(#ring-gradient)" stroke-width="8" stroke-dasharray="0.1 5.5" stroke-linecap="round" opacity=".5"/>
+    <circle cx="100" cy="100" r="73" fill="none" stroke="url(#ring-gradient)" stroke-width="6" stroke-dasharray="0.1 5" stroke-linecap="round" opacity=".28"/>
+  </g>
+  <g class="orbits" filter="url(#ring-glow)" opacity=".95">
+    <ellipse cx="100" cy="100" rx="79" ry="41" fill="none" stroke="url(#ring-gradient)" stroke-width="1.7" transform="rotate(22 100 100)"/>
+    <ellipse cx="100" cy="100" rx="79" ry="41" fill="none" stroke="url(#ring-gradient)" stroke-width="1.7" transform="rotate(-38 100 100)"/>
+    <ellipse cx="100" cy="100" rx="79" ry="41" fill="none" stroke="url(#ring-gradient)" stroke-width="1.7" transform="rotate(84 100 100)"/>
+  </g>
+  <g class="ring-nodes" filter="url(#ring-glow)">
+    <circle cx="100" cy="21" r="5.5" fill="var(--node-cyan)"/>
+    <circle cx="168" cy="61" r="5.5" fill="var(--node-blue)"/>
+    <circle cx="168" cy="139" r="5.5" fill="var(--node-magenta)"/>
+    <circle cx="100" cy="179" r="5.5" fill="var(--node-cyan)"/>
+    <circle cx="32" cy="139" r="5.5" fill="var(--node-blue)"/>
+    <circle cx="32" cy="61" r="5.5" fill="var(--node-cyan)"/>
+  </g>
+</svg>

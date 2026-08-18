@@ -13,6 +13,7 @@ use walkdir::WalkDir;
 const TRACEABILITY_PATH: &str = "docs/traceability.toml";
 const ADR_DIRECTORY: &str = "docs/adr";
 const ADR_INDEX_PATH: &str = "docs/adr/README.md";
+const RETAINED_ARTIFACTS_DIRECTORY: &str = "harness/artifacts";
 
 #[derive(Debug, Deserialize)]
 struct Traceability {
@@ -142,6 +143,7 @@ pub fn check(repository_root: &Path) -> Result<DocumentationReport> {
     let adr_metadata = check_adr_index_and_metadata(repository_root, &mut report)?;
     check_evidence(repository_root, &traceability, &adr_metadata, &mut report)?;
     check_assertions(repository_root, &traceability, &mut report)?;
+    check_retained_artifact_redaction(repository_root, &mut report)?;
 
     report.violations.sort_by(|left, right| {
         (
@@ -706,6 +708,71 @@ fn check_assertions(
     Ok(())
 }
 
+fn check_retained_artifact_redaction(
+    repository_root: &Path,
+    report: &mut DocumentationReport,
+) -> Result<()> {
+    let artifacts = repository_root.join(RETAINED_ARTIFACTS_DIRECTORY);
+    if !artifacts.is_dir() {
+        return Ok(());
+    }
+    for entry in WalkDir::new(&artifacts)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+    {
+        let relative = entry
+            .path()
+            .strip_prefix(repository_root)
+            .context("retained artifact escaped repository root")?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let bytes = fs::read(entry.path())
+            .with_context(|| format!("failed to read retained artifact {relative}"))?;
+        let content = String::from_utf8_lossy(&bytes);
+        for (index, line) in content.lines().enumerate() {
+            let lower = line.to_ascii_lowercase();
+            let forbidden = [
+                ("/subscriptions/", "Azure subscription resource path"),
+                (".azurefd.net", "Azure Front Door hostname"),
+                (".vault.azure.net", "Azure Key Vault hostname"),
+                (".blob.core.windows.net", "Azure Blob Storage hostname"),
+                (".azurecontainerapps.io", "Azure Container Apps hostname"),
+                (".azurecr.io", "Azure Container Registry hostname"),
+                ("\\u001b", "serialized ANSI escape sequence"),
+                ("\\x1b", "serialized ANSI escape sequence"),
+            ]
+            .into_iter()
+            .find(|(pattern, _)| lower.contains(pattern))
+            .map(|(_, description)| description)
+            .or_else(|| line.contains('\u{1b}').then_some("ANSI escape sequence"))
+            .or_else(|| contains_guid(line).then_some("GUID"));
+            if let Some(description) = forbidden {
+                report.push(
+                    "R8",
+                    &relative,
+                    Some(index + 1),
+                    format!("contains a forbidden retained-artifact pattern: {description}"),
+                    "regenerate the retained artifact with harness/environments/azure/build-live-evidence.py before signing it",
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn contains_guid(value: &str) -> bool {
+    value.as_bytes().windows(36).any(|candidate| {
+        candidate
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| match index {
+                8 | 13 | 18 | 23 => *byte == b'-',
+                _ => byte.is_ascii_hexdigit(),
+            })
+    })
+}
+
 fn documentation_metrics(repository_root: &Path) -> Result<BTreeMap<String, String>> {
     let unit_test_count = ["gateway", "harness", "reconciler"]
         .into_iter()
@@ -1054,6 +1121,11 @@ reason = "Intentional fixture."
 - `SCENARIO-001`
 "#,
         );
+        write(
+            fixture.path(),
+            "harness/artifacts/live/0.9.0/evidence.json",
+            r#"{"subscription":"/subscriptions/11111111-2222-3333-4444-555555555555"}"#,
+        );
 
         let report = check(fixture.path()).expect("check fixture");
         let rules = report
@@ -1063,7 +1135,34 @@ reason = "Intentional fixture."
             .collect::<BTreeSet<_>>();
         assert_eq!(
             rules,
-            BTreeSet::from(["R1", "R2", "R3", "R4", "R5", "R6", "R7"])
+            BTreeSet::from(["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"])
+        );
+    }
+
+    #[test]
+    fn rejects_unredacted_live_evidence() {
+        let fixture = documentation_fixture();
+        write(
+            fixture.path(),
+            "harness/artifacts/live/0.9.0/evidence.json",
+            r#"{
+  "subscription": "/subscriptions/11111111-2222-3333-4444-555555555555",
+  "endpoint": "https://example.azurefd.net",
+  "diagnostic": "\u001b[31mfailed\u001b[0m"
+}"#,
+        );
+
+        let report = check(fixture.path()).expect("check fixture");
+        let violations = report
+            .violations
+            .iter()
+            .filter(|violation| violation.rule == "R8")
+            .collect::<Vec<_>>();
+        assert_eq!(violations.len(), 3);
+        assert!(
+            violations.iter().all(|violation| {
+                violation.path == "harness/artifacts/live/0.9.0/evidence.json"
+            })
         );
     }
 
@@ -1128,6 +1227,7 @@ reason = "Intentional fixture."
             "docs/adr",
             "gateway/src",
             "harness/src",
+            "harness/artifacts",
             "harness/scenarios/protocol",
             "harness/scripts",
             "reconciler/src",

@@ -25,6 +25,7 @@ An ADR explains a choice; it does not define behaviour.
 | [0006](0006-placement-through-a-signed-ring-document.md) | Placement through a signed Ring document | accepted | 0.2.0 → 0.6.0 | yes |
 | [0007](0007-canonical-logical-resource-identity.md) | Canonical logical resource identity | accepted | 0.5.0 → 0.8.0 | yes |
 | [0008](0008-listing-from-a-signed-catalogue.md) | Listing from a signed catalogue | accepted | 0.8.0 | partial |
+| [0009](0009-redaction-policy-for-retained-live-evidence.md) | Redaction policy for retained live evidence | accepted | 0.9.0 → 0.9.1 | yes |
 
 ## Implementation status
 
@@ -33,13 +34,23 @@ present in the current tree. The live authorization gate has been executed
 against the deployed Gateway with controlled write-role revocation and
 restoration, and the milestone 0.9 release evidence is signed.
 
+The retained run covers authorization refusal and revocation, negative ARM
+posture mutations, three-account RF=2 placement with single-account outage
+isolation, the standard clients, and the Reconciler's repair, quarantine,
+administrator recovery and retention-backed collection paths.
+
 Implementation-status sections inside accepted records remain the historical
 snapshot from acceptance; the index above is the current implementation state.
 
-0008 carries the one outstanding item: property tests for the catalogue
-encoding, asserting round-trip and order preservation over random byte strings.
-They are a prerequisite for any cheaper encoding, because an ordering bug there
-corrupts pagination silently.
+0008 carries one outstanding item: property tests for the catalogue encoding,
+asserting round-trip and order preservation over random byte strings. They are
+a prerequisite for any cheaper encoding, because an ordering bug there corrupts
+pagination silently.
+
+0009 is implemented. The canonical 0.9.0 evidence is deterministically redacted
+before signing, the detached signature covers those published bytes, the raw
+archive is privately retained and replicated three ways, and `doc-check` R8
+rejects unredacted Azure identifiers under `harness/artifacts/`.
 
 Two items are scheduled rather than pending. Parity with Azure on blob-name
 length is to be reopened **before 1.0**; if the encoding changes, the derived

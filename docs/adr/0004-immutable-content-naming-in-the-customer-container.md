@@ -242,3 +242,6 @@ simplified.
   recognizes only canonical internal keys
 - `harness/scripts/gateway-smoke.sh` — reads the content object back from both
   replicas at the container and key advertised by the signed manifest
+- `harness/artifacts/live/0.9.0/reconciliation-v090-live-evidence.json` — live
+  Azure evidence for missing-replica repair, tamper quarantine, explicit
+  recovery and retention-backed physical collection

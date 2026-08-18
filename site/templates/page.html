@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}{{ page.title }} — Overmesh{% endblock title %}
+{% block og_title %}{{ page.title }} — Overmesh{% endblock og_title %}
+{% block description %}{{ page.description | default(value=config.description) }}{% endblock description %}
+
+{% block body %}
+  <div class="documentation-shell">
+    {% include "partials/nav.html" %}
+    <main class="document-layout">
+      <article class="prose" data-pagefind-body>
+        <header class="document-header">
+          <p class="eyebrow">{{ page.components | first | title }}</p>
+          <h1 data-pagefind-meta="title">{{ page.title }}</h1>
+        </header>
+        {{ page.content | safe }}
+        <footer class="document-footer" data-pagefind-ignore>
+          <a href="{{ config.extra.repository_url }}">Repository source</a>
+          <a href="{{ config.base_url }}">Back to Overmesh</a>
+        </footer>
+      </article>
+      {% include "partials/toc.html" %}
+    </main>
+  </div>
+{% endblock body %}

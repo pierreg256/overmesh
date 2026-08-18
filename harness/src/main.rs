@@ -20,6 +20,7 @@ use overmesh_harness::{
     run_scenario,
     runner::ensure_passed,
     scenario::Scenario,
+    site_content::{self, AssemblyOptions},
     system_validation::{SystemValidationConfig, validate_system},
     toxiproxy, version,
 };
@@ -64,6 +65,7 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    SiteContent,
     GenerateDataset {
         output: PathBuf,
         #[arg(long)]
@@ -294,12 +296,28 @@ async fn execute() -> Result<ExitCode> {
                 return Ok(ExitCode::FAILURE);
             }
         }
+        Command::SiteContent => {
+            let repository_url = github_repository_url(&repository_root)?;
+            let commit = git_output(&repository_root, &["rev-parse", "HEAD"])?;
+            let report = site_content::assemble(
+                &repository_root,
+                &AssemblyOptions {
+                    repository_url: &repository_url,
+                    commit: &commit,
+                },
+            )?;
+            println!(
+                "site\t{}\tdocuments\t{}\timages",
+                report.document_count, report.image_count
+            );
+        }
         Command::GenerateDataset { output, size, seed } => {
             if let Some(parent) = output.parent() {
                 fs::create_dir_all(parent).with_context(|| {
                     format!("failed to create dataset directory {}", parent.display())
                 })?;
             }
+
             let hash = generate(&output, size, seed)?;
             println!("{}\t{}\t{}", output.display(), size, hash);
         }
@@ -399,6 +417,37 @@ async fn execute() -> Result<ExitCode> {
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn github_repository_url(repository_root: &Path) -> Result<String> {
+    let remote = git_output(repository_root, &["remote", "get-url", "origin"])?;
+    let normalized = if let Some(path) = remote.strip_prefix("git@github.com:") {
+        format!("https://github.com/{path}")
+    } else if let Some(path) = remote.strip_prefix("ssh://git@github.com/") {
+        format!("https://github.com/{path}")
+    } else {
+        remote
+    };
+    Ok(normalized.trim_end_matches(".git").to_owned())
+}
+
+fn git_output(repository_root: &Path, arguments: &[&str]) -> Result<String> {
+    let output = std::process::Command::new("git")
+        .args(arguments)
+        .current_dir(repository_root)
+        .output()
+        .with_context(|| format!("failed to execute git {}", arguments.join(" ")))?;
+    if !output.status.success() {
+        bail!(
+            "git {} failed: {}",
+            arguments.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8(output.stdout)
+        .context("git output was not UTF-8")?
+        .trim()
+        .to_owned())
 }
 
 fn run_one(repository_root: &Path, scenario: &Path, no_report: bool) -> Result<()> {

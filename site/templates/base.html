@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    {% include "partials/head.html" %}
+    <meta name="theme-color" content="{% block theme_color %}#0b0b0f{% endblock theme_color %}">
+    <meta name="description" content="{% block description %}{{ config.description }}{% endblock description %}">
+    <meta property="og:title" content="{% block og_title %}{{ config.title }}{% endblock og_title %}">
+    <meta property="og:url" content="{{ current_url | default(value=config.base_url) }}">
+    <title>{% block title %}{{ config.title }}{% endblock title %}</title>
+  </head>
+  <body class="{% block body_class %}reference-surface{% endblock body_class %}">
+    {% block body %}{% endblock body %}
+  </body>
+</html>

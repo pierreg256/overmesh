@@ -1,0 +1,19 @@
+{% if page.toc | length > 3 %}
+  <aside class="toc" aria-label="On this page" data-pagefind-ignore>
+    <p>On this page</p>
+    <ol>
+      {% for heading in page.toc %}
+        <li>
+          <a href="{{ heading.permalink | safe }}">{{ heading.title }}</a>
+          {% if heading.children %}
+            <ol>
+              {% for child in heading.children %}
+                <li><a href="{{ child.permalink | safe }}">{{ child.title }}</a></li>
+              {% endfor %}
+            </ol>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ol>
+  </aside>
+{% endif %}

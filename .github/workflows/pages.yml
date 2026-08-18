@@ -1,0 +1,70 @@
+name: GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/**"
+      - "site/**"
+      - "*.md"
+      - "docs/traceability.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  ZOLA_VERSION: 0.23.3
+  PAGEFIND_VERSION: 1.5.2
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.94.0
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Reject documentation drift
+        run: make doc-check
+
+      - name: Install Zola
+        uses: taiki-e/install-action@v2
+        with:
+          tool: zola@${{ env.ZOLA_VERSION }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Install Pagefind
+        run: npm install --global pagefind@${PAGEFIND_VERSION}
+
+      - name: Build documentation site
+        run: make site-build PAGEFIND=pagefind
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site/public
+
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

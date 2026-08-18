@@ -9,6 +9,7 @@ pub mod model;
 pub mod report;
 pub mod runner;
 pub mod scenario;
+pub mod site_content;
 pub mod system_validation;
 pub mod toxiproxy;
 pub mod validator;

@@ -174,3 +174,6 @@ should be treated as a change of product rather than of implementation.
   assignments must remain symmetric
 - `harness/environments/azure/validate-storage-authorization.sh` — probes every
   authorization capability with an allowed and a deliberately denied principal
+- `harness/artifacts/live/0.9.0/posture-v090-live-evidence.json` — live ARM
+  evidence that inherited unapproved access and path-dependent ABAC conditions
+  both fail closed before nominal posture is restored

@@ -1,0 +1,20 @@
+<aside class="rail" data-pagefind-ignore>
+  <a class="brand" href="{{ config.base_url }}">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span>OVERMESH</span>
+  </a>
+  {% include "partials/search.html" %}
+  <nav aria-label="Documentation">
+    {% for section_path in ["overview/_index.md", "specifications/_index.md", "decisions/_index.md"] %}
+      {% set navigation_section = get_section(path=section_path) %}
+      <section class="rail-section">
+        <a class="rail-heading" href="{{ navigation_section.permalink }}">{{ navigation_section.title }}</a>
+        {% for navigation_page in navigation_section.pages %}
+          <a class="rail-link{% if current_url == navigation_page.permalink %} is-current{% endif %}" href="{{ navigation_page.permalink }}">
+            {{ navigation_page.title }}
+          </a>
+        {% endfor %}
+      </section>
+    {% endfor %}
+  </nav>
+</aside>

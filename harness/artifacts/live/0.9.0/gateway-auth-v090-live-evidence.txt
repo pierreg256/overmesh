@@ -1,0 +1,17 @@
+Overmesh 0.9.0 Gateway authorization gate
+Timestamp: 2026-08-18T00:14:08+02:00
+Endpoint: https://fd-75c816375b9d8504
+Storage API version: 2025-11-05
+Container: live-v050
+
+Result: PASS
+
+- Denied principal Put Blob: 403 AuthorizationPermissionMismatch
+- Denied principal Put Block: 403 AuthorizationPermissionMismatch
+- Original-principal idempotent replay after write revocation: 403
+- Original-principal Put Block List after staging then write revocation: 403
+- Write permissions restored on all three live-v050 replica containers
+- Temporary Reader assignments removed
+- Authorization canaries removed
+- Temporary VM mutator removed
+- vm-overmesh-v050 returned to VM deallocated

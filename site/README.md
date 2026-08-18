@@ -1,9 +1,10 @@
 # site/
 
-Visual identity mockups. **Not** the production site.
+Zola source for the Overmesh documentation site, plus the visual identity
+mockups that preceded it.
 
-These are three static files with no build step. Open
-`mockup-landing.html` in a browser — everything is relative.
+The mockups remain the visual reference. Open `mockup-landing.html` directly in
+a browser to compare the production templates with the approved static design.
 
 | File | Purpose |
 | --- | --- |
@@ -11,14 +12,29 @@ These are three static files with no build step. Open
 | `mockup-landing.html` | Pure-black surface: hero, adoption argument, trade-off |
 | `mockup-reference.html` | Softened reading surface: long-form document, tables, code, sticky TOC |
 
-## What they are for
+## Build
+
+`make site-content` reads the explicit publication registry in
+`docs/traceability.toml`, adds Zola front matter, removes the authored H1, and
+rewrites relative links. Authored Markdown remains in place; assembled pages
+under `site/content/` are ignored.
+
+`make site-build` uses Zola 0.23.3 and Pagefind 1.5.2. The production workflow
+installs those exact versions before publishing `site/public/`.
+
+Space Grotesk 5.3.0 is self-hosted for display text, Inter 5.3.0 for prose,
+and JetBrains Mono 5.3.0 for code. Their WOFF2 files and licenses are versioned
+under `static/fonts/`; the site makes no font or script request to a
+third-party origin.
+
+## Visual reference
 
 To settle the visual identity before any generator is installed. The two files
 deliberately share one stylesheet, because the question they answer is whether
 a single token system can carry both a landing page at full contrast and a
 1,000-line specification that stays readable.
 
-Once agreed, these become the reference for the Zola templates:
+The production mapping is:
 
 - `mockup.css` tokens → `site/sass/_tokens.scss`
 - `mockup-landing.html` → `templates/index.html`
@@ -45,11 +61,6 @@ definition, and slowly animated. `prefers-reduced-motion` stops it.
 project whose argument is reducing external dependency surface should not fetch
 its typography from a CDN.
 
-## Open points
-
-- Display typeface is a placeholder stack. The open graph image suggests a
-  heavy geometric sans — Space Grotesk and Chakra Petch are the two candidates.
-- The dot-matrix ring motif is currently only a mark. It could also serve as a
-  section divider and a very low opacity page background.
-- Table density on narrow viewports: the Azure comparison table scrolls
-  horizontally rather than collapsing. Acceptable, or worth a card layout?
+The dot-matrix motif remains a mark rather than a page background. Tables scroll
+horizontally on narrow screens so normative rows are not reinterpreted as
+cards.

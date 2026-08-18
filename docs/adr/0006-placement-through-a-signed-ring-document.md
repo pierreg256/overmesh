@@ -185,3 +185,7 @@ land with them.
 - `harness/rings/ring-rollback.yaml` — the rollback fixture
 - `LIST-RING-ROLLOVER-001` — a continuation token issued under one Ring
   version is refused after a Ring change
+- `harness/artifacts/live/0.9.0/placement-v090-live-evidence.jsonl` — the live
+  run across three Storage Accounts in three Azure regions: every committed
+  head present on exactly its two assigned accounts, and a single-account
+  outage making only the objects placed on it unwritable

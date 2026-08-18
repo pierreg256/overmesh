@@ -1,0 +1,178 @@
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("fonts/space-grotesk-latin-wght-normal.woff2") format("woff2-variations");
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter";
+  src: url("fonts/inter-latin-wght-normal.woff2") format("woff2-variations");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/jetbrains-mono-latin-wght-normal.woff2") format("woff2-variations");
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+}
+
+:root {
+  --bg-black: #000000;
+  --bg-surface: #0b0b0f;
+  --bg-raised: #12121a;
+  --bg-code: #0e0e14;
+  --border: #1e1e2a;
+  --border-soft: #16161f;
+
+  --text: #edeef2;
+  --text-body: #d6d8e0;
+  --text-muted: #8a8da0;
+  --text-faint: #5c5f70;
+
+  --cyan: #4fc3ff;
+  --blue: #4a5bff;
+  --violet: #9b4bff;
+  --magenta: #c43bff;
+  --node-cyan: #eaf7ff;
+  --node-blue: #dfe6ff;
+  --node-magenta: #f0dcff;
+
+  --ramp: linear-gradient(120deg, #4fc3ff 0%, #4a5bff 45%, #c43bff 100%);
+  --glow-cyan: 0 0 12px rgba(79, 195, 255, 0.35);
+  --glow-magenta: 0 0 16px rgba(196, 59, 255, 0.35);
+
+  --font-display: "Space Grotesk", "Chakra Petch", ui-sans-serif, system-ui,
+    -apple-system, "Segoe UI", sans-serif;
+  --font-body: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    monospace;
+
+  --measure: 68ch;
+  --radius: 10px;
+  --pad: clamp(1.25rem, 4vw, 3rem);
+
+  --pf-text: var(--text);
+  --pf-text-secondary: var(--text-muted);
+  --pf-text-muted: var(--text-faint);
+  --pf-background: var(--bg-raised);
+  --pf-border: var(--border);
+  --pf-border-focus: var(--cyan);
+  --pf-skeleton: var(--border);
+  --pf-skeleton-shine: var(--border-soft);
+  --pf-hover: rgba(79, 195, 255, 0.08);
+  --pf-mark: var(--cyan);
+  --pf-scroll-shadow: rgba(0, 0, 0, 0.35);
+  --pf-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.24);
+  --pf-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.32);
+  --pf-shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.48);
+  --pf-error-bg: rgba(196, 59, 255, 0.08);
+  --pf-error-border: var(--magenta);
+  --pf-error-text: var(--node-magenta);
+  --pf-error-text-secondary: var(--text-muted);
+  --pf-outline-focus: var(--cyan);
+  --pf-font: var(--font-body);
+  --pf-border-radius: var(--radius);
+  --pf-modal-backdrop: rgba(0, 0, 0, 0.72);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: dark;
+  scroll-behavior: smooth;
+  scroll-padding-top: 5.5rem;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-surface);
+  color: var(--text-body);
+  font-family: var(--font-body);
+  font-size: 17px;
+  line-height: 1.7;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--cyan);
+  text-decoration: none;
+  transition: color 0.15s ease, text-shadow 0.15s ease;
+}
+
+a:hover {
+  text-decoration: underline;
+  text-shadow: var(--glow-cyan);
+  text-underline-offset: 3px;
+}
+
+code,
+pre {
+  font-family: var(--font-mono);
+}
+
+.brand {
+  align-items: center;
+  color: var(--text);
+  display: inline-flex;
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  font-weight: 700;
+  gap: 0.6rem;
+  letter-spacing: 0.01em;
+  text-decoration: none;
+}
+
+.brand:hover {
+  text-decoration: none;
+  text-shadow: none;
+}
+
+.brand-mark {
+  border: 2px dotted var(--cyan);
+  border-radius: 50%;
+  box-shadow: var(--glow-cyan);
+  display: inline-block;
+  height: 1.65rem;
+  width: 1.65rem;
+}
+
+.eyebrow {
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.16em;
+  margin: 0 0 0.6rem;
+  text-transform: uppercase;
+}
+
+::selection {
+  background: rgba(79, 195, 255, 0.24);
+  color: var(--text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

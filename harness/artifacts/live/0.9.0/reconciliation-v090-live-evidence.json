@@ -1,0 +1,43 @@
+{
+  "apiVersion": "evidence.overmesh.io/live-reconciliation/v1",
+  "checks": [
+    {
+      "check": "missing-replica-repair",
+      "reportSha256": "30a68f5ba6c4e1d0d68292828214ce90e1f0e1f6a1fe8964e928a62135d593e0",
+      "result": "passed",
+      "sourceReplica": "storage-a",
+      "targetReplica": "storage-c"
+    },
+    {
+      "automaticRepairRefused": true,
+      "check": "tampered-content-quarantine",
+      "healthyReplica": "storage-b",
+      "reportSha256": "729dfb8723aeca792558d9310637be0a6a5c395b5b7d8c7b4881309806762780",
+      "result": "passed",
+      "tamperedReplica": "storage-c"
+    },
+    {
+      "check": "administrator-recovery",
+      "reportSha256": "a94dec82f82f518fd87810d926279aacd914fe1d90aa0051a814c2fb1c39a63f",
+      "result": "passed",
+      "sourceReplica": "storage-b",
+      "targetReplica": "storage-c"
+    },
+    {
+      "check": "retention-and-collection",
+      "collectionReportSha256": "d3872b9efeed9509189dd01c0b4c93e483c1b8aa7c4ebc727febb0c4cb5150ef",
+      "preRetentionReportSha256": "4f66ee30c366c3eb7fac6cc73e00d2a2978f79ee8538c548197c7d4d07a38df8",
+      "productionCollectionDelaySeconds": 604800,
+      "replicas": [
+        "storage-a",
+        "storage-c"
+      ],
+      "result": "passed",
+      "testCollectionDelaySeconds": 2
+    }
+  ],
+  "generatedAt": "2026-08-18T19:05:44Z",
+  "isolatedValidationEnvironment": true,
+  "result": "passed",
+  "runId": "20260818T175654Z-6117"
+}

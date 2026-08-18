@@ -84,6 +84,12 @@ section = "decisions"
 title = "Listing from a signed catalogue"
 weight = 80
 
+[[document]]
+path = "docs/adr/0009-redaction-policy-for-retained-live-evidence.md"
+section = "decisions"
+title = "Redaction policy for retained live evidence"
+weight = 90
+
 # ---------------------------------------------------------------------------
 # Authored documents deliberately not published.
 # ---------------------------------------------------------------------------
@@ -106,7 +112,7 @@ reason = "Component-local development notes."
 
 [[excluded]]
 path = "harness/artifacts/README.md"
-reason = "Directory placeholder."
+reason = "Operator description of retained release evidence and private raw retention."
 
 [[excluded]]
 path = "harness/environments/azure/README.md"

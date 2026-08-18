@@ -346,29 +346,67 @@ block staging APIs with their own retention and collection, reconciliation with
 repair and quarantine, and continuous RBAC posture auditing against Azure
 Resource Manager.
 
-**How it is validated:** 183 unit and integration tests, 23 declarative
+**How it is validated:** 186 unit and integration tests, 23 declarative
 scenarios against an independent reference model, three process-level suites
 and a Rust system validator running against Azurite backends behind a fault
 proxy, and a live Azure gate that verifies account posture, authorization
-revocation, three-account RF=2 placement, single-account outage isolation, and
-the Azure SDK .NET/Python/JavaScript, Azure CLI, and AzCopy clients.
+revocation, three-account RF=2 placement, single-account outage isolation,
+repair, quarantine, administrator-authorised recovery, retention-backed
+collection, and the Azure SDK .NET/Python/JavaScript, Azure CLI, and AzCopy
+clients.
 
 Why decisions were taken the way they were — including several that were
 reversed during development — is recorded in
 [`docs/adr/`](adr/README.md). That is the first thing to read if the design
 looks surprising.
 
-Placement across a multi-account, multi-region Ring is part of that suite. A
-three-node topology is exercised on every run: object placement is asserted
-account by account, and a single-account outage is shown to affect only the
-objects assigned to it. The capacity argument of section 6 is therefore
-measured, not merely designed.
+Placement across a multi-account, multi-region Ring is part of that local
+suite. A three-node topology is exercised on every run: object placement is
+asserted account by account, and a single-account outage is shown to affect
+only the objects assigned to it.
 
-**Demonstrated live.** The milestone 0.9 evidence is retained and signed by a
-non-exportable Key Vault key. Container-scoped RBAC, private endpoints,
-authorization probe semantics, deterministic placement, outage isolation, and
-standard-client behavior have all been exercised against real Azure resources.
-A measured performance baseline follows in 0.10, and optimisation in 0.11.
+**Demonstrated live.** Milestone 0.9 was exercised against real Azure
+resources: three Storage Accounts in France Central, Sweden Central and Norway
+East behind a signed RF=2 Ring, with Gateway and Reconciler deployed from
+immutable image digests.
+
+- **Authorization.** A denied principal is refused `403` on `Put Blob` and
+  `Put Block`. After revoking write permission from the *original* principal,
+  its idempotent replay and its `Put Block List` are refused `403`. Permissions
+  were restored and canary resources removed.
+- **Placement and outage.** Twenty-seven checks, no failures. Each committed
+  head is present on exactly its two assigned accounts and absent from the
+  third. With one account offline, objects placed on it become unwritable while
+  objects placed elsewhere keep committing.
+- **Clients.** Azure SDK for .NET, Python and JavaScript, Azure CLI and AzCopy,
+  covering writes, block staging, reads, `HEAD`, listing, deletes and large
+  objects.
+- **Posture.** The nominal three-account ARM posture passes. A deliberately
+  inherited account-level Blob role for an unapproved principal and a
+  deliberately path-dependent ABAC condition both make the audit fail closed;
+  the temporary assignments are then removed and nominal posture revalidated.
+- **Reconciliation.** A missing replica is repaired from its validated peer,
+  altered physical content is quarantined rather than repaired, explicit
+  administrator recovery restores the selected healthy replica, and a
+  superseded canary generation is retained until the configured test deadline
+  before collection.
+
+The capacity argument of section 6 is therefore measured against real Azure, in
+the three-region topology section 7 recommends, rather than only designed.
+
+The repository retains a deterministically redacted canonical bundle with
+per-source hashes and a detached ES256 signature from a non-exportable Key
+Vault key. The unredacted archive is retained privately on all three validation
+accounts, and its hash is linked from the canonical bundle. This is the same
+verification model the system claims for its own metadata:
+
+```text
+Runtime commit  26449d7e5775ac9d28dea38182f509c7528c57c3
+Bundle SHA-256  547172399a2bc24ab494b41c9dd37e9b2ceaa054e6e37a17960e1c7e5e244bc9
+```
+
+A measured performance baseline remains the next live gate in 0.10, followed
+by optimisation in 0.11.
 
 ## 11. Where to start if you want to fork it
 

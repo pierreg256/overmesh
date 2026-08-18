@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Page not found — Overmesh{% endblock title %}
+
+{% block body %}
+  <div class="documentation-shell">
+    {% include "partials/nav.html" %}
+    <main class="not-found">
+      <p class="error-code">404</p>
+      <h1>This page does not exist</h1>
+      <p class="section-description">
+        The address may be stale, or the document may have been renamed.
+        The navigation lists everything published, and search covers the full
+        text of every specification and decision record.
+      </p>
+      <div class="not-found-actions">
+        <a class="button button-primary" href="{{ get_url(path='@/decisions/index-of-records.md') }}">Index of decisions</a>
+        <a class="button button-quiet" href="{{ get_url(path='@/overview/why_overmesh.md') }}">Why Overmesh</a>
+        <a class="button button-quiet" href="{{ config.base_url }}">Home</a>
+      </div>
+    </main>
+  </div>
+{% endblock body %}
