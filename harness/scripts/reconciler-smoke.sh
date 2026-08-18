@@ -9,10 +9,6 @@ cargo run --quiet -p overmesh-harness -- issue-token valid --principal reconcile
 reconciler_token=$(cat .harness/reconciler-token.jwt)
 cargo run --quiet -p overmesh-harness -- issue-token valid --principal gateway \
   >.harness/gateway-control-token.jwt
-rm -f \
-  reconciler/config/head-discovery-cursor.local.json \
-  reconciler/config/staged-block-metadata-cursor.local.json \
-  reconciler/config/staged-block-marker-cursor.local.json
 
 create_container() {
   local replica_port=$1
@@ -35,10 +31,6 @@ done
 
 reset_storage() {
   make dev-reset
-  rm -f \
-    reconciler/config/head-discovery-cursor.local.json \
-    reconciler/config/staged-block-metadata-cursor.local.json \
-    reconciler/config/staged-block-marker-cursor.local.json
   for replica_port in 12100 12101; do
     create_container "$replica_port" overmesh-system
     create_container "$replica_port" reconcile
@@ -58,10 +50,6 @@ gateway_pid=$!
 
 cleanup() {
   cargo run --quiet -p overmesh-harness -- fault reset >/dev/null 2>&1 || true
-  rm -f \
-    reconciler/config/head-discovery-cursor.local.json \
-    reconciler/config/staged-block-metadata-cursor.local.json \
-    reconciler/config/staged-block-marker-cursor.local.json
   if kill -0 "$gateway_pid" >/dev/null 2>&1; then
     kill -INT "$gateway_pid"
     wait "$gateway_pid" || true
@@ -107,6 +95,31 @@ storage_put() {
     "https://127.0.0.1:$replica_port/devstoreaccount1/overmesh-system/$object_key"
 }
 
+storage_delete_if_exists() {
+  local replica_port=$1
+  local object_key=$2
+  local status
+  status=$(curl --insecure --silent --output /dev/null --write-out '%{http_code}' \
+    -H "Authorization: Bearer $reconciler_token" \
+    -H 'x-ms-version: 2025-11-05' \
+    "https://127.0.0.1:$replica_port/devstoreaccount1/overmesh-system/$object_key")
+  if test "$status" = "404"; then
+    return
+  fi
+  test "$status" = "200"
+  curl --insecure --fail --silent --output /dev/null -X DELETE \
+    -H "Authorization: Bearer $reconciler_token" \
+    -H 'x-ms-version: 2025-11-05' \
+    "https://127.0.0.1:$replica_port/devstoreaccount1/overmesh-system/$object_key"
+}
+
+reset_durable_cursor() {
+  local object_key=$1
+  for replica_port in 12100 12101; do
+    storage_delete_if_exists "$replica_port" "$object_key"
+  done
+}
+
 data_get() {
   local replica_port=$1
   local container=$2
@@ -137,7 +150,7 @@ data_put() {
 
 run_reconciler() {
   local output=$1
-  rm -f reconciler/config/head-discovery-cursor.local.json
+  reset_durable_cursor reconciler-cursors/head-discovery.json
   ./target/debug/overmesh-reconciler \
     --config reconciler/config/local.yaml once >"$output"
 }
@@ -168,6 +181,8 @@ curl --insecure --fail --silent --output /dev/null -X DELETE \
   -H "Authorization: Bearer $token" \
   -H 'x-ms-version: 2025-11-05' \
   "https://127.0.0.1:12101/devstoreaccount1/overmesh-system/$stage_metadata"
+reset_durable_cursor reconciler-cursors/staged-block-metadata.json
+reset_durable_cursor reconciler-cursors/staged-block-marker.json
 run_reconciler .harness/reconcile-stage-repair-report.json
 storage_get 12101 "$stage_metadata" .harness/reconcile-stage-repaired-b.json
 cmp .harness/reconcile-stage-a.json .harness/reconcile-stage-repaired-b.json
