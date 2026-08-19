@@ -72,7 +72,12 @@ def validate_document(
         raise ValueError("performance evidence case set does not match contract")
 
     for key, case in indexed.items():
-        if case.get("iterations") != contract.measured_iterations:
+        benchmark_case = next(
+            candidate
+            for candidate in contract.cases
+            if candidate.id == key[0]
+        )
+        if case.get("iterations") != benchmark_case.measured_iterations:
             raise ValueError(f"case {key} has an unexpected iteration count")
         metrics = case.get("metrics", {})
         metric_names = ["p50Ms", "p90Ms", "p95Ms", "operationsPerSecond"]
@@ -86,7 +91,7 @@ def validate_document(
             ):
                 raise ValueError(f"case {key} has invalid metric {name}")
         if (
-            metrics.get("successCount") != contract.measured_iterations
+            metrics.get("successCount") != benchmark_case.measured_iterations
             or metrics.get("errorCount") != 0
         ):
             raise ValueError(f"case {key} did not complete successfully")

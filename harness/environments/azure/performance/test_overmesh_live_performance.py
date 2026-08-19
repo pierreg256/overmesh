@@ -32,6 +32,27 @@ class PerformanceContractTests(unittest.TestCase):
                 "p95Latency": "informational",
             },
         )
+        read_stable = load_contract(Path("harness/performance/live-v3.toml"))
+        self.assertEqual(len(read_stable.cases), 28)
+        self.assertIsNone(read_stable.measured_iterations)
+        self.assertEqual(
+            {
+                benchmark_case.measured_iterations
+                for benchmark_case in read_stable.cases
+                if benchmark_case.operation
+                in {"get_blob", "get_range", "head_blob"}
+            },
+            {240},
+        )
+        self.assertEqual(
+            {
+                benchmark_case.measured_iterations
+                for benchmark_case in read_stable.cases
+                if benchmark_case.operation
+                in {"put_blob", "overwrite_blob", "delete_blob"}
+            },
+            {30},
+        )
 
     def test_unknown_payload_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -56,6 +77,42 @@ concurrency = [1]
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "unknown payload"):
+                load_contract(path)
+
+    def test_v3_requires_iterations_on_every_workload(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "invalid-v3.toml"
+            document = Path("harness/performance/live-v3.toml").read_text(
+                encoding="utf-8"
+            )
+            path.write_text(
+                document.replace("measured_iterations = 30\n", "", 1),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ValueError,
+                r"workload\[0\]\.measured_iterations",
+            ):
+                load_contract(path)
+
+    def test_v3_rejects_global_measured_iterations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "invalid-v3.toml"
+            document = Path("harness/performance/live-v3.toml").read_text(
+                encoding="utf-8"
+            )
+            path.write_text(
+                document.replace(
+                    "warmup_iterations = 3\n",
+                    "warmup_iterations = 3\nmeasured_iterations = 30\n",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ValueError,
+                "requires measured_iterations per workload",
+            ):
                 load_contract(path)
 
     def test_nearest_rank_percentiles_are_deterministic(self) -> None:

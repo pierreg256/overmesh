@@ -38,6 +38,7 @@ class BenchmarkCase:
     payload: Payload
     concurrency: int
     range_bytes: int | None
+    measured_iterations: int
 
     @property
     def id(self) -> str:
@@ -70,7 +71,7 @@ class NonRegressionPolicy:
 class Contract:
     schema_version: int
     warmup_iterations: int
-    measured_iterations: int
+    measured_iterations: int | None
     request_timeout_seconds: int
     target_order: tuple[str, ...]
     cases: tuple[BenchmarkCase, ...]
@@ -106,8 +107,8 @@ def require_positive_integer(value: object, name: str) -> int:
 def load_contract(path: Path) -> Contract:
     document = tomllib.loads(path.read_text(encoding="utf-8"))
     schema_version = document.get("schema_version")
-    if schema_version not in {1, 2}:
-        raise ValueError("performance contract schema_version must be 1 or 2")
+    if schema_version not in {1, 2, 3}:
+        raise ValueError("performance contract schema_version must be 1, 2, or 3")
     payloads: dict[str, Payload] = {}
     for index, entry in enumerate(document.get("payload", [])):
         payload_id = entry.get("id")
@@ -128,7 +129,7 @@ def load_contract(path: Path) -> Contract:
 
     policy_document = document.get("non_regression")
     non_regression = None
-    if schema_version == 2:
+    if schema_version in {2, 3}:
         expected_policy = {
             "backend_requests_per_operation": "blocking",
             "p50_latency": "signal",
@@ -136,12 +137,27 @@ def load_contract(path: Path) -> Contract:
         }
         if policy_document != expected_policy:
             raise ValueError(
-                "schema_version 2 non_regression must classify backend "
+                "schema_version 2 or 3 non_regression must classify backend "
                 "requests as blocking, p50 as signal, and p95 as informational"
             )
         non_regression = NonRegressionPolicy(**expected_policy)
     elif policy_document is not None:
-        raise ValueError("non_regression is supported only by schema_version 2")
+        raise ValueError(
+            "non_regression is supported only by schema_version 2 or 3"
+        )
+
+    global_measured_iterations = document.get("measured_iterations")
+    if schema_version == 3:
+        if global_measured_iterations is not None:
+            raise ValueError(
+                "schema_version 3 requires measured_iterations per workload"
+            )
+        measured_iterations = None
+    else:
+        measured_iterations = require_positive_integer(
+            global_measured_iterations,
+            "measured_iterations",
+        )
 
     cases: list[BenchmarkCase] = []
     case_ids: set[str] = set()
@@ -158,6 +174,18 @@ def load_contract(path: Path) -> Contract:
             )
         elif range_bytes is not None:
             raise ValueError("range_bytes is valid only for get_range")
+        workload_measured_iterations = workload.get("measured_iterations")
+        if schema_version == 3:
+            workload_measured_iterations = require_positive_integer(
+                workload_measured_iterations,
+                f"workload[{workload_index}].measured_iterations",
+            )
+        elif workload_measured_iterations is not None:
+            raise ValueError(
+                "workload measured_iterations requires schema_version 3"
+            )
+        else:
+            workload_measured_iterations = measured_iterations
         for payload_id in workload.get("payloads", []):
             if payload_id not in payloads:
                 raise ValueError(
@@ -173,6 +201,7 @@ def load_contract(path: Path) -> Contract:
                     payload=payloads[payload_id],
                     concurrency=concurrency,
                     range_bytes=range_bytes,
+                    measured_iterations=workload_measured_iterations,
                 )
                 if benchmark_case.id in case_ids:
                     raise ValueError(f"benchmark case {benchmark_case.id!r} is duplicated")
@@ -221,17 +250,15 @@ def load_contract(path: Path) -> Contract:
                 reason=reason.strip(),
             )
         )
-    if schema_version == 2 and not exclusions:
-        raise ValueError("schema_version 2 requires explicit exclusions")
+    if schema_version in {2, 3} and not exclusions:
+        raise ValueError("schema_version 2 or 3 requires explicit exclusions")
 
     return Contract(
         schema_version=schema_version,
         warmup_iterations=require_positive_integer(
             document.get("warmup_iterations"), "warmup_iterations"
         ),
-        measured_iterations=require_positive_integer(
-            document.get("measured_iterations"), "measured_iterations"
-        ),
+        measured_iterations=measured_iterations,
         request_timeout_seconds=require_positive_integer(
             document.get("request_timeout_seconds"), "request_timeout_seconds"
         ),
@@ -246,7 +273,11 @@ def plan(contract: Contract) -> dict[str, Any]:
     return {
         "schemaVersion": contract.schema_version,
         "warmupIterations": contract.warmup_iterations,
-        "measuredIterations": contract.measured_iterations,
+        **(
+            {"measuredIterations": contract.measured_iterations}
+            if contract.measured_iterations is not None
+            else {}
+        ),
         "requestTimeoutSeconds": contract.request_timeout_seconds,
         "targetOrder": list(contract.target_order),
         **(
@@ -261,6 +292,7 @@ def plan(contract: Contract) -> dict[str, Any]:
                 "payload": benchmark_case.payload.id,
                 "sizeBytes": benchmark_case.payload.size_bytes,
                 "concurrency": benchmark_case.concurrency,
+                "measuredIterations": benchmark_case.measured_iterations,
                 **(
                     {"rangeBytes": benchmark_case.range_bytes}
                     if benchmark_case.range_bytes is not None
@@ -426,7 +458,7 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                     f"{prefix}/item-{index:05}.bin"
                     for index in range(
                         contract.warmup_iterations
-                        + contract.measured_iterations
+                        + benchmark_case.measured_iterations
                     )
                 }
                 if benchmark_case.operation
@@ -512,7 +544,7 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                     initial_payload = bytes(byte ^ 0xFF for byte in payload)
                     for index in range(
                         contract.warmup_iterations
-                        + contract.measured_iterations
+                        + benchmark_case.measured_iterations
                     ):
                         blob_name = f"{prefix}/item-{index:05}.bin"
                         container_client.upload_blob(
@@ -536,7 +568,7 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                 case_started_at = utc_now()
                 latencies, wall_seconds = execute_wave(
                     lambda index: invoke(index + contract.warmup_iterations),
-                    contract.measured_iterations,
+                    benchmark_case.measured_iterations,
                     benchmark_case.concurrency,
                 )
                 case_finished_at = utc_now()
@@ -562,18 +594,19 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                         "startedAt": case_started_at,
                         "finishedAt": case_finished_at,
                         "warmupIterations": contract.warmup_iterations,
-                        "iterations": contract.measured_iterations,
+                        "iterations": benchmark_case.measured_iterations,
                         "metrics": {
                             **latency_metrics(latencies),
-                            "successCount": contract.measured_iterations,
+                            "successCount": benchmark_case.measured_iterations,
                             "errorCount": 0,
                             "wallSeconds": round(wall_seconds, 6),
                             "operationsPerSecond": round(
-                                contract.measured_iterations / wall_seconds, 3
+                                benchmark_case.measured_iterations / wall_seconds,
+                                3,
                             ),
                             "bytesPerSecond": round(
                                 (
-                                    contract.measured_iterations
+                                    benchmark_case.measured_iterations
                                     * bytes_per_operation
                                 )
                                 / wall_seconds,
@@ -674,7 +707,7 @@ def main() -> int:
     parser.add_argument(
         "--contract",
         type=Path,
-        default=Path("harness/performance/live-v2.toml"),
+        default=Path("harness/performance/live-v3.toml"),
     )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--plan", action="store_true")

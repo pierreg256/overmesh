@@ -105,13 +105,13 @@ deliverables = [
 version = "0.10.1"
 generation = "V1"
 name = "Request-budgeted performance baseline"
-status = "completed"
+status = "active"
 deliverables = [
   "Prove that every outbound Storage request is instrumented and attributable to one measured client request.",
   "Publish backend request budgets by operation, object class, status, and replica without retaining raw request identifiers.",
   "Close the first-PUT control-read decomposition and preserve the strict quarantine and compaction safety reads.",
   "Remove redundant logical read probes where physical content HEADs enforce the same supported Azure RBAC posture.",
-  "Measure first writes, established overwrites, reads, ranges, HEAD, and deletes under a versioned v2 contract.",
+  "Measure first writes, established overwrites, reads, ranges, HEAD, and deletes under versioned contracts, with v3 stabilizing read percentiles through workload-specific sample counts.",
   "Retain signed canonical evidence and privately replicated raw archives with registered hashes and locations."
 ]
 
@@ -121,7 +121,7 @@ generation = "V1"
 name = "Performance optimization and regression hardening"
 status = "planned"
 deliverables = [
-  "Profile bottlenecks demonstrated by the 0.10.0 baseline.",
+  "Profile bottlenecks demonstrated by the 0.10.1 read-stabilized baseline.",
   "Reduce avoidable round trips, serialization, signing, buffering, and scheduling overhead without weakening invariants.",
   "Re-run the identical live benchmark matrix and record before-and-after evidence.",
   "Add performance regression budgets to release validation where measurements are stable.",

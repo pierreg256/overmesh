@@ -189,8 +189,10 @@ make test-live-azure-client-compat
 ## Performance baseline
 
 `make test-live-azure-performance` executes the versioned matrix in
-`harness/performance/live-v2.toml`. The retained 0.10.0 baseline remains bound
-to `live-v1.toml`. The runner alternates each case between one
+`harness/performance/live-v3.toml`. It keeps 30 measured write operations and
+uses 240 for each read workload so latency percentiles are useful as signals.
+The retained 0.10.0 baseline remains bound to `live-v1.toml`; v2 is retained as
+the first request-attributed campaign contract. The runner alternates each case between one
 direct Storage Account and the live Overmesh endpoint, using the same managed
 identity, Azure SDK versions, validation host, payload bytes, operation count,
 and concurrency.
