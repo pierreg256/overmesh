@@ -144,7 +144,7 @@ python3 "$builder" \
 
 export OVERMESH_LIVE_EVIDENCE_PATH=$evidence
 export OVERMESH_LIVE_EVIDENCE_SIGNATURE_PATH=$signature
-"$signer"
+bash "$signer"
 
 python3 - "$evidence_dir" "$checksums" <<'PY'
 import hashlib
