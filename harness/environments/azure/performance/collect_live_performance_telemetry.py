@@ -16,6 +16,9 @@ from typing import Any
 
 FIELD = re.compile(r"\b([a-z_]+)=(\"[^\"]*\"|\S+)")
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+LOG_TIMESTAMP = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\b"
+)
 
 
 def parse_timestamp(value: str) -> datetime:
@@ -137,7 +140,13 @@ union isfuzzy=true ContainerAppConsoleLogs, ContainerAppConsoleLogs_CL
 def log_rows(response: Any) -> list[tuple[datetime, str]]:
     if isinstance(response, list):
         return [
-            (parse_timestamp(row["TimeGenerated"]), row["Message"])
+            (
+                event_timestamp(
+                    parse_timestamp(row["TimeGenerated"]),
+                    row["Message"],
+                ),
+                row["Message"],
+            )
             for row in response
         ]
     if not isinstance(response, dict):
@@ -151,9 +160,20 @@ def log_rows(response: Any) -> list[tuple[datetime, str]]:
     time_index = columns.index("TimeGenerated")
     message_index = columns.index("Message")
     return [
-        (parse_timestamp(row[time_index]), row[message_index])
+        (
+            event_timestamp(
+                parse_timestamp(row[time_index]),
+                row[message_index],
+            ),
+            row[message_index],
+        )
         for row in tables[0].get("rows", [])
     ]
+
+
+def event_timestamp(generated_at: datetime, message: str) -> datetime:
+    match = LOG_TIMESTAMP.match(ANSI.sub("", message))
+    return parse_timestamp(match.group(1)) if match else generated_at
 
 
 def parse_fields(message: str) -> dict[str, str]:

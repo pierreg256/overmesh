@@ -8,6 +8,7 @@ from collect_live_performance_telemetry import (
     aggregate_events,
     comma_separated_values,
     covered_gateway_cases,
+    event_timestamp,
     events_in_case_window,
     log_rows,
     measured_request_fingerprints,
@@ -31,6 +32,34 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         )
         self.assertEqual(rows[0][1], "event")
         self.assertEqual(rows[0][0].second, 1)
+
+    def test_gateway_timestamp_wins_over_ingestion_time(self) -> None:
+        generated_at = datetime(
+            2026,
+            1,
+            1,
+            0,
+            0,
+            2,
+            tzinfo=timezone.utc,
+        )
+        self.assertEqual(
+            event_timestamp(
+                generated_at,
+                "\x1b[2m2026-01-01T00:00:01.123456Z\x1b[0m INFO",
+            ),
+            datetime(
+                2026,
+                1,
+                1,
+                0,
+                0,
+                1,
+                123456,
+                tzinfo=timezone.utc,
+            ),
+        )
+        self.assertEqual(event_timestamp(generated_at, "no timestamp"), generated_at)
 
     def test_fields_ignore_terminal_ansi_sequences(self) -> None:
         fields = parse_fields(
