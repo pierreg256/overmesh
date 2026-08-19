@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 FIELD = re.compile(r"\b([a-z_]+)=(\"[^\"]*\"|\S+)")
+ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 
 def parse_timestamp(value: str) -> datetime:
@@ -89,6 +90,17 @@ union isfuzzy=true ContainerAppConsoleLogs, ContainerAppConsoleLogs_CL
             "json",
         ]
     )
+    return log_rows(response)
+
+
+def log_rows(response: Any) -> list[tuple[datetime, str]]:
+    if isinstance(response, list):
+        return [
+            (parse_timestamp(row["TimeGenerated"]), row["Message"])
+            for row in response
+        ]
+    if not isinstance(response, dict):
+        raise ValueError("Log Analytics returned an unexpected JSON shape")
     tables = response.get("tables", [])
     if not tables:
         return []
@@ -104,6 +116,7 @@ union isfuzzy=true ContainerAppConsoleLogs, ContainerAppConsoleLogs_CL
 
 
 def parse_fields(message: str) -> dict[str, str]:
+    message = ANSI.sub("", message)
     return {
         name: value[1:-1] if value.startswith('"') and value.endswith('"') else value
         for name, value in FIELD.findall(message)
