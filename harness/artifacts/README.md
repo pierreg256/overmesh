@@ -73,3 +73,25 @@ The deterministic archive SHA-256 is:
 ```text
 2a0b34038982da78362745696af7488673b47a74d67e406332fc254e38bbd838
 ```
+
+The read-stabilized 0.10.1 v3 archive is retained separately on all three
+accounts at:
+
+```text
+overmesh-system/release-evidence/0.10.1/raw/performance-v0101-v3-raw-evidence.tar.gz
+```
+
+It contains the final `live-v3` `raw-performance.json` and
+`client-performance.json`. The raw JSON hash recorded by the canonical
+evidence is:
+
+```text
+53f1069f9b6f1e96290388932981a3c67b4edf08d77e084a1645c8e9494676c4
+```
+
+The client JSON and deterministic archive SHA-256 values are:
+
+```text
+057a43673e57c3033fcbbcabd1a5513722f2b2cdb43c5cdb07f5c4497c99e063  client-performance.json
+af0f10b56e62fd6033dd56f943e8a34750ddc14b4711b68c07abaefa5c314e11  performance-v0101-v3-raw-evidence.tar.gz
+```

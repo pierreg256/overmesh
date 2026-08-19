@@ -271,20 +271,24 @@ back without giving up the guarantee.
 
 ### The measured performance price
 
-The signed 0.10.1 campaign ran the same Azure SDK operations directly against
-Storage and through Overmesh from an isolated France Central VM. Thirty
-measured operations were executed per case with zero client errors and zero
-backend transport failures. Every backend request is attributed to one of the
-thirty client fingerprints, with zero unattributed requests in every case.
+The final signed 0.10.1 campaign ran the same Azure SDK operations directly
+against Storage and through Overmesh from an isolated France Central VM.
+Writes use 30 measured operations per case; reads use 240 so their percentiles
+are useful signals. There were zero client errors, zero backend transport
+failures, and zero unattributed requests in every case. Front Door selected the
+France Container App for the entire run, so these figures describe a France
+client and its lowest-latency healthy origin, not balanced multi-origin traffic.
 
 | Operation | Direct p50 | Overmesh p50 | Overmesh requests |
 | --- | ---: | ---: | ---: |
-| `Put Blob`, 1 KiB, c1 | 9.38 ms | 1,223.65 ms | 49 |
-| `Put Blob`, 1 MiB, c1 | 21.27 ms | 1,403.31 ms | 49 |
-| `Put Blob`, 16 MiB, c1 | 139.97 ms | 2,664.03 ms | 49 |
-| `Delete Blob`, 1 KiB, c1 | 9.88 ms | 1,034.27 ms | 43 |
-| `Get Blob`, 1 MiB, c1 | 16.45 ms | 279.71 ms | 15 |
-| `Head Blob`, 1 MiB, c1 | 5.49 ms | 96.63 ms | 10 |
+| `Put Blob`, 1 KiB, c1 | 9.08 ms | 1,255.49 ms | 49 |
+| `Put Blob`, 1 MiB, c1 | 20.06 ms | 1,379.71 ms | 49 |
+| `Put Blob`, 16 MiB, c1 | 141.54 ms | 2,986.14 ms | 49 |
+| `Delete Blob`, 1 KiB, c1 | 9.52 ms | 1,010.35 ms | 43 |
+| `Get Blob`, 1 MiB, c1 | 15.36 ms | 230.09 ms | 15 |
+| `Get Blob`, 16 MiB, c1 | 110.11 ms | 813.86 ms | 18 |
+| `Range Get`, 1 MiB of 16 MiB, c1 | 15.74 ms | 276.78 ms | 15 |
+| `Head Blob`, 1 MiB, c1 | 5.92 ms | 93.62 ms | 10 |
 
 The 1 KiB and 1 MiB writes cost nearly the same despite a thousand-fold payload
 difference, and DELETE pays the same order of latency while carrying no body.
@@ -440,7 +444,7 @@ Bundle SHA-256  547172399a2bc24ab494b41c9dd37e9b2ceaa054e6e37a17960e1c7e5e244bc9
 
 A signed 0.10.1 performance baseline now measures the fixed request
 amplification described in section 8, with attributed object-class budgets and
-the blocking v2 reference used by 0.11.
+the read-stabilized blocking `live-v3` reference used by 0.11.
 
 ## 11. Where to start if you want to fork it
 
