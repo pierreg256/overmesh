@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
-import contextvars
 import hashlib
 import json
 import math
@@ -28,11 +26,6 @@ ALLOWED_OPERATIONS = {
     "head_blob",
     "delete_blob",
 }
-CURRENT_REQUEST_ID: contextvars.ContextVar[str | None] = contextvars.ContextVar(
-    "current_request_id", default=None
-)
-
-
 @dataclass(frozen=True)
 class Payload:
     id: str
@@ -292,15 +285,6 @@ def plan(contract: Contract) -> dict[str, Any]:
     }
 
 
-@contextlib.contextmanager
-def request_id_scope(request_id: str):
-    token = CURRENT_REQUEST_ID.set(request_id)
-    try:
-        yield
-    finally:
-        CURRENT_REQUEST_ID.reset(token)
-
-
 def percentile(values: list[float], quantile: float) -> float:
     ordered = sorted(values)
     rank = max(1, math.ceil(quantile * len(ordered)))
@@ -340,6 +324,11 @@ def setup_request_id(
     return request_id(run_id, target, case_id, -100_000 - index)
 
 
+def sdk_request_options(request_id: str) -> dict[str, str]:
+    # StorageHeadersPolicy owns x-ms-client-request-id and may overwrite custom policies.
+    return {"client_request_id": request_id}
+
+
 def execute_wave(
     operation: Callable[[int], None],
     iterations: int,
@@ -358,7 +347,6 @@ def execute_wave(
 
 
 def run_campaign(contract_path: Path, output_path: Path) -> None:
-    from azure.core.pipeline.policies import SansIOHTTPPolicy
     from azure.core.exceptions import ResourceNotFoundError
     from azure.identity import (
         ManagedIdentityCredential,
@@ -368,12 +356,6 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
         BlobServiceClient,
         __version__ as blob_version,
     )
-
-    class ClientRequestIdPolicy(SansIOHTTPPolicy):
-        def on_request(self, request: Any) -> None:
-            current = CURRENT_REQUEST_ID.get()
-            if current:
-                request.http_request.headers["x-ms-client-request-id"] = current
 
     required_environment = [
         "OVERMESH_LIVE_GATEWAY_ENDPOINT",
@@ -420,7 +402,6 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
         target: BlobServiceClient(
             account_url=endpoint,
             credential=credential,
-            per_call_policies=[ClientRequestIdPolicy()],
             connection_timeout=contract.request_timeout_seconds,
             read_timeout=contract.request_timeout_seconds,
         )
@@ -456,53 +437,75 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                 else set()
             )
             if benchmark_case.operation in {"get_blob", "get_range", "head_blob"}:
-                with request_id_scope(
-                    request_id(run_id, target, benchmark_case.id, -1)
-                ):
-                    container_client.upload_blob(seed_blob, payload, overwrite=False)
+                container_client.upload_blob(
+                    seed_blob,
+                    payload,
+                    overwrite=False,
+                    **sdk_request_options(
+                        request_id(
+                            run_id,
+                            target,
+                            benchmark_case.id,
+                            -1,
+                        )
+                    ),
+                )
+
             def invoke(index: int) -> None:
                 blob_name = f"{prefix}/item-{index:05}.bin"
                 blob_client = container_client.get_blob_client(blob_name)
                 current_request_id = request_id(
                     run_id, target, benchmark_case.id, index
                 )
-                with request_id_scope(current_request_id):
-                    if benchmark_case.operation == "put_blob":
-                        blob_client.upload_blob(payload, overwrite=False)
-                    elif benchmark_case.operation == "overwrite_blob":
-                        blob_client.upload_blob(payload, overwrite=True)
-                    elif benchmark_case.operation == "get_blob":
-                        received = (
-                            container_client.get_blob_client(seed_blob)
-                            .download_blob()
-                            .readall()
+                if benchmark_case.operation == "put_blob":
+                    blob_client.upload_blob(
+                        payload,
+                        overwrite=False,
+                        **sdk_request_options(current_request_id),
+                    )
+                elif benchmark_case.operation == "overwrite_blob":
+                    blob_client.upload_blob(
+                        payload,
+                        overwrite=True,
+                        **sdk_request_options(current_request_id),
+                    )
+                elif benchmark_case.operation == "get_blob":
+                    received = (
+                        container_client.get_blob_client(seed_blob)
+                        .download_blob(**sdk_request_options(current_request_id))
+                        .readall()
+                    )
+                    if received != payload:
+                        raise RuntimeError("downloaded bytes did not match payload")
+                elif benchmark_case.operation == "get_range":
+                    expected = payload[: benchmark_case.range_bytes]
+                    received = (
+                        container_client.get_blob_client(seed_blob)
+                        .download_blob(
+                            offset=0,
+                            length=benchmark_case.range_bytes,
+                            **sdk_request_options(current_request_id),
                         )
-                        if received != payload:
-                            raise RuntimeError("downloaded bytes did not match payload")
-                    elif benchmark_case.operation == "get_range":
-                        expected = payload[: benchmark_case.range_bytes]
-                        received = (
-                            container_client.get_blob_client(seed_blob)
-                            .download_blob(
-                                offset=0,
-                                length=benchmark_case.range_bytes,
-                            )
-                            .readall()
-                        )
-                        if received != expected:
-                            raise RuntimeError("range bytes did not match payload")
-                    elif benchmark_case.operation == "head_blob":
-                        properties = container_client.get_blob_client(
-                            seed_blob
-                        ).get_blob_properties()
-                        if properties.size != len(payload):
-                            raise RuntimeError("HEAD content length did not match")
-                    elif benchmark_case.operation == "delete_blob":
-                        blob_client.delete_blob()
-                    else:
-                        raise RuntimeError(
-                            f"unsupported operation {benchmark_case.operation}"
-                        )
+                        .readall()
+                    )
+                    if received != expected:
+                        raise RuntimeError("range bytes did not match payload")
+                elif benchmark_case.operation == "head_blob":
+                    properties = container_client.get_blob_client(
+                        seed_blob
+                    ).get_blob_properties(
+                        **sdk_request_options(current_request_id)
+                    )
+                    if properties.size != len(payload):
+                        raise RuntimeError("HEAD content length did not match")
+                elif benchmark_case.operation == "delete_blob":
+                    blob_client.delete_blob(
+                        **sdk_request_options(current_request_id)
+                    )
+                else:
+                    raise RuntimeError(
+                        f"unsupported operation {benchmark_case.operation}"
+                    )
 
             try:
                 if benchmark_case.operation in {"overwrite_blob", "delete_blob"}:
@@ -512,17 +515,19 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                         + contract.measured_iterations
                     ):
                         blob_name = f"{prefix}/item-{index:05}.bin"
-                        with request_id_scope(
-                            setup_request_id(
-                                run_id,
-                                target,
-                                benchmark_case.id,
-                                index,
-                            )
-                        ):
-                            container_client.upload_blob(
-                                blob_name, initial_payload, overwrite=False
-                            )
+                        container_client.upload_blob(
+                            blob_name,
+                            initial_payload,
+                            overwrite=False,
+                            **sdk_request_options(
+                                setup_request_id(
+                                    run_id,
+                                    target,
+                                    benchmark_case.id,
+                                    index,
+                                )
+                            ),
+                        )
                 execute_wave(
                     invoke,
                     contract.warmup_iterations,
@@ -580,15 +585,17 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
             finally:
                 for cleanup_index, blob_name in enumerate(sorted(cleanup)):
                     try:
-                        with request_id_scope(
-                            request_id(
-                                run_id,
-                                target,
-                                benchmark_case.id,
-                                100000 + cleanup_index,
-                            )
-                        ):
-                            container_client.delete_blob(blob_name)
+                        container_client.delete_blob(
+                            blob_name,
+                            **sdk_request_options(
+                                request_id(
+                                    run_id,
+                                    target,
+                                    benchmark_case.id,
+                                    100000 + cleanup_index,
+                                )
+                            ),
+                        )
                     except ResourceNotFoundError:
                         pass
 

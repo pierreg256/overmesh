@@ -9,6 +9,7 @@ from overmesh_live_performance import (
     load_contract,
     percentile,
     request_id,
+    sdk_request_options,
     setup_request_id,
 )
 
@@ -77,6 +78,12 @@ concurrency = [1]
         self.assertNotEqual(
             setup_request_id("run", "gateway", "overwrite", 3),
             request_id("run", "gateway", "overwrite", 3),
+        )
+
+    def test_request_id_uses_the_storage_sdk_supported_option(self) -> None:
+        self.assertEqual(
+            sdk_request_options("perf-gateway-123"),
+            {"client_request_id": "perf-gateway-123"},
         )
 
 
