@@ -224,8 +224,10 @@ Additional required environment:
 - `OVERMESH_LIVE_PERFORMANCE_ISOLATED_ENVIRONMENT=true`;
 - `OVERMESH_LIVE_PERFORMANCE_PUBLIC_KEY`;
 - `OVERMESH_LIVE_PERFORMANCE_WORKSPACE_ID` (the workspace customer GUID);
-- `OVERMESH_LIVE_PERFORMANCE_GATEWAY_APP_NAME`;
-- `OVERMESH_LIVE_PERFORMANCE_GATEWAY_RESOURCE_ID`;
+- `OVERMESH_LIVE_PERFORMANCE_GATEWAY_APP_NAME`, as a comma-separated list
+  when Front Door can route to multiple Gateway Container Apps;
+- `OVERMESH_LIVE_PERFORMANCE_GATEWAY_RESOURCE_ID`, in the same order and as a
+  comma-separated list when multiple Gateway resources serve the endpoint;
 - `OVERMESH_LIVE_EVIDENCE_KEY_ID`;
 - `OVERMESH_LIVE_EVIDENCE_SIGNING_CLIENT_ID`.
 
@@ -258,11 +260,13 @@ and one `overmesh_manifest_sign` event per Key Vault signing request, including
 duration, success, backend operation and object class. Evidence publishes
 object-class totals and operation/object-class decompositions so generic
 `control_get_object` traffic becomes a checkable budget. Before signing, the
-live gate queries those events per case and Container Apps `UsageNanoCores`,
-`WorkingSetBytes`, and replica metrics once for the campaign. The gate requires
-an explicit isolated-environment assertion so other client traffic cannot
-contaminate backend request counts. Backend timings explicitly measure time to
-response headers, not full response-body transfer. Azure Monitor exposes
-resource metrics at one-minute granularity, so they are not attributed to
-individual sub-minute cases. Raw logs and Azure resource identifiers are not
-retained.
+live gate queries those events per case across every Gateway origin and waits
+for the Azure Monitor event count to stabilize before accepting the result. It
+also sums Container Apps `UsageNanoCores`, `WorkingSetBytes`, and replica
+metrics across the configured Gateway resources once for the campaign. The
+gate requires an explicit isolated-environment assertion so other client
+traffic cannot contaminate backend request counts. Backend timings explicitly
+measure time to response headers, not full response-body transfer. Azure
+Monitor exposes resource metrics at one-minute granularity, so they are not
+attributed to individual sub-minute cases. Raw logs and Azure resource
+identifiers are not retained.

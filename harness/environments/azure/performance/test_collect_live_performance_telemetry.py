@@ -6,9 +6,12 @@ from unittest.mock import patch
 
 from collect_live_performance_telemetry import (
     aggregate_events,
+    comma_separated_values,
     covered_gateway_cases,
     log_rows,
+    next_stability,
     parse_fields,
+    query_logs,
     query_metrics,
 )
 
@@ -110,6 +113,38 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         ]
         self.assertEqual(covered_gateway_cases(events, cases), {"covered"})
 
+    def test_comma_separated_values_supports_multiple_gateways(self) -> None:
+        self.assertEqual(
+            comma_separated_values("gateway-frc, gateway-swe"),
+            ["gateway-frc", "gateway-swe"],
+        )
+
+    @patch("collect_live_performance_telemetry.run_json")
+    def test_log_query_includes_every_gateway_app(self, run_json) -> None:
+        run_json.return_value = []
+        query_logs(
+            "workspace",
+            "gateway-frc,gateway-swe",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:01:00Z",
+        )
+        command = run_json.call_args.args[0]
+        query = command[command.index("--analytics-query") + 1]
+        self.assertIn(
+            "AppName in ('gateway-frc', 'gateway-swe')",
+            query,
+        )
+
+    def test_event_count_must_stabilize_after_all_cases_are_covered(self) -> None:
+        previous, stable = next_stability(None, 0, 100, False)
+        self.assertEqual((previous, stable), (None, 0))
+        previous, stable = next_stability(previous, stable, 100, True)
+        self.assertEqual((previous, stable), (100, 1))
+        previous, stable = next_stability(previous, stable, 120, True)
+        self.assertEqual((previous, stable), (120, 1))
+        previous, stable = next_stability(previous, stable, 120, True)
+        self.assertEqual((previous, stable), (120, 2))
+
     @patch("collect_live_performance_telemetry.run_json")
     def test_short_metric_window_is_padded_to_two_minutes(
         self,
@@ -123,8 +158,63 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         )
         command = run_json.call_args.args[0]
         self.assertIn("--metrics", command)
+        self.assertEqual(result["resourceCount"], 1)
+        self.assertEqual(result["cpuCores"]["resources"], 0)
         self.assertEqual(result["window"]["startedAt"], "2025-12-31T23:59:15Z")
         self.assertEqual(result["window"]["finishedAt"], "2026-01-01T00:01:15Z")
+
+    @patch("collect_live_performance_telemetry.run_json")
+    def test_metrics_are_summed_across_gateway_resources(
+        self,
+        run_json,
+    ) -> None:
+        run_json.side_effect = [
+            {
+                "value": [
+                    {
+                        "name": {"value": "UsageNanoCores"},
+                        "timeseries": [
+                            {
+                                "data": [
+                                    {
+                                        "timeStamp": "2026-01-01T00:00:00Z",
+                                        "average": 1_000_000_000,
+                                        "maximum": 2_000_000_000,
+                                    }
+                                ]
+                            }
+                        ],
+                    }
+                ]
+            },
+            {
+                "value": [
+                    {
+                        "name": {"value": "UsageNanoCores"},
+                        "timeseries": [
+                            {
+                                "data": [
+                                    {
+                                        "timeStamp": "2026-01-01T00:00:00Z",
+                                        "average": 3_000_000_000,
+                                        "maximum": 4_000_000_000,
+                                    }
+                                ]
+                            }
+                        ],
+                    }
+                ]
+            },
+        ]
+        result = query_metrics(
+            "resource-frc,resource-swe",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:02:00Z",
+        )
+        self.assertEqual(result["resourceCount"], 2)
+        self.assertEqual(result["cpuCores"]["resources"], 2)
+        self.assertEqual(result["cpuCores"]["average"], 4.0)
+        self.assertEqual(result["cpuCores"]["maximum"], 6.0)
 
 
 if __name__ == "__main__":

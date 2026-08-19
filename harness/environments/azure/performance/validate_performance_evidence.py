@@ -138,12 +138,21 @@ def validate_document(
 
     if contract.schema_version >= 2:
         container = document.get("campaignTelemetry", {}).get("containerApp", {})
-        if container.get("cpuCores", {}).get("samples", 0) <= 0:
-            raise ValueError("campaign has no CPU samples")
-        if container.get("memoryBytes", {}).get("samples", 0) <= 0:
-            raise ValueError("campaign has no memory samples")
-        if container.get("replicas", {}).get("samples", 0) <= 0:
-            raise ValueError("campaign has no replica samples")
+        resource_count = container.get("resourceCount", 0)
+        if resource_count <= 0:
+            raise ValueError("campaign has no Container Apps resources")
+        for metric, label in (
+            ("cpuCores", "CPU"),
+            ("memoryBytes", "memory"),
+            ("replicas", "replica"),
+        ):
+            summary = container.get(metric, {})
+            if summary.get("samples", 0) <= 0:
+                raise ValueError(f"campaign has no {label} samples")
+            if summary.get("resources") != resource_count:
+                raise ValueError(
+                    f"campaign has incomplete {label} resource coverage"
+                )
 
     comparisons = document.get("comparisons")
     if (

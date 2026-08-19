@@ -57,18 +57,29 @@ def run_json(command: list[str]) -> Any:
     return json.loads(completed.stdout)
 
 
+def comma_separated_values(value: str | list[str]) -> list[str]:
+    values = value if isinstance(value, list) else value.split(",")
+    normalized = [item.strip() for item in values if item.strip()]
+    if not normalized:
+        raise ValueError("at least one value is required")
+    return normalized
+
+
 def query_logs(
     workspace: str,
-    app_name: str,
+    app_names: str | list[str],
     started_at: str,
     finished_at: str,
 ) -> list[tuple[datetime, str]]:
-    escaped_name = app_name.replace("'", "''")
+    escaped_names = ", ".join(
+        f"'{name.replace(chr(39), chr(39) * 2)}'"
+        for name in comma_separated_values(app_names)
+    )
     query = f"""
 union isfuzzy=true ContainerAppConsoleLogs, ContainerAppConsoleLogs_CL
 | extend AppName = tostring(column_ifexists("ContainerAppName", column_ifexists("ContainerAppName_s", "")))
 | extend Message = tostring(column_ifexists("Log", column_ifexists("Log_s", "")))
-| where AppName == '{escaped_name}'
+| where AppName in ({escaped_names})
 | where TimeGenerated between (datetime({started_at}) .. datetime({finished_at}))
 | where Message has "overmesh_backend_request" or Message has "overmesh_manifest_sign"
 | project TimeGenerated, Message
@@ -124,7 +135,7 @@ def parse_fields(message: str) -> dict[str, str]:
 
 
 def query_metrics(
-    resource_id: str,
+    resource_ids: str | list[str],
     started_at: str,
     finished_at: str,
 ) -> dict[str, Any]:
@@ -137,54 +148,72 @@ def query_metrics(
         query_finished += padding
     query_started_at = query_started.isoformat().replace("+00:00", "Z")
     query_finished_at = query_finished.isoformat().replace("+00:00", "Z")
-    response = run_json(
-        [
-            "az",
-            "monitor",
-            "metrics",
-            "list",
-            "--resource",
-            resource_id,
-            "--metrics",
-            "UsageNanoCores",
-            "WorkingSetBytes",
-            "Replicas",
-            "--interval",
-            "1m",
-            "--aggregation",
-            "Average",
-            "Maximum",
-            "--start-time",
-            query_started_at,
-            "--end-time",
-            query_finished_at,
-            "--output",
-            "json",
-        ]
-    )
-    series: dict[str, list[dict[str, Any]]] = {}
-    for metric in response.get("value", []):
-        name = metric.get("name", {}).get("value")
-        points: list[dict[str, Any]] = []
-        for timeseries in metric.get("timeseries", []):
-            points.extend(timeseries.get("data", []))
-        if isinstance(name, str):
-            series[name] = points
+    resources = comma_separated_values(resource_ids)
+    series: dict[str, dict[str, dict[str, float]]] = {}
+    metric_resources: dict[str, set[int]] = {}
+    for resource_index, resource_id in enumerate(resources):
+        response = run_json(
+            [
+                "az",
+                "monitor",
+                "metrics",
+                "list",
+                "--resource",
+                resource_id,
+                "--metrics",
+                "UsageNanoCores",
+                "WorkingSetBytes",
+                "Replicas",
+                "--interval",
+                "1m",
+                "--aggregation",
+                "Average",
+                "Maximum",
+                "--start-time",
+                query_started_at,
+                "--end-time",
+                query_finished_at,
+                "--output",
+                "json",
+            ]
+        )
+        for metric in response.get("value", []):
+            name = metric.get("name", {}).get("value")
+            if not isinstance(name, str):
+                continue
+            for timeseries in metric.get("timeseries", []):
+                for point in timeseries.get("data", []):
+                    timestamp = point.get("timeStamp")
+                    if not isinstance(timestamp, str):
+                        continue
+                    combined = series.setdefault(name, {}).setdefault(
+                        timestamp, {}
+                    )
+                    for aggregation in ("average", "maximum"):
+                        value = point.get(aggregation)
+                        if value is not None:
+                            metric_resources.setdefault(name, set()).add(
+                                resource_index
+                            )
+                            combined[aggregation] = combined.get(
+                                aggregation, 0.0
+                            ) + float(value)
 
     def summarize(name: str, divisor: float) -> dict[str, Any]:
-        points = series.get(name, [])
+        points = list(series.get(name, {}).values())
         averages = [
-            float(point["average"]) / divisor
+            point["average"] / divisor
             for point in points
             if point.get("average") is not None
         ]
         maximums = [
-            float(point["maximum"]) / divisor
+            point["maximum"] / divisor
             for point in points
             if point.get("maximum") is not None
         ]
         return {
             "samples": max(len(averages), len(maximums)),
+            "resources": len(metric_resources.get(name, set())),
             "average": round(sum(averages) / len(averages), 6)
             if averages
             else None,
@@ -193,6 +222,7 @@ def query_metrics(
 
     return {
         "interval": "1m",
+        "resourceCount": len(resources),
         "window": {
             "startedAt": query_started_at,
             "finishedAt": query_finished_at,
@@ -298,6 +328,19 @@ def covered_gateway_cases(
     return covered
 
 
+def next_stability(
+    previous_count: int | None,
+    stable_polls: int,
+    current_count: int,
+    fully_covered: bool,
+) -> tuple[int | None, int]:
+    if not fully_covered:
+        return None, 0
+    if previous_count == current_count:
+        return current_count, stable_polls + 1
+    return current_count, 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--evidence", type=Path, required=True)
@@ -305,8 +348,8 @@ def main() -> int:
     arguments = parser.parse_args()
 
     workspace = os.environ["OVERMESH_LIVE_PERFORMANCE_WORKSPACE_ID"]
-    app_name = os.environ["OVERMESH_LIVE_PERFORMANCE_GATEWAY_APP_NAME"]
-    resource_id = os.environ[
+    app_names = os.environ["OVERMESH_LIVE_PERFORMANCE_GATEWAY_APP_NAME"]
+    resource_ids = os.environ[
         "OVERMESH_LIVE_PERFORMANCE_GATEWAY_RESOURCE_ID"
     ]
     wait_seconds = int(
@@ -315,6 +358,16 @@ def main() -> int:
     poll_seconds = int(
         os.environ.get("OVERMESH_LIVE_PERFORMANCE_LOG_POLL_SECONDS", "15")
     )
+    stable_polls_required = int(
+        os.environ.get(
+            "OVERMESH_LIVE_PERFORMANCE_LOG_STABLE_POLLS",
+            "3",
+        )
+    )
+    if stable_polls_required < 2:
+        raise ValueError(
+            "OVERMESH_LIVE_PERFORMANCE_LOG_STABLE_POLLS must be at least 2"
+        )
     evidence = json.loads(arguments.evidence.read_text(encoding="utf-8"))
     gateway_cases = [
         benchmark_case
@@ -324,27 +377,43 @@ def main() -> int:
     campaign = evidence["campaign"]
     deadline = time.monotonic() + wait_seconds
     events: list[tuple[datetime, str]] = []
+    previous_count: int | None = None
+    stable_polls = 0
     while True:
         events = query_logs(
             workspace,
-            app_name,
+            app_names,
             campaign["startedAt"],
             campaign["finishedAt"],
         )
         covered = covered_gateway_cases(events, gateway_cases)
-        if len(covered) == len(gateway_cases) or time.monotonic() >= deadline:
-            break
-        time.sleep(poll_seconds)
-    missing_cases = sorted(
-        benchmark_case["id"]
-        for benchmark_case in gateway_cases
-        if benchmark_case["id"] not in covered
-    )
-    if missing_cases:
-        raise RuntimeError(
-            "Azure Monitor did not return backend telemetry within "
-            f"{wait_seconds} seconds for: {', '.join(missing_cases)}"
+        previous_count, stable_polls = next_stability(
+            previous_count,
+            stable_polls,
+            len(events),
+            len(covered) == len(gateway_cases),
         )
+        if stable_polls >= stable_polls_required:
+            break
+        if time.monotonic() >= deadline:
+            missing_cases = sorted(
+                benchmark_case["id"]
+                for benchmark_case in gateway_cases
+                if benchmark_case["id"] not in covered
+            )
+            detail = (
+                f"missing cases: {', '.join(missing_cases)}"
+                if missing_cases
+                else (
+                    "event count did not stabilize "
+                    f"for {stable_polls_required} polls"
+                )
+            )
+            raise RuntimeError(
+                "Azure Monitor did not return complete backend telemetry "
+                f"within {wait_seconds} seconds; {detail}"
+            )
+        time.sleep(poll_seconds)
 
     for benchmark_case in gateway_cases:
         started = parse_timestamp(benchmark_case["startedAt"])
@@ -362,7 +431,7 @@ def main() -> int:
         benchmark_case["serverTelemetry"] = event_metrics
 
     container_metrics = query_metrics(
-        resource_id,
+        resource_ids,
         campaign["startedAt"],
         campaign["finishedAt"],
     )
@@ -370,6 +439,12 @@ def main() -> int:
         container_metrics["cpuCores"]["samples"] == 0
         or container_metrics["memoryBytes"]["samples"] == 0
         or container_metrics["replicas"]["samples"] == 0
+        or container_metrics["cpuCores"]["resources"]
+        != container_metrics["resourceCount"]
+        or container_metrics["memoryBytes"]["resources"]
+        != container_metrics["resourceCount"]
+        or container_metrics["replicas"]["resources"]
+        != container_metrics["resourceCount"]
     ):
         raise RuntimeError("campaign has incomplete Container Apps metrics")
     evidence["campaignTelemetry"] = {"containerApp": container_metrics}
