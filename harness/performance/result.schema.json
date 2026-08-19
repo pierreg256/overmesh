@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://overmesh.io/schemas/performance-result-v1.json",
+  "title": "Overmesh live performance campaign",
+  "type": "object",
+  "required": [
+    "apiVersion",
+    "campaign",
+    "contract",
+    "toolVersions",
+    "cases",
+    "comparisons",
+    "historicalComparison",
+    "generatedAt",
+    "redaction"
+  ],
+  "properties": {
+    "apiVersion": {
+      "const": "performance.overmesh.io/v1"
+    },
+    "campaign": {
+      "type": "object",
+      "required": [
+        "runId",
+        "startedAt",
+        "finishedAt",
+        "commit",
+        "projectVersion",
+        "ringVersion",
+        "ringHash",
+        "deployment",
+        "environment",
+        "isolatedEnvironment"
+      ]
+    },
+    "contract": {
+      "type": "object",
+      "required": ["id", "sha256", "schemaVersion"]
+    },
+    "toolVersions": {
+      "type": "object",
+      "required": [
+        "python",
+        "azureIdentity",
+        "azureStorageBlob",
+        "azureCli",
+        "logAnalyticsExtension"
+      ]
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "target",
+          "operation",
+          "payload",
+          "concurrency",
+          "startedAt",
+          "finishedAt",
+          "iterations",
+          "metrics"
+        ]
+      }
+    },
+    "comparisons": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "case",
+          "gatewayToDirectLatencyRatio",
+          "gatewayToDirectThroughputRatio"
+        ]
+      }
+    },
+    "generatedAt": {
+      "type": "string"
+    },
+    "redaction": {
+      "type": "object",
+      "required": [
+        "apiVersion",
+        "algorithm",
+        "canonicalForm",
+        "rawBundleSha256"
+      ]
+    },
+    "historicalComparison": {
+      "type": "object",
+      "required": [
+        "status",
+        "apiVersion",
+        "contractSha256",
+        "current"
+      ]
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,61 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+
+from overmesh_live_performance import latency_metrics, load_contract, percentile
+
+
+class PerformanceContractTests(unittest.TestCase):
+    def test_repository_contract_expands_to_unique_cases(self) -> None:
+        contract = load_contract(Path("harness/performance/live-v1.toml"))
+        case_ids = [benchmark_case.id for benchmark_case in contract.cases]
+        self.assertEqual(len(case_ids), 25)
+        self.assertEqual(len(case_ids), len(set(case_ids)))
+
+    def test_unknown_payload_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "invalid.toml"
+            path.write_text(
+                """
+schema_version = 1
+warmup_iterations = 1
+measured_iterations = 1
+request_timeout_seconds = 1
+target_order = ["direct", "gateway"]
+
+[[payload]]
+id = "known"
+size_bytes = 1
+
+[[workload]]
+operation = "get_blob"
+payloads = ["unknown"]
+concurrency = [1]
+""",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "unknown payload"):
+                load_contract(path)
+
+    def test_nearest_rank_percentiles_are_deterministic(self) -> None:
+        values = [10.0, 50.0, 20.0, 40.0, 30.0]
+        self.assertEqual(percentile(values, 0.50), 30.0)
+        self.assertEqual(percentile(values, 0.95), 50.0)
+        self.assertEqual(
+            latency_metrics(values),
+            {
+                "minMs": 10.0,
+                "meanMs": 30.0,
+                "p50Ms": 30.0,
+                "p90Ms": 50.0,
+                "p95Ms": 50.0,
+                "p99Ms": 50.0,
+                "maxMs": 50.0,
+            },
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

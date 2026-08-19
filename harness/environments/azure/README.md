@@ -52,6 +52,7 @@ make test-live-azure-gateway
 make test-live-azure-client-compat
 make test-live-azure-placement
 make test-live-azure-reconciliation
+make test-live-azure-performance
 ```
 
 It requires:
@@ -184,3 +185,71 @@ OVERMESH_LIVE_CUSTOMER_CONTAINER="customer-data" \
 OVERMESH_LIVE_ALLOWED_MANAGED_IDENTITY_CLIENT_ID="00000000-0000-0000-0000-000000000000" \
 make test-live-azure-client-compat
 ```
+
+## Performance baseline
+
+`make test-live-azure-performance` executes the versioned matrix in
+`harness/performance/live-v1.toml`. The runner alternates each case between one
+direct Storage Account and the live Overmesh endpoint, using the same managed
+identity, Azure SDK versions, validation host, payload bytes, operation count,
+and concurrency.
+
+The performance gate is intentionally excluded from `test-pre-pr-live` because
+it is long-running and retains signed release evidence. `make test-release`
+includes it.
+
+The initial contract covers `Put Blob`, full `Get Blob`, ranged reads, `Head
+Blob`, and `Delete Blob` at 1 KiB, 1 MiB, and 16 MiB where applicable, with
+concurrency levels 1, 4, and 16. Warm-up samples are excluded. Retained
+measurements include min, mean, p50, p90, p95, p99, max, operations per second,
+bytes per second, successful and failed operation counts, and
+gateway-to-direct ratios.
+
+Additional required environment:
+
+- `OVERMESH_LIVE_PERFORMANCE_RING_VERSION`;
+- `OVERMESH_LIVE_PERFORMANCE_RING_HASH`;
+- `OVERMESH_LIVE_PERFORMANCE_DEPLOYMENT`;
+- `OVERMESH_LIVE_PERFORMANCE_ENVIRONMENT`;
+- `OVERMESH_LIVE_PERFORMANCE_ISOLATED_ENVIRONMENT=true`;
+- `OVERMESH_LIVE_PERFORMANCE_PUBLIC_KEY`;
+- `OVERMESH_LIVE_PERFORMANCE_WORKSPACE_ID` (the workspace customer GUID);
+- `OVERMESH_LIVE_PERFORMANCE_GATEWAY_APP_NAME`;
+- `OVERMESH_LIVE_PERFORMANCE_GATEWAY_RESOURCE_ID`;
+- `OVERMESH_LIVE_EVIDENCE_KEY_ID`;
+- `OVERMESH_LIVE_EVIDENCE_SIGNING_CLIENT_ID`.
+
+The default raw result is
+`.harness/live-performance/<run-id>/raw-performance.json`. It is local input,
+not retained evidence. The gate then deterministically redacts the result,
+copies the public verification key, signs the canonical JSON through Key
+Vault, verifies the signature through Key Vault, and writes `SHA256SUMS` under
+`.harness/live-performance/<run-id>/signed/`. The endpoint itself is not
+written to evidence; only a deterministic hostname fingerprint is retained.
+The runner records the commit, project version, Ring provenance, immutable
+deployment identifier, logical environment identifier, selected Storage API
+version, matrix hash, and pinned SDK versions.
+
+The gate installs the pinned Log Analytics Azure CLI extension `1.0.0b1` under
+`$OVERMESH_LIVE_PERFORMANCE_ROOT/az-extensions`, not in the operator's global
+Azure CLI extension directory.
+
+`OVERMESH_LIVE_PERFORMANCE_BASELINE_EVIDENCE` optionally points to an earlier
+canonical performance evidence file. The gate rejects a different contract or
+case set, then records changes in Gateway-to-direct latency and throughput
+ratios, backend requests per operation, signing p95, peak CPU, and peak memory.
+Without a predecessor, the signed result explicitly records
+`baseline-established`.
+
+The client-side baseline deliberately does not infer server behavior. Gateway
+logs emit one structured `overmesh_backend_request` event per Storage request
+and one `overmesh_manifest_sign` event per Key Vault signing request, including
+duration and success. Before signing, the live gate queries those events and
+Container Apps `UsageNanoCores` and `WorkingSetBytes` metrics for each measured
+Gateway case, together with the replica count needed to interpret aggregate
+resource use. The gate requires an explicit isolated-environment assertion so
+other client traffic cannot contaminate backend request counts. Backend timings
+explicitly measure time to response headers, not full response-body transfer.
+Azure Monitor exposes those resource metrics at one-minute granularity; shorter
+cases retain the exact enclosing one-minute query window, which can overlap an
+adjacent case. Raw logs and Azure resource identifiers are not retained.
