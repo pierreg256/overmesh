@@ -25,6 +25,19 @@ FORBIDDEN = [
 ]
 
 
+def validate_v2_request_coverage(
+    key: tuple[str, str],
+    case: dict[str, Any],
+    backend: dict[str, Any],
+) -> None:
+    if backend.get("clientRequestCount") != case.get("iterations"):
+        raise ValueError(
+            f"case {key} does not cover every measured client request"
+        )
+    if backend.get("unattributedRequests") != 0:
+        raise ValueError(f"case {key} has unattributed backend requests")
+
+
 def validate_document(
     document: dict[str, Any],
     contract: Contract,
@@ -99,16 +112,7 @@ def validate_document(
             continue
         object_classes = backend.get("byObjectClass", {})
         if contract.schema_version >= 2:
-            if backend.get("clientRequestCount") != benchmark_case.get(
-                "iterations"
-            ):
-                raise ValueError(
-                    f"case {key} does not cover every measured client request"
-                )
-            if backend.get("unattributedRequests") != 0:
-                raise ValueError(
-                    f"case {key} has unattributed backend requests"
-                )
+            validate_v2_request_coverage(key, case, backend)
         if (
             object_classes.get("unknown", 0) != 0
             or object_classes.get("control_other", 0) != 0

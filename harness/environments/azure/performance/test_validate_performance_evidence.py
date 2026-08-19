@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-from validate_performance_evidence import FORBIDDEN
+from validate_performance_evidence import (
+    FORBIDDEN,
+    validate_v2_request_coverage,
+)
 
 
 class ValidatePerformanceEvidenceTests(unittest.TestCase):
@@ -24,6 +27,19 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
     def test_canonical_scan_accepts_deterministic_pseudonyms(self) -> None:
         accepted = "sub-4f2a9c1e8b7d3056 fd-6b3e05d7c4a19f28 storage-a"
         self.assertFalse(any(pattern.search(accepted) for pattern in FORBIDDEN))
+
+    def test_v2_request_coverage_uses_the_case_iteration_count(self) -> None:
+        validate_v2_request_coverage(
+            ("head_blob-1kib-c1", "gateway"),
+            {"iterations": 30},
+            {"clientRequestCount": 30, "unattributedRequests": 0},
+        )
+        with self.assertRaisesRegex(ValueError, "every measured client request"):
+            validate_v2_request_coverage(
+                ("head_blob-1kib-c1", "gateway"),
+                {"iterations": 30},
+                {"clientRequestCount": 29, "unattributedRequests": 0},
+            )
 
 
 if __name__ == "__main__":
