@@ -14,9 +14,8 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: Image tag to publish
-        required: true
-        default: 0.9.0
+        description: Optional image tag; defaults to the Cargo version
+        required: false
 
 permissions:
   contents: read

@@ -8,6 +8,7 @@ from collect_live_performance_telemetry import (
     aggregate_events,
     comma_separated_values,
     covered_gateway_cases,
+    events_in_case_window,
     log_rows,
     measured_request_fingerprints,
     next_stability,
@@ -130,6 +131,34 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         self.assertEqual(
             comma_separated_values("gateway-frc, gateway-swe"),
             ["gateway-frc", "gateway-swe"],
+        )
+
+    def test_case_window_keeps_unattributed_streaming_events(self) -> None:
+        benchmark_case = {
+            "startedAt": "2026-01-01T00:00:01Z",
+            "finishedAt": "2026-01-01T00:00:03Z",
+        }
+        events = [
+            (
+                datetime(2026, 1, 1, 0, 0, second, tzinfo=timezone.utc),
+                message,
+            )
+            for second, message in [
+                (0, "before"),
+                (1, "measured"),
+                (2, "missing-fingerprint"),
+                (4, "after"),
+            ]
+        ]
+        self.assertEqual(
+            [
+                message
+                for _, message in events_in_case_window(
+                    events,
+                    benchmark_case,
+                )
+            ],
+            ["measured", "missing-fingerprint"],
         )
 
     @patch("collect_live_performance_telemetry.run_json")

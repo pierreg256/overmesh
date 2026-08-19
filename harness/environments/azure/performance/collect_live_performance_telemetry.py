@@ -376,6 +376,19 @@ def covered_gateway_cases(
     return covered
 
 
+def events_in_case_window(
+    events: list[tuple[datetime, str]],
+    benchmark_case: dict[str, Any],
+) -> list[tuple[datetime, str]]:
+    started_at = parse_timestamp(benchmark_case["startedAt"])
+    finished_at = parse_timestamp(benchmark_case["finishedAt"])
+    return [
+        (timestamp, message)
+        for timestamp, message in events
+        if started_at <= timestamp <= finished_at
+    ]
+
+
 def next_stability(
     previous_count: int | None,
     stable_polls: int,
@@ -430,7 +443,6 @@ def main() -> int:
         )
         for benchmark_case in gateway_cases
     }
-    expected_fingerprints = set().union(*expected_by_case.values())
     deadline = time.monotonic() + wait_seconds
     events: list[tuple[datetime, str]] = []
     previous_count: int | None = None
@@ -447,11 +459,15 @@ def main() -> int:
             gateway_cases,
             campaign["runId"],
         )
-        relevant_event_count = sum(
-            1
-            for _, message in events
-            if parse_fields(message).get("client_request_fingerprint")
-            in expected_fingerprints
+        relevant_event_count = len(
+            {
+                (timestamp, message)
+                for benchmark_case in gateway_cases
+                for timestamp, message in events_in_case_window(
+                    events,
+                    benchmark_case,
+                )
+            }
         )
         previous_count, stable_polls = next_stability(
             previous_count,
@@ -482,12 +498,9 @@ def main() -> int:
         time.sleep(poll_seconds)
 
     for benchmark_case in gateway_cases:
-        expected = expected_by_case[benchmark_case["id"]]
         case_messages = [
             message
-            for _, message in events
-            if parse_fields(message).get("client_request_fingerprint")
-            in expected
+            for _, message in events_in_case_window(events, benchmark_case)
         ]
         event_metrics = aggregate_events(case_messages)
         if event_metrics["backendRequests"]["count"] == 0:

@@ -46,6 +46,7 @@ struct MemoryState {
     caller_head_calls: AtomicU64,
     blob_write_auth_calls: AtomicU64,
     caller_data_write_calls: AtomicU64,
+    caller_range_fingerprints: Mutex<Vec<String>>,
     deny_blob_write: AtomicBool,
     deny_caller_data_write: AtomicBool,
     containers: Mutex<BTreeMap<String, u64>>,
@@ -329,6 +330,11 @@ impl ReplicaBackend for MemoryBackend {
         range: Option<(u64, u64)>,
         _caller_token: &CallerToken,
     ) -> Result<Option<Vec<u8>>, BackendError> {
+        self.state
+            .caller_range_fingerprints
+            .lock()
+            .expect("fingerprint lock")
+            .push(crate::request_context::current_client_request_fingerprint());
         let key = format!("data/{container}/{object_key}");
         self.maybe_fail(&key)?;
         let Some(value) = self.object(&key) else {
@@ -3057,7 +3063,7 @@ async fn commits_identical_heads_to_both_replicas() {
 #[tokio::test]
 async fn reads_validated_heads_and_ranges_across_block_boundaries() {
     let path = "/container/ranged";
-    let (coordinator, read_service, _, _) = read_fixture(path);
+    let (coordinator, read_service, primary, secondary) = read_fixture(path);
     let content = spool_body(Body::from("abcdefghij"), 4)
         .await
         .expect("content");
@@ -3078,10 +3084,12 @@ async fn reads_validated_heads_and_ranges_across_block_boundaries() {
     assert_eq!(metadata.logical_etag, committed.logical_etag);
     assert_eq!(metadata.content_length, 10);
 
-    let read = read_service
-        .get_blob(&blob(path), &principal(), Some("bytes=3-8"))
-        .await
-        .expect("GET range");
+    let read = crate::request_context::scope(
+        "stream-request".to_owned(),
+        read_service.get_blob(&blob(path), &principal(), Some("bytes=3-8")),
+    )
+    .await
+    .expect("GET range");
     assert_eq!(
         read.range,
         Some(crate::read::ResolvedRange {
@@ -3091,6 +3099,17 @@ async fn reads_validated_heads_and_ranges_across_block_boundaries() {
         })
     );
     assert_eq!(to_bytes(read.body, 64).await.expect("range body"), "defghi");
+    for backend in [primary, secondary] {
+        assert!(
+            backend
+                .state
+                .caller_range_fingerprints
+                .lock()
+                .expect("fingerprint lock")
+                .iter()
+                .all(|fingerprint| fingerprint == "stream-request")
+        );
+    }
 }
 
 #[tokio::test]

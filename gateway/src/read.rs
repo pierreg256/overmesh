@@ -22,6 +22,7 @@ use crate::{
         SignedDocument, logical_etag, sha256_bytes, validate_block_manifest_link,
         validate_block_manifest_page,
     },
+    request_context::{current_client_request_fingerprint, scope},
     resource::{LogicalBlobId, stable_component},
 };
 
@@ -119,6 +120,7 @@ struct ReadStreamState {
     requested_start: u64,
     requested_end: u64,
     content_length: u64,
+    client_request_fingerprint: String,
 }
 
 impl ReadService {
@@ -197,47 +199,55 @@ impl ReadService {
             requested_start: prepared.requested_start,
             requested_end: prepared.requested_end,
             content_length: prepared.common.metadata.content_length,
+            client_request_fingerprint: current_client_request_fingerprint(),
         };
         let body = Body::from_stream(stream::try_unfold(state, |mut state| async move {
-            loop {
-                if let Some(block) = state.blocks.pop_front() {
-                    let bytes = read_validated_block(&state, &block.descriptor).await?;
-                    let start = usize::try_from(block.slice_start)
-                        .map_err(|_| ReadError::VerificationFailed)?;
-                    let end = usize::try_from(block.slice_end)
-                        .map_err(|_| ReadError::VerificationFailed)?;
-                    let output = Bytes::copy_from_slice(
-                        bytes.get(start..end).ok_or(ReadError::VerificationFailed)?,
-                    );
-                    return Ok::<_, ReadError>(Some((output, state)));
-                }
-                let Some(reference) = state.pages.pop_front() else {
-                    return Ok(None);
-                };
-                let page = load_validated_block_page(&state, &reference).await?;
-                state
-                    .blocks
-                    .extend(page.blocks.into_iter().filter_map(|descriptor| {
-                        if descriptor.length == 0 {
-                            return (state.content_length == 0).then_some(PlannedBlock {
+            let fingerprint = state.client_request_fingerprint.clone();
+            scope(fingerprint, async move {
+                loop {
+                    if let Some(block) = state.blocks.pop_front() {
+                        let bytes = read_validated_block(&state, &block.descriptor).await?;
+                        let start = usize::try_from(block.slice_start)
+                            .map_err(|_| ReadError::VerificationFailed)?;
+                        let end = usize::try_from(block.slice_end)
+                            .map_err(|_| ReadError::VerificationFailed)?;
+                        let output = Bytes::copy_from_slice(
+                            bytes.get(start..end).ok_or(ReadError::VerificationFailed)?,
+                        );
+                        return Ok::<_, ReadError>(Some((output, state)));
+                    }
+                    let Some(reference) = state.pages.pop_front() else {
+                        return Ok(None);
+                    };
+                    let page = load_validated_block_page(&state, &reference).await?;
+                    state
+                        .blocks
+                        .extend(page.blocks.into_iter().filter_map(|descriptor| {
+                            if descriptor.length == 0 {
+                                return (state.content_length == 0).then_some(PlannedBlock {
+                                    descriptor,
+                                    slice_start: 0,
+                                    slice_end: 0,
+                                });
+                            }
+                            let block_end = descriptor.offset + descriptor.length - 1;
+                            if block_end < state.requested_start
+                                || descriptor.offset > state.requested_end
+                            {
+                                return None;
+                            }
+                            Some(PlannedBlock {
+                                slice_start: state
+                                    .requested_start
+                                    .saturating_sub(descriptor.offset),
+                                slice_end: (state.requested_end.min(block_end) - descriptor.offset)
+                                    + 1,
                                 descriptor,
-                                slice_start: 0,
-                                slice_end: 0,
-                            });
-                        }
-                        let block_end = descriptor.offset + descriptor.length - 1;
-                        if block_end < state.requested_start
-                            || descriptor.offset > state.requested_end
-                        {
-                            return None;
-                        }
-                        Some(PlannedBlock {
-                            slice_start: state.requested_start.saturating_sub(descriptor.offset),
-                            slice_end: (state.requested_end.min(block_end) - descriptor.offset) + 1,
-                            descriptor,
-                        })
-                    }));
-            }
+                            })
+                        }));
+                }
+            })
+            .await
         }));
         Ok(BlobRead {
             metadata: prepared.common.metadata,
