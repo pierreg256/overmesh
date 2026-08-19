@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 
 ALLOWED_OPERATIONS = {
     "put_blob",
+    "overwrite_blob",
     "get_blob",
     "get_range",
     "head_blob",
@@ -51,6 +52,28 @@ class BenchmarkCase:
 
 
 @dataclass(frozen=True)
+class Exclusion:
+    operation: str
+    payload: str
+    concurrency: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class NonRegressionPolicy:
+    backend_requests_per_operation: str
+    p50_latency: str
+    p95_latency: str
+
+    def document(self) -> dict[str, str]:
+        return {
+            "backendRequestsPerOperation": self.backend_requests_per_operation,
+            "p50Latency": self.p50_latency,
+            "p95Latency": self.p95_latency,
+        }
+
+
+@dataclass(frozen=True)
 class Contract:
     schema_version: int
     warmup_iterations: int
@@ -58,6 +81,8 @@ class Contract:
     request_timeout_seconds: int
     target_order: tuple[str, ...]
     cases: tuple[BenchmarkCase, ...]
+    exclusions: tuple[Exclusion, ...]
+    non_regression: NonRegressionPolicy | None
 
 
 def utc_now() -> str:
@@ -87,8 +112,9 @@ def require_positive_integer(value: object, name: str) -> int:
 
 def load_contract(path: Path) -> Contract:
     document = tomllib.loads(path.read_text(encoding="utf-8"))
-    if document.get("schema_version") != 1:
-        raise ValueError("performance contract schema_version must be 1")
+    schema_version = document.get("schema_version")
+    if schema_version not in {1, 2}:
+        raise ValueError("performance contract schema_version must be 1 or 2")
     payloads: dict[str, Payload] = {}
     for index, entry in enumerate(document.get("payload", [])):
         payload_id = entry.get("id")
@@ -106,6 +132,23 @@ def load_contract(path: Path) -> Contract:
     target_order = tuple(document.get("target_order", []))
     if sorted(target_order) != ["direct", "gateway"]:
         raise ValueError("target_order must contain direct and gateway exactly once")
+
+    policy_document = document.get("non_regression")
+    non_regression = None
+    if schema_version == 2:
+        expected_policy = {
+            "backend_requests_per_operation": "blocking",
+            "p50_latency": "signal",
+            "p95_latency": "informational",
+        }
+        if policy_document != expected_policy:
+            raise ValueError(
+                "schema_version 2 non_regression must classify backend "
+                "requests as blocking, p50 as signal, and p95 as informational"
+            )
+        non_regression = NonRegressionPolicy(**expected_policy)
+    elif policy_document is not None:
+        raise ValueError("non_regression is supported only by schema_version 2")
 
     cases: list[BenchmarkCase] = []
     case_ids: set[str] = set()
@@ -145,8 +188,51 @@ def load_contract(path: Path) -> Contract:
     if not cases:
         raise ValueError("performance contract contains no benchmark cases")
 
+    exclusions: list[Exclusion] = []
+    excluded_ids: set[str] = set()
+    for exclusion_index, exclusion in enumerate(document.get("exclusion", [])):
+        operation = exclusion.get("operation")
+        payload_id = exclusion.get("payload")
+        concurrency = require_positive_integer(
+            exclusion.get("concurrency"),
+            f"exclusion[{exclusion_index}].concurrency",
+        )
+        reason = exclusion.get("reason")
+        if operation not in ALLOWED_OPERATIONS:
+            raise ValueError(
+                f"exclusion[{exclusion_index}].operation {operation!r} is not supported"
+            )
+        if payload_id not in payloads:
+            raise ValueError(
+                f"exclusion[{exclusion_index}] references unknown payload {payload_id!r}"
+            )
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError(
+                f"exclusion[{exclusion_index}].reason must be non-empty"
+            )
+        exclusion_id = f"{operation}-{payload_id}-c{concurrency}"
+        if exclusion_id in case_ids:
+            raise ValueError(
+                f"excluded benchmark case {exclusion_id!r} is also configured"
+            )
+        if exclusion_id in excluded_ids:
+            raise ValueError(
+                f"excluded benchmark case {exclusion_id!r} is duplicated"
+            )
+        excluded_ids.add(exclusion_id)
+        exclusions.append(
+            Exclusion(
+                operation=operation,
+                payload=payload_id,
+                concurrency=concurrency,
+                reason=reason.strip(),
+            )
+        )
+    if schema_version == 2 and not exclusions:
+        raise ValueError("schema_version 2 requires explicit exclusions")
+
     return Contract(
-        schema_version=1,
+        schema_version=schema_version,
         warmup_iterations=require_positive_integer(
             document.get("warmup_iterations"), "warmup_iterations"
         ),
@@ -158,6 +244,8 @@ def load_contract(path: Path) -> Contract:
         ),
         target_order=target_order,
         cases=tuple(cases),
+        exclusions=tuple(exclusions),
+        non_regression=non_regression,
     )
 
 
@@ -168,6 +256,11 @@ def plan(contract: Contract) -> dict[str, Any]:
         "measuredIterations": contract.measured_iterations,
         "requestTimeoutSeconds": contract.request_timeout_seconds,
         "targetOrder": list(contract.target_order),
+        **(
+            {"nonRegression": contract.non_regression.document()}
+            if contract.non_regression is not None
+            else {}
+        ),
         "cases": [
             {
                 "id": benchmark_case.id,
@@ -182,6 +275,19 @@ def plan(contract: Contract) -> dict[str, Any]:
                 ),
             }
             for benchmark_case in contract.cases
+        ],
+        "exclusions": [
+            {
+                "id": (
+                    f"{exclusion.operation}-{exclusion.payload}"
+                    f"-c{exclusion.concurrency}"
+                ),
+                "operation": exclusion.operation,
+                "payload": exclusion.payload,
+                "concurrency": exclusion.concurrency,
+                "reason": exclusion.reason,
+            }
+            for exclusion in contract.exclusions
         ],
     }
 
@@ -208,7 +314,6 @@ def latency_metrics(latencies_ms: list[float]) -> dict[str, float]:
         "p50Ms": round(percentile(latencies_ms, 0.50), 3),
         "p90Ms": round(percentile(latencies_ms, 0.90), 3),
         "p95Ms": round(percentile(latencies_ms, 0.95), 3),
-        "p99Ms": round(percentile(latencies_ms, 0.99), 3),
         "maxMs": round(max(latencies_ms), 3),
     }
 
@@ -334,7 +439,8 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                         + contract.measured_iterations
                     )
                 }
-                if benchmark_case.operation in {"put_blob", "delete_blob"}
+                if benchmark_case.operation
+                in {"put_blob", "overwrite_blob", "delete_blob"}
                 else {seed_blob}
                 if benchmark_case.operation
                 in {"get_blob", "get_range", "head_blob"}
@@ -354,6 +460,8 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                 with request_id_scope(current_request_id):
                     if benchmark_case.operation == "put_blob":
                         blob_client.upload_blob(payload, overwrite=False)
+                    elif benchmark_case.operation == "overwrite_blob":
+                        blob_client.upload_blob(payload, overwrite=True)
                     elif benchmark_case.operation == "get_blob":
                         received = (
                             container_client.get_blob_client(seed_blob)
@@ -388,7 +496,8 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                         )
 
             try:
-                if benchmark_case.operation == "delete_blob":
+                if benchmark_case.operation in {"overwrite_blob", "delete_blob"}:
+                    initial_payload = bytes(byte ^ 0xFF for byte in payload)
                     for index in range(
                         contract.warmup_iterations
                         + contract.measured_iterations
@@ -398,7 +507,7 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                             request_id(run_id, target, benchmark_case.id, index)
                         ):
                             container_client.upload_blob(
-                                blob_name, payload, overwrite=False
+                                blob_name, initial_payload, overwrite=False
                             )
                 execute_wave(
                     invoke,
@@ -416,7 +525,8 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                     benchmark_case.range_bytes
                     if benchmark_case.operation == "get_range"
                     else benchmark_case.payload.size_bytes
-                    if benchmark_case.operation in {"put_blob", "get_blob"}
+                    if benchmark_case.operation
+                    in {"put_blob", "overwrite_blob", "get_blob"}
                     else 0
                 )
                 results.append(
@@ -482,7 +592,7 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                     key: round(
                         gateway["metrics"][key] / direct["metrics"][key], 4
                     )
-                    for key in ("p50Ms", "p90Ms", "p95Ms", "p99Ms")
+                    for key in ("p50Ms", "p90Ms", "p95Ms")
                 },
                 "gatewayToDirectThroughputRatio": round(
                     gateway["metrics"]["operationsPerSecond"]
@@ -517,6 +627,11 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
             "id": contract_path.stem,
             "sha256": sha256_path(contract_path),
             "schemaVersion": contract.schema_version,
+            **(
+                {"nonRegression": contract.non_regression.document()}
+                if contract.non_regression is not None
+                else {}
+            ),
         },
         "toolVersions": {
             "python": platform.python_version(),
@@ -538,7 +653,7 @@ def main() -> int:
     parser.add_argument(
         "--contract",
         type=Path,
-        default=Path("harness/performance/live-v1.toml"),
+        default=Path("harness/performance/live-v2.toml"),
     )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--plan", action="store_true")

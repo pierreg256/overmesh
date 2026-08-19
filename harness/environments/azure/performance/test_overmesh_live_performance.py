@@ -9,10 +9,22 @@ from overmesh_live_performance import latency_metrics, load_contract, percentile
 
 class PerformanceContractTests(unittest.TestCase):
     def test_repository_contract_expands_to_unique_cases(self) -> None:
-        contract = load_contract(Path("harness/performance/live-v1.toml"))
+        baseline = load_contract(Path("harness/performance/live-v1.toml"))
+        self.assertEqual(len(baseline.cases), 25)
+        contract = load_contract(Path("harness/performance/live-v2.toml"))
         case_ids = [benchmark_case.id for benchmark_case in contract.cases]
-        self.assertEqual(len(case_ids), 25)
+        self.assertEqual(len(case_ids), 28)
         self.assertEqual(len(case_ids), len(set(case_ids)))
+        self.assertIn("overwrite_blob-1kib-c1", case_ids)
+        self.assertEqual(len(contract.exclusions), 2)
+        self.assertEqual(
+            contract.non_regression.document(),
+            {
+                "backendRequestsPerOperation": "blocking",
+                "p50Latency": "signal",
+                "p95Latency": "informational",
+            },
+        )
 
     def test_unknown_payload_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -51,7 +63,6 @@ concurrency = [1]
                 "p50Ms": 30.0,
                 "p90Ms": 50.0,
                 "p95Ms": 50.0,
-                "p99Ms": 50.0,
                 "maxMs": 50.0,
             },
         )

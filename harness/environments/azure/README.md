@@ -189,7 +189,8 @@ make test-live-azure-client-compat
 ## Performance baseline
 
 `make test-live-azure-performance` executes the versioned matrix in
-`harness/performance/live-v1.toml`. The runner alternates each case between one
+`harness/performance/live-v2.toml`. The retained 0.10.0 baseline remains bound
+to `live-v1.toml`. The runner alternates each case between one
 direct Storage Account and the live Overmesh endpoint, using the same managed
 identity, Azure SDK versions, validation host, payload bytes, operation count,
 and concurrency.
@@ -198,12 +199,21 @@ The performance gate is intentionally excluded from `test-pre-pr-live` because
 it is long-running and retains signed release evidence. `make test-release`
 includes it.
 
-The initial contract covers `Put Blob`, full `Get Blob`, ranged reads, `Head
-Blob`, and `Delete Blob` at 1 KiB, 1 MiB, and 16 MiB where applicable, with
-concurrency levels 1, 4, and 16. Warm-up samples are excluded. Retained
-measurements include min, mean, p50, p90, p95, p99, max, operations per second,
-bytes per second, successful and failed operation counts, and
-gateway-to-direct ratios.
+The current contract covers first `Put Blob`, overwrite, full `Get Blob`,
+ranged reads, `Head Blob`, and established-blob `Delete Blob` at 1 KiB, 1 MiB,
+and 16 MiB where applicable, with concurrency levels 1, 4, and 16. Deliberate
+matrix exclusions carry reasons in the contract. Warm-up samples are excluded.
+Retained measurements include min, mean, p50, p90, p95, max, operations per
+second, bytes per second, successful and failed operation counts, and
+gateway-to-direct ratios. Thirty samples do not support a distinct p99, so the
+contract does not publish one.
+
+The v2 non-regression policy separates controlled and observed quantities.
+Backend requests per operation are deterministic and blocking: a compared
+campaign stops before signing if any case increases them. p50 latency is a
+signal and p95 is informational; neither fails the gate because geography,
+service scheduling and network variance are outside the code's control. The
+first v2 campaign establishes these request-count baselines.
 
 Additional required environment:
 
@@ -237,20 +247,22 @@ Azure CLI extension directory.
 `OVERMESH_LIVE_PERFORMANCE_BASELINE_EVIDENCE` optionally points to an earlier
 canonical performance evidence file. The gate rejects a different contract or
 case set, then records changes in Gateway-to-direct latency and throughput
-ratios, backend requests per operation, signing p95, peak CPU, and peak memory.
+ratios, backend requests per operation, signing p95, campaign peak CPU, and
+campaign peak memory.
 Without a predecessor, the signed result explicitly records
 `baseline-established`.
 
 The client-side baseline deliberately does not infer server behavior. Gateway
 logs emit one structured `overmesh_backend_request` event per Storage request
 and one `overmesh_manifest_sign` event per Key Vault signing request, including
-duration and success. Before signing, the live gate queries those events and
-Container Apps `UsageNanoCores` and `WorkingSetBytes` metrics for each measured
-Gateway case, together with the replica count needed to interpret aggregate
-resource use. The gate requires an explicit isolated-environment assertion so
-other client traffic cannot contaminate backend request counts. Backend timings
-explicitly measure time to response headers, not full response-body transfer.
-Azure Monitor exposes those resource metrics at one-minute granularity; shorter
-cases retain the exact enclosing two-minute query window required by the
-metrics API, which can overlap an
-adjacent case. Raw logs and Azure resource identifiers are not retained.
+duration, success, backend operation and object class. Evidence publishes
+object-class totals and operation/object-class decompositions so generic
+`control_get_object` traffic becomes a checkable budget. Before signing, the
+live gate queries those events per case and Container Apps `UsageNanoCores`,
+`WorkingSetBytes`, and replica metrics once for the campaign. The gate requires
+an explicit isolated-environment assertion so other client traffic cannot
+contaminate backend request counts. Backend timings explicitly measure time to
+response headers, not full response-body transfer. Azure Monitor exposes
+resource metrics at one-minute granularity, so they are not attributed to
+individual sub-minute cases. Raw logs and Azure resource identifiers are not
+retained.

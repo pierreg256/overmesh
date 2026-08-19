@@ -43,12 +43,14 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
                 (
                     'INFO event="overmesh_backend_request" '
                     'backend_id=storage-a operation="control_get_object" '
+                    'object_class="head" '
                     "status=200 response_headers_duration_us=100 "
                     "transport_success=true"
                 ),
                 (
                     'INFO event="overmesh_backend_request" '
                     'backend_id=storage-b operation="control_get_object" '
+                    'object_class="quarantine" '
                     "status=500 response_headers_duration_us=300 "
                     "transport_success=true"
                 ),
@@ -69,6 +71,18 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         self.assertEqual(
             metrics["backendRequests"]["byBackend"],
             {"storage-a": 1, "storage-b": 1},
+        )
+        self.assertEqual(
+            metrics["backendRequests"]["byObjectClass"],
+            {"head": 1, "quarantine": 1},
+        )
+        self.assertEqual(
+            metrics["backendRequests"]["byOperationAndObjectClass"],
+            {"control_get_object": {"head": 1, "quarantine": 1}},
+        )
+        self.assertEqual(
+            metrics["backendRequests"]["byObjectClassAndStatus"],
+            {"head": {"200": 1}, "quarantine": {"500": 1}},
         )
         self.assertEqual(metrics["manifestSigning"]["count"], 1)
         self.assertNotIn("logs", metrics)

@@ -273,7 +273,7 @@ impl ReadService {
         let path_hash = logical_blob.path_hash();
         let head_key = format!("heads/{path_hash}.json");
         let high_water_key = format!("high-water/{path_hash}/current.json");
-        let (_, (primary_head, secondary_head), compaction, (primary_high, secondary_high), _) = tokio::try_join!(
+        let (_, (primary_head, secondary_head), compaction, (primary_high, secondary_high)) = tokio::try_join!(
             async {
                 map_quarantine(
                     ensure_not_quarantined(
@@ -332,13 +332,6 @@ impl ReadService {
                     )
                 )
                 .map_err(map_commit_error)
-            },
-            async {
-                tokio::try_join!(
-                    primary.authorize_blob_read(logical_blob, &principal.access_token),
-                    secondary.authorize_blob_read(logical_blob, &principal.access_token)
-                )?;
-                Ok::<(), ReadError>(())
             }
         )?;
         let head = strict_current_head(primary_head.as_ref(), secondary_head.as_ref())

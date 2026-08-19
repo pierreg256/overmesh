@@ -210,6 +210,9 @@ def aggregate_events(messages: list[str]) -> dict[str, Any]:
     signing_failures = 0
     backend_ids: Counter[str] = Counter()
     backend_operations: Counter[str] = Counter()
+    backend_object_classes: Counter[str] = Counter()
+    backend_operation_object_classes: Counter[tuple[str, str]] = Counter()
+    backend_object_class_statuses: Counter[tuple[str, str]] = Counter()
     backend_statuses: Counter[str] = Counter()
     signing_domains: Counter[str] = Counter()
     for message in messages:
@@ -225,9 +228,16 @@ def aggregate_events(messages: list[str]) -> dict[str, Any]:
             transport_success = fields.get("transport_success") == "true"
             backend_header_durations.append(header_duration_us)
             backend_transport_failures += int(not transport_success)
-            backend_ids[fields.get("backend_id", "unknown")] += 1
-            backend_operations[fields.get("operation", "unknown")] += 1
-            backend_statuses[fields.get("status", "unknown")] += 1
+            backend_id = fields.get("backend_id", "unknown")
+            operation = fields.get("operation", "unknown")
+            object_class = fields.get("object_class", "unknown")
+            status = fields.get("status", "unknown")
+            backend_ids[backend_id] += 1
+            backend_operations[operation] += 1
+            backend_object_classes[object_class] += 1
+            backend_operation_object_classes[(operation, object_class)] += 1
+            backend_object_class_statuses[(object_class, status)] += 1
+            backend_statuses[status] += 1
         elif event == "overmesh_manifest_sign":
             try:
                 duration_us = int(fields["duration_us"])
@@ -246,6 +256,13 @@ def aggregate_events(messages: list[str]) -> dict[str, Any]:
             ),
             "byBackend": dict(sorted(backend_ids.items())),
             "byOperation": dict(sorted(backend_operations.items())),
+            "byObjectClass": dict(sorted(backend_object_classes.items())),
+            "byOperationAndObjectClass": nested_counts(
+                backend_operation_object_classes
+            ),
+            "byObjectClassAndStatus": nested_counts(
+                backend_object_class_statuses
+            ),
             "byStatus": dict(sorted(backend_statuses.items())),
         },
         "manifestSigning": {
@@ -254,6 +271,13 @@ def aggregate_events(messages: list[str]) -> dict[str, Any]:
             "byDomain": dict(sorted(signing_domains.items())),
         },
     }
+
+
+def nested_counts(values: Counter[tuple[str, str]]) -> dict[str, dict[str, int]]:
+    nested: dict[str, dict[str, int]] = {}
+    for (first, second), count in sorted(values.items()):
+        nested.setdefault(first, {})[second] = count
+    return nested
 
 
 def covered_gateway_cases(
@@ -335,22 +359,20 @@ def main() -> int:
             raise RuntimeError(
                 f"case {benchmark_case['id']} has no backend request telemetry"
             )
-        container_metrics = query_metrics(
-            resource_id,
-            benchmark_case["startedAt"],
-            benchmark_case["finishedAt"],
-        )
-        if (
-            container_metrics["cpuCores"]["samples"] == 0
-            or container_metrics["memoryBytes"]["samples"] == 0
-        ):
-            raise RuntimeError(
-                f"case {benchmark_case['id']} has incomplete Container Apps metrics"
-            )
-        benchmark_case["serverTelemetry"] = {
-            **event_metrics,
-            "containerApp": container_metrics,
-        }
+        benchmark_case["serverTelemetry"] = event_metrics
+
+    container_metrics = query_metrics(
+        resource_id,
+        campaign["startedAt"],
+        campaign["finishedAt"],
+    )
+    if (
+        container_metrics["cpuCores"]["samples"] == 0
+        or container_metrics["memoryBytes"]["samples"] == 0
+        or container_metrics["replicas"]["samples"] == 0
+    ):
+        raise RuntimeError("campaign has incomplete Container Apps metrics")
+    evidence["campaignTelemetry"] = {"containerApp": container_metrics}
 
     evidence["toolVersions"]["azureCli"] = run_json(
         ["az", "version", "--output", "json"]

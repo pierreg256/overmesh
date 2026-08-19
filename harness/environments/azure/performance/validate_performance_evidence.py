@@ -34,6 +34,10 @@ def validate_document(
         raise ValueError("unexpected performance evidence apiVersion")
     if document.get("contract", {}).get("schemaVersion") != contract.schema_version:
         raise ValueError("performance contract schema version does not match")
+    if contract.schema_version >= 2 and document.get("contract", {}).get(
+        "nonRegression"
+    ) != contract.non_regression.document():
+        raise ValueError("performance non-regression policy does not match")
     if document.get("campaign", {}).get("isolatedEnvironment") is not True:
         raise ValueError("performance campaign is not marked as isolated")
 
@@ -58,13 +62,10 @@ def validate_document(
         if case.get("iterations") != contract.measured_iterations:
             raise ValueError(f"case {key} has an unexpected iteration count")
         metrics = case.get("metrics", {})
-        for name in (
-            "p50Ms",
-            "p90Ms",
-            "p95Ms",
-            "p99Ms",
-            "operationsPerSecond",
-        ):
+        metric_names = ["p50Ms", "p90Ms", "p95Ms", "operationsPerSecond"]
+        if contract.schema_version == 1:
+            metric_names.append("p99Ms")
+        for name in metric_names:
             if (
                 isinstance(metrics.get(name), bool)
                 or not isinstance(metrics.get(name), (int, float))
@@ -81,19 +82,68 @@ def validate_document(
         telemetry = case.get("serverTelemetry", {})
         backend = telemetry.get("backendRequests", {})
         signing = telemetry.get("manifestSigning", {})
-        container = telemetry.get("containerApp", {})
         if backend.get("count", 0) <= 0:
             raise ValueError(f"case {key} has no backend request telemetry")
         if backend.get("transportFailures") != 0:
             raise ValueError(f"case {key} has backend transport failures")
         if signing.get("failures") != 0:
             raise ValueError(f"case {key} has manifest signing failures")
+        if contract.schema_version == 1:
+            container = telemetry.get("containerApp", {})
+            if container.get("cpuCores", {}).get("samples", 0) <= 0:
+                raise ValueError(f"case {key} has no CPU samples")
+            if container.get("memoryBytes", {}).get("samples", 0) <= 0:
+                raise ValueError(f"case {key} has no memory samples")
+            if container.get("replicas", {}).get("samples", 0) <= 0:
+                raise ValueError(f"case {key} has no replica samples")
+            continue
+        object_classes = backend.get("byObjectClass", {})
+        if (
+            object_classes.get("unknown", 0) != 0
+            or object_classes.get("control_other", 0) != 0
+            or backend.get("byBackend", {}).get("unknown", 0) != 0
+            or backend.get("byOperation", {}).get("unknown", 0) != 0
+            or backend.get("byStatus", {}).get("unknown", 0) != 0
+        ):
+            raise ValueError(f"case {key} has unclassified backend requests")
+        for dimension in ("byBackend", "byOperation", "byStatus", "byObjectClass"):
+            if sum(backend.get(dimension, {}).values()) != backend.get("count"):
+                raise ValueError(
+                    f"case {key} {dimension} counts do not cover backend requests"
+                )
+        operation_classes = backend.get("byOperationAndObjectClass", {})
+        if (
+            sum(
+                count
+                for classes in operation_classes.values()
+                for count in classes.values()
+            )
+            != backend.get("count")
+        ):
+            raise ValueError(
+                f"case {key} operation/object-class counts do not cover backend requests"
+            )
+        object_statuses = backend.get("byObjectClassAndStatus", {})
+        if (
+            sum(
+                count
+                for statuses in object_statuses.values()
+                for count in statuses.values()
+            )
+            != backend.get("count")
+        ):
+            raise ValueError(
+                f"case {key} object-class/status counts do not cover backend requests"
+            )
+
+    if contract.schema_version >= 2:
+        container = document.get("campaignTelemetry", {}).get("containerApp", {})
         if container.get("cpuCores", {}).get("samples", 0) <= 0:
-            raise ValueError(f"case {key} has no CPU samples")
+            raise ValueError("campaign has no CPU samples")
         if container.get("memoryBytes", {}).get("samples", 0) <= 0:
-            raise ValueError(f"case {key} has no memory samples")
+            raise ValueError("campaign has no memory samples")
         if container.get("replicas", {}).get("samples", 0) <= 0:
-            raise ValueError(f"case {key} has no replica samples")
+            raise ValueError("campaign has no replica samples")
 
     comparisons = document.get("comparisons")
     if (
@@ -110,6 +160,40 @@ def validate_document(
     historical = document.get("historicalComparison", {})
     if historical.get("status") not in {"baseline-established", "compared"}:
         raise ValueError("historical comparison status is missing")
+    if contract.schema_version >= 2:
+        non_regression = historical.get("nonRegression", {})
+        if non_regression.get("policy") != contract.non_regression.document():
+            raise ValueError("historical comparison policy does not match")
+        expected_gate = (
+            "baseline-established"
+            if historical.get("status") == "baseline-established"
+            else "passed"
+        )
+        if non_regression.get("gateStatus") != expected_gate:
+            raise ValueError("backend request non-regression gate did not pass")
+        if non_regression.get("blockingRegressions") != []:
+            raise ValueError("backend request non-regression has blocking cases")
+        if historical.get("status") == "compared":
+            for result in historical.get("cases", []):
+                classifications = result.get("nonRegression", {})
+                backend_requests = classifications.get(
+                    "backendRequestsPerOperation", {}
+                )
+                if (
+                    backend_requests.get("classification") != "blocking"
+                    or backend_requests.get("status") != "passed"
+                    or classifications.get("p50Latency", {}).get(
+                        "classification"
+                    )
+                    != "signal"
+                    or classifications.get("p95Latency", {}).get(
+                        "classification"
+                    )
+                    != "informational"
+                ):
+                    raise ValueError(
+                        "historical comparison classifications are invalid"
+                    )
     tool_versions = document.get("toolVersions", {})
     if "azureCli" not in tool_versions:
         raise ValueError("Azure CLI version is missing")

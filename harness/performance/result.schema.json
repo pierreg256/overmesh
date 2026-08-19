@@ -47,6 +47,10 @@
         "logAnalyticsExtension"
       ]
     },
+    "campaignTelemetry": {
+      "type": "object",
+      "required": ["containerApp"]
+    },
     "cases": {
       "type": "array",
       "minItems": 1,

@@ -90,6 +90,18 @@ section = "decisions"
 title = "Redaction policy for retained live evidence"
 weight = 90
 
+[[document]]
+path = "docs/adr/0010-keep-reconciler-safety-state-on-the-read-path.md"
+section = "decisions"
+title = "Keep Reconciler safety state on the read path"
+weight = 100
+
+[[document]]
+path = "docs/adr/0011-use-physical-content-heads-for-read-authorization.md"
+section = "decisions"
+title = "Use physical content HEADs for read authorization"
+weight = 110
+
 # ---------------------------------------------------------------------------
 # Authored documents deliberately not published.
 # ---------------------------------------------------------------------------

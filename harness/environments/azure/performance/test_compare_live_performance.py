@@ -8,7 +8,15 @@ from compare_live_performance import build_comparison
 def campaign(run_id: str, latency_ratio: float, throughput_ratio: float) -> dict:
     return {
         "campaign": {"runId": run_id, "commit": f"commit-{run_id}"},
-        "contract": {"sha256": "contract"},
+        "contract": {
+            "sha256": "contract",
+            "schemaVersion": 2,
+            "nonRegression": {
+                "backendRequestsPerOperation": "blocking",
+                "p50Latency": "signal",
+                "p95Latency": "informational",
+            },
+        },
         "comparisons": [
             {
                 "case": "get-1k-c1",
@@ -16,7 +24,6 @@ def campaign(run_id: str, latency_ratio: float, throughput_ratio: float) -> dict
                     "p50Ms": latency_ratio,
                     "p90Ms": latency_ratio,
                     "p95Ms": latency_ratio,
-                    "p99Ms": latency_ratio,
                 },
                 "gatewayToDirectThroughputRatio": throughput_ratio,
             }
@@ -26,21 +33,25 @@ def campaign(run_id: str, latency_ratio: float, throughput_ratio: float) -> dict
                 "id": "get-1k-c1",
                 "target": "direct",
                 "iterations": 10,
+                "metrics": {"p50Ms": 1.0, "p95Ms": 2.0},
             },
             {
                 "id": "get-1k-c1",
                 "target": "gateway",
                 "iterations": 10,
+                "metrics": {"p50Ms": 3.0, "p95Ms": 4.0},
                 "serverTelemetry": {
                     "backendRequests": {"count": 20},
                     "manifestSigning": {"p95DurationUs": 100},
-                    "containerApp": {
-                        "cpuCores": {"maximum": 0.2},
-                        "memoryBytes": {"maximum": 1000},
-                    },
                 },
             },
         ],
+        "campaignTelemetry": {
+            "containerApp": {
+                "cpuCores": {"maximum": 0.2},
+                "memoryBytes": {"maximum": 1000},
+            }
+        },
     }
 
 
@@ -67,6 +78,30 @@ class CompareLivePerformanceTests(unittest.TestCase):
         self.assertEqual(
             result["serverTelemetryChange"]["signingP95Duration"], 1.25
         )
+        self.assertEqual(comparison["campaignTelemetryChange"]["cpuMaximum"], 1.0)
+        self.assertEqual(
+            result["nonRegression"]["backendRequestsPerOperation"]["status"],
+            "failed",
+        )
+        self.assertEqual(
+            result["nonRegression"]["p50Latency"]["classification"],
+            "signal",
+        )
+        self.assertEqual(
+            result["nonRegression"]["p95Latency"]["classification"],
+            "informational",
+        )
+        self.assertEqual(comparison["nonRegression"]["gateStatus"], "failed")
+        self.assertEqual(
+            comparison["nonRegression"]["blockingRegressions"],
+            ["get-1k-c1"],
+        )
+
+    def test_latency_change_does_not_fail_the_blocking_gate(self) -> None:
+        baseline = campaign("baseline", 2.0, 0.5)
+        current = campaign("current", 4.0, 0.4)
+        comparison = build_comparison(current, baseline)
+        self.assertEqual(comparison["nonRegression"]["gateStatus"], "passed")
 
     def test_contract_change_is_rejected(self) -> None:
         baseline = campaign("baseline", 2.0, 0.5)

@@ -22,6 +22,14 @@ def indexed(values: list[dict[str, Any]], key: str) -> dict[str, dict[str, Any]]
     return {str(value[key]): value for value in values}
 
 
+def requests_per_operation(case: dict[str, Any]) -> float:
+    count = case.get("serverTelemetry", {}).get("backendRequests", {}).get("count")
+    iterations = case.get("iterations")
+    if not isinstance(count, int) or not isinstance(iterations, int) or iterations <= 0:
+        raise ValueError("gateway case is missing backend request counts")
+    return round(count / iterations, 4)
+
+
 def build_comparison(
     current: dict[str, Any],
     baseline: dict[str, Any],
@@ -30,6 +38,17 @@ def build_comparison(
     baseline_hash = baseline["contract"]["sha256"]
     if current_hash != baseline_hash:
         raise ValueError("performance contract hashes do not match")
+    schema_version = current["contract"]["schemaVersion"]
+    if schema_version != baseline["contract"]["schemaVersion"]:
+        raise ValueError("performance contract schema versions do not match")
+    policy = current["contract"].get("nonRegression")
+    if policy != baseline["contract"].get("nonRegression"):
+        raise ValueError("performance non-regression policies do not match")
+    percentiles = (
+        ("p50Ms", "p90Ms", "p95Ms", "p99Ms")
+        if schema_version == 1
+        else ("p50Ms", "p90Ms", "p95Ms")
+    )
 
     current_comparisons = indexed(current["comparisons"], "case")
     baseline_comparisons = indexed(baseline["comparisons"], "case")
@@ -57,8 +76,14 @@ def build_comparison(
         baseline_backend = baseline_server.get("backendRequests", {})
         current_signing = current_server.get("manifestSigning", {})
         baseline_signing = baseline_server.get("manifestSigning", {})
-        current_container = current_server.get("containerApp", {})
-        baseline_container = baseline_server.get("containerApp", {})
+        current_requests = requests_per_operation(current_gateway)
+        baseline_requests = requests_per_operation(baseline_gateway)
+        request_status = (
+            "passed"
+            if current_backend["count"] * baseline_gateway["iterations"]
+            <= baseline_backend["count"] * current_gateway["iterations"]
+            else "failed"
+        )
         cases.append(
             {
                 "case": case_id,
@@ -71,7 +96,7 @@ def build_comparison(
                             percentile
                         ],
                     )
-                    for percentile in ("p50Ms", "p90Ms", "p95Ms", "p99Ms")
+                    for percentile in percentiles
                 },
                 "gatewayToDirectThroughputRatioChange": ratio(
                     current_overhead["gatewayToDirectThroughputRatio"],
@@ -79,30 +104,89 @@ def build_comparison(
                 ),
                 "serverTelemetryChange": {
                     "backendRequestsPerOperation": ratio(
-                        ratio(
-                            current_backend.get("count"),
-                            current_gateway["iterations"],
-                        ),
-                        ratio(
-                            baseline_backend.get("count"),
-                            baseline_gateway["iterations"],
-                        ),
+                        current_requests,
+                        baseline_requests,
                     ),
                     "signingP95Duration": ratio(
                         current_signing.get("p95DurationUs"),
                         baseline_signing.get("p95DurationUs"),
                     ),
-                    "cpuMaximum": ratio(
-                        current_container.get("cpuCores", {}).get("maximum"),
-                        baseline_container.get("cpuCores", {}).get("maximum"),
-                    ),
-                    "memoryMaximum": ratio(
-                        current_container.get("memoryBytes", {}).get("maximum"),
-                        baseline_container.get("memoryBytes", {}).get("maximum"),
-                    ),
                 },
+                **(
+                    {
+                        "nonRegression": {
+                            "backendRequestsPerOperation": {
+                                "classification": policy[
+                                    "backendRequestsPerOperation"
+                                ],
+                                "baseline": baseline_requests,
+                                "current": current_requests,
+                                "status": request_status,
+                            },
+                            "p50Latency": {
+                                "classification": policy["p50Latency"],
+                                "baselineGatewayMs": baseline_gateway["metrics"][
+                                    "p50Ms"
+                                ],
+                                "currentGatewayMs": current_gateway["metrics"][
+                                    "p50Ms"
+                                ],
+                                "gatewayToDirectRatioChange": ratio(
+                                    current_overhead[
+                                        "gatewayToDirectLatencyRatio"
+                                    ]["p50Ms"],
+                                    baseline_overhead[
+                                        "gatewayToDirectLatencyRatio"
+                                    ]["p50Ms"],
+                                ),
+                            },
+                            "p95Latency": {
+                                "classification": policy["p95Latency"],
+                                "baselineGatewayMs": baseline_gateway["metrics"][
+                                    "p95Ms"
+                                ],
+                                "currentGatewayMs": current_gateway["metrics"][
+                                    "p95Ms"
+                                ],
+                                "gatewayToDirectRatioChange": ratio(
+                                    current_overhead[
+                                        "gatewayToDirectLatencyRatio"
+                                    ]["p95Ms"],
+                                    baseline_overhead[
+                                        "gatewayToDirectLatencyRatio"
+                                    ]["p95Ms"],
+                                ),
+                            },
+                        }
+                    }
+                    if schema_version >= 2
+                    else {}
+                ),
             }
         )
+    if schema_version == 1:
+        first_case = sorted(current_comparisons)[0]
+        current_container = current_cases[
+            (first_case, "gateway")
+        ].get("serverTelemetry", {}).get("containerApp", {})
+        baseline_container = baseline_cases[
+            (first_case, "gateway")
+        ].get("serverTelemetry", {}).get("containerApp", {})
+    else:
+        current_container = current.get("campaignTelemetry", {}).get(
+            "containerApp", {}
+        )
+        baseline_container = baseline.get("campaignTelemetry", {}).get(
+            "containerApp", {}
+        )
+    blocking_regressions = [
+        result["case"]
+        for result in cases
+        if result.get("nonRegression", {})
+        .get("backendRequestsPerOperation", {})
+        .get("status")
+        == "failed"
+    ]
     return {
         "status": "compared",
         "apiVersion": "performance.overmesh.io/comparison/v1",
@@ -115,6 +199,29 @@ def build_comparison(
             "runId": current["campaign"]["runId"],
             "commit": current["campaign"]["commit"],
         },
+        "campaignTelemetryChange": {
+            "cpuMaximum": ratio(
+                current_container.get("cpuCores", {}).get("maximum"),
+                baseline_container.get("cpuCores", {}).get("maximum"),
+            ),
+            "memoryMaximum": ratio(
+                current_container.get("memoryBytes", {}).get("maximum"),
+                baseline_container.get("memoryBytes", {}).get("maximum"),
+            ),
+        },
+        **(
+            {
+                "nonRegression": {
+                    "policy": policy,
+                    "gateStatus": (
+                        "failed" if blocking_regressions else "passed"
+                    ),
+                    "blockingRegressions": blocking_regressions,
+                }
+            }
+            if schema_version >= 2
+            else {}
+        ),
         "cases": cases,
     }
 
@@ -128,6 +235,7 @@ def main() -> int:
 
     current = json.loads(arguments.current.read_text(encoding="utf-8"))
     if arguments.baseline is None:
+        policy = current["contract"].get("nonRegression")
         current["historicalComparison"] = {
             "status": "baseline-established",
             "apiVersion": "performance.overmesh.io/comparison/v1",
@@ -136,6 +244,17 @@ def main() -> int:
                 "runId": current["campaign"]["runId"],
                 "commit": current["campaign"]["commit"],
             },
+            **(
+                {
+                    "nonRegression": {
+                        "policy": policy,
+                        "gateStatus": "baseline-established",
+                        "blockingRegressions": [],
+                    }
+                }
+                if current["contract"]["schemaVersion"] >= 2
+                else {}
+            ),
         }
     else:
         baseline = json.loads(arguments.baseline.read_text(encoding="utf-8"))
@@ -147,7 +266,12 @@ def main() -> int:
         json.dumps(current, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    return 0
+    return int(
+        current["historicalComparison"]
+        .get("nonRegression", {})
+        .get("gateStatus")
+        == "failed"
+    )
 
 
 if __name__ == "__main__":
