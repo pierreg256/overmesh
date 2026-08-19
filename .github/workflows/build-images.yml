@@ -91,6 +91,8 @@ jobs:
           platforms: linux/amd64
           push: true
           provenance: false
+          cache-from: type=gha,scope=overmesh-${{ matrix.component }}
+          cache-to: type=gha,mode=max,scope=overmesh-${{ matrix.component }}
           tags: |
             ghcr.io/${{ needs.metadata.outputs.owner }}/${{ matrix.image }}:${{ needs.metadata.outputs.image_tag }}
             ghcr.io/${{ needs.metadata.outputs.owner }}/${{ matrix.image }}:sha-${{ needs.metadata.outputs.short_sha }}
