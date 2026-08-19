@@ -254,7 +254,7 @@ Nothing here is hidden. Each line states whether it is inherent or scheduled.
 | --- | --- | --- |
 | Storage | 2×, plus uncollected generations | Inherent to RF=2 |
 | Write latency | 49 backend requests and 3 Key Vault signatures per first PUT | Measured; request-budgeted |
-| Read latency | 10 requests for `HEAD`, 15 for nominal `GET` | Measured after ADR-0011 |
+| Read latency | 10 requests for `HEAD`, 15 for nominal `GET` and range reads | Measured after ADR-0011 |
 | Listing | ~20,000 backend reads for a 5,000-entry page | Reduced 2.5× in 0.8; going further is a trade, not a fix |
 | Write availability | Writes stop while either region is unavailable | Hinted handoff, post-V1 |
 | Reconciliation | O(dataset) per cycle | Merkle trees in V2 |
@@ -271,30 +271,39 @@ back without giving up the guarantee.
 
 ### The measured performance price
 
-The signed 0.10.0 campaign ran the same Azure SDK operations directly against
+The signed 0.10.1 campaign ran the same Azure SDK operations directly against
 Storage and through Overmesh from an isolated France Central VM. Thirty
 measured operations were executed per case with zero client errors and zero
-backend transport failures.
+backend transport failures. Every backend request is attributed to one of the
+thirty client fingerprints, with zero unattributed requests in every case.
 
 | Operation | Direct p50 | Overmesh p50 | Overmesh requests |
 | --- | ---: | ---: | ---: |
-| `Put Blob`, 1 KiB, c1 | 11.37 ms | 1,209.39 ms | 49 |
-| `Put Blob`, 1 MiB, c1 | 23.06 ms | 1,379.71 ms | 49 |
-| `Put Blob`, 16 MiB, c1 | 147.34 ms | 3,016.99 ms | 49 |
-| `Delete Blob`, 1 KiB, c1 | 11.06 ms | 1,002.34 ms | 43 |
-| `Get Blob`, 1 KiB, c1 | 7.14 ms | 190.25 ms | 17 |
-| `Head Blob`, 1 MiB, c1 | 6.07 ms | 95.88 ms | 12 |
+| `Put Blob`, 1 KiB, c1 | 9.38 ms | 1,223.65 ms | 49 |
+| `Put Blob`, 1 MiB, c1 | 21.27 ms | 1,403.31 ms | 49 |
+| `Put Blob`, 16 MiB, c1 | 139.97 ms | 2,664.03 ms | 49 |
+| `Delete Blob`, 1 KiB, c1 | 9.88 ms | 1,034.27 ms | 43 |
+| `Get Blob`, 1 MiB, c1 | 16.45 ms | 279.71 ms | 15 |
+| `Head Blob`, 1 MiB, c1 | 5.49 ms | 96.63 ms | 10 |
 
 The 1 KiB and 1 MiB writes cost nearly the same despite a thousand-fold payload
 difference, and DELETE pays the same order of latency while carrying no body.
 The dominant cost is therefore fixed backend-request amplification, not CPU or
 bulk throughput. Overmesh buys synchronous cross-region durability, signed
 state validation and repairability at a severe small-operation latency price:
-about 106× direct Storage for the measured 1 KiB PUT.
+about 130× direct Storage for the measured 1 KiB PUT.
 
-Milestone 0.10.1 turns the deterministic request counts into the blocking
-non-regression measure. Latency remains a signal because geography, Azure
-scheduling and network variance are outside the code's control.
+The deterministic request counts are the blocking non-regression measure for
+0.11. Latency remains a signal because geography, Azure scheduling and network
+variance are outside the code's control.
+
+The added overwrite cases also close the locking question. A first `PUT` and an
+established overwrite both cost 49 requests today, including three lock
+requests. The difference is the conditional create result: `201` for the new
+lock object, `409` when it already exists. Trying the lease first would reduce
+the established path from three lock requests to two but raise the first-write
+path to four. It is therefore a workload-policy decision for 0.11, not a global
+optimization.
 
 The listing line is the largest number in this table and deserves a word,
 because it is not simply unfinished work. Each listed entry is validated across
@@ -429,9 +438,9 @@ Runtime commit  26449d7e5775ac9d28dea38182f509c7528c57c3
 Bundle SHA-256  547172399a2bc24ab494b41c9dd37e9b2ceaa054e6e37a17960e1c7e5e244bc9
 ```
 
-A signed 0.10.0 performance baseline now measures the fixed request
-amplification described in section 8. Milestone 0.10.1 establishes attributed
-object-class budgets and the blocking v2 baseline used by 0.11.
+A signed 0.10.1 performance baseline now measures the fixed request
+amplification described in section 8, with attributed object-class budgets and
+the blocking v2 reference used by 0.11.
 
 ## 11. Where to start if you want to fork it
 

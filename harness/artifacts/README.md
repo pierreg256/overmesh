@@ -53,3 +53,23 @@ The deterministic archive SHA-256 is:
 ```text
 cd89ef907d5bcc906df6c504aedc81892ad58a0b698350b33a3b92acf7569e3c
 ```
+
+The unredacted 0.10.1 request-budgeted performance archive is retained on all
+three accounts at:
+
+```text
+overmesh-system/release-evidence/0.10.1/raw/performance-v0101-raw-evidence.tar.gz
+```
+
+It contains `raw-performance.json` and `client-performance.json`. The raw JSON
+hash recorded by the canonical evidence is:
+
+```text
+3a8e0180cadf52f3232e916ac0e2653f26a3fc5486add8647ed1d3efa02d6a14
+```
+
+The deterministic archive SHA-256 is:
+
+```text
+2a0b34038982da78362745696af7488673b47a74d67e406332fc254e38bbd838
+```

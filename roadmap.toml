@@ -105,7 +105,7 @@ deliverables = [
 version = "0.10.1"
 generation = "V1"
 name = "Request-budgeted performance baseline"
-status = "active"
+status = "completed"
 deliverables = [
   "Prove that every outbound Storage request is instrumented and attributable to one measured client request.",
   "Publish backend request budgets by operation, object class, status, and replica without retaining raw request identifiers.",

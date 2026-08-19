@@ -106,3 +106,6 @@ Latency alone is not sufficient evidence for changing this decision.
   — closes all 28 first-PUT control reads by object class
 - `harness/environments/azure/performance/collect_live_performance_telemetry.py`
   — publishes request counts by object class and status
+- `harness/artifacts/live/0.10.1/performance-v010-evidence.json` — retained
+  signed evidence closes every v2 request budget with 30 client fingerprints
+  and zero unattributed backend requests per case

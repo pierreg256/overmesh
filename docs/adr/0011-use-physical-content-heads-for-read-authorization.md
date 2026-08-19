@@ -77,6 +77,21 @@ Path-dependent ABAC has no partial read-only effect. This is more consistent
 with the existing fail-closed unsupported posture, but it means a deployment
 that bypasses that posture audit cannot rely on logical-path conditions.
 
+## Measured outcome
+
+The signed 0.10.1 campaign confirmed the deterministic prediction. Both
+retained `HEAD` cases moved from twelve backend requests in 0.10.0 to ten:
+
+| Case | 0.10.0 p50 | 0.10.1 p50 | Request budget |
+| --- | ---: | ---: | ---: |
+| 1 MiB, c1 | 95.880 ms | 96.633 ms | 12 → 10 |
+| 1 MiB, c16 | 109.391 ms | 129.951 ms | 12 → 10 |
+
+The single-client p50 remained flat and the concurrent p50 moved upward. The
+campaign therefore shows no consistent latency improvement, exactly as the
+execution model predicted. The change reduces Storage load; it does not shorten
+the critical path.
+
 ## When to revisit
 
 Revisit together with ADR-0004 and ADR-0005 if content naming changes so that
@@ -93,3 +108,5 @@ side-effect-free authorization evaluation API.
   evidence for the path-dependent-condition posture failure
 - `harness/environments/azure/performance/collect_live_performance_telemetry.py`
   — distinguishes `logical_blob` and `content` request classes
+- `harness/artifacts/live/0.10.1/performance-v010-evidence.json` — retained
+  signed request budgets and latency observations for the measured outcome
