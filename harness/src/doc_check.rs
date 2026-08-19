@@ -408,6 +408,14 @@ fn check_adr_index_and_metadata(
     repository_root: &Path,
     report: &mut DocumentationReport,
 ) -> Result<BTreeMap<String, AdrMetadata>> {
+    let roadmap_text = fs::read_to_string(repository_root.join("roadmap.toml"))
+        .context("failed to read roadmap.toml")?;
+    let roadmap: Roadmap = toml::from_str(&roadmap_text).context("failed to parse roadmap.toml")?;
+    let roadmap_versions = roadmap
+        .milestones
+        .iter()
+        .map(|milestone| milestone.version.as_str())
+        .collect::<BTreeSet<_>>();
     let adr_directory = repository_root.join(ADR_DIRECTORY);
     let mut adr_paths = WalkDir::new(&adr_directory)
         .max_depth(1)
@@ -454,6 +462,7 @@ fn check_adr_index_and_metadata(
             .with_context(|| format!("failed to read {path}"))?;
         let id = file_name[..4].to_owned();
         let status = adr_metadata_value(&content, "Status");
+        let milestone = adr_metadata_value(&content, "Milestone");
         let supersedes = adr_metadata_value(&content, "Supersedes");
         match status.as_deref() {
             Some("proposed" | "accepted") => {}
@@ -481,6 +490,30 @@ fn check_adr_index_and_metadata(
                 "Supersedes metadata is missing",
                 "add - **Supersedes:** — or ADR-NNNN",
             );
+        }
+        match milestone.as_deref() {
+            Some(value) => {
+                for version in value.split('→').map(str::trim) {
+                    if !roadmap_versions.contains(version) {
+                        report.push(
+                            "R5",
+                            &path,
+                            metadata_line(&content, "Milestone"),
+                            format!(
+                                "Milestone references {version:?}, which is absent from roadmap.toml"
+                            ),
+                            "add the milestone to roadmap.toml or correct the ADR metadata",
+                        );
+                    }
+                }
+            }
+            None => report.push(
+                "R5",
+                &path,
+                None,
+                "Milestone metadata is missing",
+                "add - **Milestone:** <version> using a version from roadmap.toml",
+            ),
         }
         metadata.insert(
             id.clone(),
@@ -1101,6 +1134,7 @@ reason = "Intentional fixture."
             r#"# ADR-0001
 
 - **Status:** accepted
+- **Milestone:** 0.9.1
 - **Supersedes:** —
 
 ## Verified by
@@ -1114,6 +1148,7 @@ reason = "Intentional fixture."
             r#"# ADR-0002
 
 - **Status:** obsolete
+- **Milestone:** 0.9.1
 - **Supersedes:** —
 
 ## Verified by
@@ -1175,6 +1210,7 @@ reason = "Intentional fixture."
             r#"# ADR-0001
 
 - **Status:** accepted
+- **Milestone:** 0.9.1
 - **Supersedes:** —
 
 ## Verified by
@@ -1207,6 +1243,7 @@ reason = "Intentional fixture."
             r#"# ADR-0001
 
 - **Status:** superseded by ADR-0002
+- **Milestone:** 0.9.1
 - **Supersedes:** —
 
 ## Verified by
@@ -1218,6 +1255,30 @@ reason = "Intentional fixture."
         let report = check(fixture.path()).expect("check fixture");
         assert!(report.violations.iter().any(|violation| {
             violation.rule == "R5" && violation.message.contains("expected \"ADR-0001\"")
+        }));
+    }
+
+    #[test]
+    fn adr_milestone_must_exist_in_the_roadmap() {
+        let fixture = documentation_fixture();
+        write(
+            fixture.path(),
+            "docs/adr/0001-first.md",
+            r#"# ADR-0001
+
+- **Status:** accepted
+- **Milestone:** 0.10.1
+- **Supersedes:** —
+
+## Verified by
+
+- `gateway/src/lib.rs::documented_test`
+"#,
+        );
+
+        let report = check(fixture.path()).expect("check fixture");
+        assert!(report.violations.iter().any(|violation| {
+            violation.rule == "R5" && violation.message.contains("absent from roadmap.toml")
         }));
     }
 
@@ -1295,6 +1356,7 @@ pattern = "milestone {}"
             r#"# ADR-0001
 
 - **Status:** accepted
+- **Milestone:** 0.9.1
 - **Supersedes:** —
 
 ## Verified by
@@ -1310,6 +1372,7 @@ pattern = "milestone {}"
             r#"# ADR-0002
 
 - **Status:** accepted
+- **Milestone:** 0.9.1
 - **Supersedes:** —
 
 ## Verified by

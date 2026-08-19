@@ -159,14 +159,10 @@ coding within a region is ever pursued. See ADR-0001.
 
 ## Implementation status
 
-Two elements of this decision describe the intended state rather than the
-current one, and are pending:
-
-- placement must stop reading `weight` and use the fixed virtual-node count;
-- non-uniform weights must be refused by `validate`.
-
-The cached circle is a straightforward correction of the same area and should
-land with them.
+Fully implemented. `FIXED_VIRTUAL_NODES_PER_NODE = 100` builds the circle once
+when the signed Ring is loaded, placement reads that cached circle, and
+`validate_uniform_weights` refuses non-uniform reserved weights before any Ring
+can become active.
 
 ## Verified by
 

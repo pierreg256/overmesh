@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -63,6 +64,35 @@ def comma_separated_values(value: str | list[str]) -> list[str]:
     if not normalized:
         raise ValueError("at least one value is required")
     return normalized
+
+
+def request_id(run_id: str, target: str, case_id: str, index: int) -> str:
+    digest = hashlib.sha256(
+        f"{run_id}:{target}:{case_id}:{index}".encode("utf-8")
+    ).hexdigest()[:24]
+    return f"perf-{target}-{digest}"
+
+
+def request_fingerprint(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+
+
+def measured_request_fingerprints(
+    run_id: str,
+    benchmark_case: dict[str, Any],
+) -> set[str]:
+    first = benchmark_case["warmupIterations"]
+    return {
+        request_fingerprint(
+            request_id(
+                run_id,
+                "gateway",
+                benchmark_case["id"],
+                index,
+            )
+        )
+        for index in range(first, first + benchmark_case["iterations"])
+    }
 
 
 def query_logs(
@@ -245,6 +275,8 @@ def aggregate_events(messages: list[str]) -> dict[str, Any]:
     backend_object_class_statuses: Counter[tuple[str, str]] = Counter()
     backend_statuses: Counter[str] = Counter()
     signing_domains: Counter[str] = Counter()
+    client_request_fingerprints: set[str] = set()
+    unattributed_requests = 0
     for message in messages:
         fields = parse_fields(message)
         event = fields.get("event")
@@ -262,6 +294,18 @@ def aggregate_events(messages: list[str]) -> dict[str, Any]:
             operation = fields.get("operation", "unknown")
             object_class = fields.get("object_class", "unknown")
             status = fields.get("status", "unknown")
+            client_request_fingerprint = fields.get(
+                "client_request_fingerprint"
+            )
+            if (
+                not client_request_fingerprint
+                or client_request_fingerprint == "missing"
+            ):
+                unattributed_requests += 1
+            else:
+                client_request_fingerprints.add(
+                    client_request_fingerprint
+                )
             backend_ids[backend_id] += 1
             backend_operations[operation] += 1
             backend_object_classes[object_class] += 1
@@ -280,6 +324,8 @@ def aggregate_events(messages: list[str]) -> dict[str, Any]:
     return {
         "backendRequests": {
             "count": len(backend_header_durations),
+            "clientRequestCount": len(client_request_fingerprints),
+            "unattributedRequests": unattributed_requests,
             "transportFailures": backend_transport_failures,
             "responseHeadersDuration": duration_summary(
                 backend_header_durations
@@ -313,17 +359,19 @@ def nested_counts(values: Counter[tuple[str, str]]) -> dict[str, dict[str, int]]
 def covered_gateway_cases(
     events: list[tuple[datetime, str]],
     gateway_cases: list[dict[str, Any]],
+    run_id: str,
 ) -> set[str]:
+    observed = {
+        fields["client_request_fingerprint"]
+        for _, message in events
+        if (fields := parse_fields(message)).get("event")
+        == "overmesh_backend_request"
+        and fields.get("client_request_fingerprint")
+    }
     covered: set[str] = set()
     for benchmark_case in gateway_cases:
-        started = parse_timestamp(benchmark_case["startedAt"])
-        finished = parse_timestamp(benchmark_case["finishedAt"])
-        if any(
-            started <= timestamp <= finished
-            and parse_fields(message).get("event")
-            == "overmesh_backend_request"
-            for timestamp, message in events
-        ):
+        expected = measured_request_fingerprints(run_id, benchmark_case)
+        if expected.issubset(observed):
             covered.add(benchmark_case["id"])
     return covered
 
@@ -375,6 +423,14 @@ def main() -> int:
         if benchmark_case["target"] == "gateway"
     ]
     campaign = evidence["campaign"]
+    expected_by_case = {
+        benchmark_case["id"]: measured_request_fingerprints(
+            campaign["runId"],
+            benchmark_case,
+        )
+        for benchmark_case in gateway_cases
+    }
+    expected_fingerprints = set().union(*expected_by_case.values())
     deadline = time.monotonic() + wait_seconds
     events: list[tuple[datetime, str]] = []
     previous_count: int | None = None
@@ -386,11 +442,21 @@ def main() -> int:
             campaign["startedAt"],
             campaign["finishedAt"],
         )
-        covered = covered_gateway_cases(events, gateway_cases)
+        covered = covered_gateway_cases(
+            events,
+            gateway_cases,
+            campaign["runId"],
+        )
+        relevant_event_count = sum(
+            1
+            for _, message in events
+            if parse_fields(message).get("client_request_fingerprint")
+            in expected_fingerprints
+        )
         previous_count, stable_polls = next_stability(
             previous_count,
             stable_polls,
-            len(events),
+            relevant_event_count,
             len(covered) == len(gateway_cases),
         )
         if stable_polls >= stable_polls_required:
@@ -416,12 +482,12 @@ def main() -> int:
         time.sleep(poll_seconds)
 
     for benchmark_case in gateway_cases:
-        started = parse_timestamp(benchmark_case["startedAt"])
-        finished = parse_timestamp(benchmark_case["finishedAt"])
+        expected = expected_by_case[benchmark_case["id"]]
         case_messages = [
             message
-            for timestamp, message in events
-            if started <= timestamp <= finished
+            for _, message in events
+            if parse_fields(message).get("client_request_fingerprint")
+            in expected
         ]
         event_metrics = aggregate_events(case_messages)
         if event_metrics["backendRequests"]["count"] == 0:

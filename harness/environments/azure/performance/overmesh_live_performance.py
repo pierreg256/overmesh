@@ -331,6 +331,15 @@ def request_id(run_id: str, target: str, case_id: str, index: int) -> str:
     return f"perf-{target}-{digest}"
 
 
+def setup_request_id(
+    run_id: str,
+    target: str,
+    case_id: str,
+    index: int,
+) -> str:
+    return request_id(run_id, target, case_id, -100_000 - index)
+
+
 def execute_wave(
     operation: Callable[[int], None],
     iterations: int,
@@ -504,7 +513,12 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                     ):
                         blob_name = f"{prefix}/item-{index:05}.bin"
                         with request_id_scope(
-                            request_id(run_id, target, benchmark_case.id, index)
+                            setup_request_id(
+                                run_id,
+                                target,
+                                benchmark_case.id,
+                                index,
+                            )
                         ):
                             container_client.upload_blob(
                                 blob_name, initial_payload, overwrite=False

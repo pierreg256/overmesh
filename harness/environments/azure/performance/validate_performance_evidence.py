@@ -98,6 +98,17 @@ def validate_document(
                 raise ValueError(f"case {key} has no replica samples")
             continue
         object_classes = backend.get("byObjectClass", {})
+        if contract.schema_version >= 2:
+            if backend.get("clientRequestCount") != benchmark_case.get(
+                "iterations"
+            ):
+                raise ValueError(
+                    f"case {key} does not cover every measured client request"
+                )
+            if backend.get("unattributedRequests") != 0:
+                raise ValueError(
+                    f"case {key} has unattributed backend requests"
+                )
         if (
             object_classes.get("unknown", 0) != 0
             or object_classes.get("control_other", 0) != 0

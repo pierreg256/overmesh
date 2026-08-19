@@ -21,6 +21,7 @@ use uuid::Uuid;
 use crate::app::SUPPORTED_STORAGE_VERSION;
 use crate::{
     identity::{CallerToken, ControlToken},
+    request_context::current_client_request_fingerprint,
     resource::{LogicalBlobId, encode_blob_path, encode_path_component},
 };
 
@@ -364,9 +365,11 @@ impl HttpBlobBackend {
         let started = Instant::now();
         let response = request.send().await;
         let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let client_request_fingerprint = current_client_request_fingerprint();
         match &response {
             Ok(response) => info!(
                 event = "overmesh_backend_request",
+                client_request_fingerprint = %client_request_fingerprint,
                 backend_id = %self.id,
                 operation,
                 object_class,
@@ -377,6 +380,7 @@ impl HttpBlobBackend {
             ),
             Err(_) => info!(
                 event = "overmesh_backend_request",
+                client_request_fingerprint = %client_request_fingerprint,
                 backend_id = %self.id,
                 operation,
                 object_class,
@@ -1439,14 +1443,17 @@ mod tests {
             .finish();
         let backend = HttpBlobBackend::new("storage-a", endpoint, false).expect("backend");
 
-        let result = backend
-            .control_get_object(
-                "heads/path.json",
-                &ControlToken::new("control-token".to_owned()),
-            )
-            .with_subscriber(subscriber)
-            .await
-            .expect("request");
+        let result = crate::request_context::scope(
+            "performance-request".to_owned(),
+            backend
+                .control_get_object(
+                    "heads/path.json",
+                    &ControlToken::new("control-token".to_owned()),
+                )
+                .with_subscriber(subscriber),
+        )
+        .await
+        .expect("request");
         server.abort();
 
         assert!(result.is_none());
@@ -1455,5 +1462,6 @@ mod tests {
             .expect("UTF-8 telemetry");
         assert_eq!(telemetry.matches("overmesh_backend_request").count(), 1);
         assert!(telemetry.contains("object_class=\"head\""));
+        assert!(telemetry.contains("client_request_fingerprint=performance-request"));
     }
 }

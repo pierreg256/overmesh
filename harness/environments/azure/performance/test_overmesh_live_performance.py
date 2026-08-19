@@ -4,7 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from overmesh_live_performance import latency_metrics, load_contract, percentile
+from overmesh_live_performance import (
+    latency_metrics,
+    load_contract,
+    percentile,
+    request_id,
+    setup_request_id,
+)
 
 
 class PerformanceContractTests(unittest.TestCase):
@@ -65,6 +71,12 @@ concurrency = [1]
                 "p95Ms": 50.0,
                 "maxMs": 50.0,
             },
+        )
+
+    def test_setup_and_measured_requests_have_distinct_ids(self) -> None:
+        self.assertNotEqual(
+            setup_request_id("run", "gateway", "overwrite", 3),
+            request_id("run", "gateway", "overwrite", 3),
         )
 
 

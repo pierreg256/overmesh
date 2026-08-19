@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tracing::info;
 
-use crate::identity::CallerIdentity;
+use crate::{identity::CallerIdentity, request_context::current_client_request_fingerprint};
 
 const BLOCK_MANIFEST_DOMAIN: &[u8] = b"overmesh:block-manifest:v1\0";
 const COMMIT_MANIFEST_DOMAIN: &[u8] = b"overmesh:commit-manifest:v1\0";
@@ -553,8 +553,10 @@ impl ManifestSigner for KeyVaultManifestSigner {
             )
             .await;
         let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let client_request_fingerprint = current_client_request_fingerprint();
         info!(
             event = "overmesh_manifest_sign",
+            client_request_fingerprint = %client_request_fingerprint,
             provider = "azure_key_vault",
             domain = ?domain,
             duration_us,

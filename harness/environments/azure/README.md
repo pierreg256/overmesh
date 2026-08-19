@@ -261,12 +261,16 @@ duration, success, backend operation and object class. Evidence publishes
 object-class totals and operation/object-class decompositions so generic
 `control_get_object` traffic becomes a checkable budget. Before signing, the
 live gate queries those events per case across every Gateway origin and waits
-for the Azure Monitor event count to stabilize before accepting the result. It
-also sums Container Apps `UsageNanoCores`, `WorkingSetBytes`, and replica
-metrics across the configured Gateway resources once for the campaign. The
-gate requires an explicit isolated-environment assertion so other client
-traffic cannot contaminate backend request counts. Backend timings explicitly
-measure time to response headers, not full response-body transfer. Azure
-Monitor exposes resource metrics at one-minute granularity, so they are not
-attributed to individual sub-minute cases. Raw logs and Azure resource
-identifiers are not retained.
+for the Azure Monitor event count to stabilize before accepting the result.
+Every backend and signing event carries a SHA-256 fingerprint of the incoming
+`x-ms-client-request-id`; setup, warm-up, measured, and cleanup operations use
+distinct identifiers. The collector requires all measured request fingerprints
+and retains only their count, never the identifiers themselves. It also sums
+Container Apps `UsageNanoCores`, `WorkingSetBytes`, and replica metrics across
+the configured Gateway resources once for the campaign. The gate requires an
+explicit isolated-environment assertion so other client traffic cannot
+contaminate backend request counts. Backend timings explicitly measure time to
+response headers, not full response-body transfer. Azure Monitor exposes
+resource metrics at one-minute granularity, so they are not attributed to
+individual sub-minute cases. Raw logs and Azure resource identifiers are not
+retained.

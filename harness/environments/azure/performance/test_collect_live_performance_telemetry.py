@@ -9,6 +9,7 @@ from collect_live_performance_telemetry import (
     comma_separated_values,
     covered_gateway_cases,
     log_rows,
+    measured_request_fingerprints,
     next_stability,
     parse_fields,
     query_logs,
@@ -45,6 +46,7 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
             [
                 (
                     'INFO event="overmesh_backend_request" '
+                    'client_request_fingerprint="request-a" '
                     'backend_id=storage-a operation="control_get_object" '
                     'object_class="head" '
                     "status=200 response_headers_duration_us=100 "
@@ -52,6 +54,7 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
                 ),
                 (
                     'INFO event="overmesh_backend_request" '
+                    'client_request_fingerprint="request-a" '
                     'backend_id=storage-b operation="control_get_object" '
                     'object_class="quarantine" '
                     "status=500 response_headers_duration_us=300 "
@@ -64,6 +67,8 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
             ]
         )
         self.assertEqual(metrics["backendRequests"]["count"], 2)
+        self.assertEqual(metrics["backendRequests"]["clientRequestCount"], 1)
+        self.assertEqual(metrics["backendRequests"]["unattributedRequests"], 0)
         self.assertEqual(metrics["backendRequests"]["transportFailures"], 0)
         self.assertEqual(
             metrics["backendRequests"]["responseHeadersDuration"][
@@ -92,26 +97,34 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
 
     def test_case_coverage_requires_a_backend_event_in_each_window(self) -> None:
         first = datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc)
+        case = {
+            "id": "covered",
+            "warmupIterations": 3,
+            "iterations": 1,
+        }
+        fingerprint = next(
+            iter(measured_request_fingerprints("run", case))
+        )
         events = [
             (
                 first,
                 'event="overmesh_backend_request" '
+                f'client_request_fingerprint="{fingerprint}" '
                 "response_headers_duration_us=1 transport_success=true",
             )
         ]
         cases = [
-            {
-                "id": "covered",
-                "startedAt": "2026-01-01T00:00:00.000000Z",
-                "finishedAt": "2026-01-01T00:00:02.000000Z",
-            },
+            case,
             {
                 "id": "missing",
-                "startedAt": "2026-01-01T00:00:03.000000Z",
-                "finishedAt": "2026-01-01T00:00:04.000000Z",
+                "warmupIterations": 3,
+                "iterations": 1,
             },
         ]
-        self.assertEqual(covered_gateway_cases(events, cases), {"covered"})
+        self.assertEqual(
+            covered_gateway_cases(events, cases, "run"),
+            {"covered"},
+        )
 
     def test_comma_separated_values_supports_multiple_gateways(self) -> None:
         self.assertEqual(
