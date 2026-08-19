@@ -97,7 +97,7 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         self.assertEqual(covered_gateway_cases(events, cases), {"covered"})
 
     @patch("collect_live_performance_telemetry.run_json")
-    def test_short_metric_window_is_padded_to_one_minute(
+    def test_short_metric_window_is_padded_to_two_minutes(
         self,
         run_json,
     ) -> None:
@@ -109,8 +109,8 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         )
         command = run_json.call_args.args[0]
         self.assertIn("--metrics", command)
-        self.assertEqual(result["window"]["startedAt"], "2025-12-31T23:59:45Z")
-        self.assertEqual(result["window"]["finishedAt"], "2026-01-01T00:00:45Z")
+        self.assertEqual(result["window"]["startedAt"], "2025-12-31T23:59:15Z")
+        self.assertEqual(result["window"]["finishedAt"], "2026-01-01T00:01:15Z")
 
 
 if __name__ == "__main__":

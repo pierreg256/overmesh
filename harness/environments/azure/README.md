@@ -251,5 +251,6 @@ resource use. The gate requires an explicit isolated-environment assertion so
 other client traffic cannot contaminate backend request counts. Backend timings
 explicitly measure time to response headers, not full response-body transfer.
 Azure Monitor exposes those resource metrics at one-minute granularity; shorter
-cases retain the exact enclosing one-minute query window, which can overlap an
+cases retain the exact enclosing two-minute query window required by the
+metrics API, which can overlap an
 adjacent case. Raw logs and Azure resource identifiers are not retained.

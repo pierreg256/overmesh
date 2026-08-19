@@ -131,8 +131,8 @@ def query_metrics(
     query_started = parse_timestamp(started_at)
     query_finished = parse_timestamp(finished_at)
     duration = query_finished - query_started
-    if duration < timedelta(minutes=1):
-        padding = (timedelta(minutes=1) - duration) / 2
+    if duration < timedelta(minutes=2):
+        padding = (timedelta(minutes=2) - duration) / 2
         query_started -= padding
         query_finished += padding
     query_started_at = query_started.isoformat().replace("+00:00", "Z")
