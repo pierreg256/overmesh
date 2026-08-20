@@ -83,6 +83,9 @@ limit come only from the committed `.overmesh/exchange/config.json`; a server
 process cannot widen them through environment variables. New messages use
 schema v2: MCP messages record the client's claimed `clientInfo`, and verdicts
 record whether they were based on source review, executed tests, or both.
+Findings and reports can carry the same structured verification metadata, so
+test execution is not relegated to prose. Non-gating notes may be appended to a
+resolved thread without changing its approved verdict.
 
 `claimedClientInfo` is attribution supplied by the MCP client, not
 authentication. Because the exchange uses a shared local filesystem, it cannot

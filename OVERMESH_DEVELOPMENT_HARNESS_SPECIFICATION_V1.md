@@ -196,6 +196,13 @@ service.
   containing only `source-review` and/or `tests-executed`. When
   `tests-executed` is present, `verification.commands` MUST contain at least one
   non-empty command. `exchange_resolve` MUST require this structure.
+- Schema v2 findings and reports MAY carry the same `verification` structure.
+  When present, it MUST satisfy the verdict validation rules, including the
+  command requirement for `tests-executed`. Other message kinds MUST reject it.
+- A resolved thread MAY accept later non-gating messages. Those additions MUST
+  preserve the approved verdict and the `resolved` state.
+- Generated thread slugs MUST be at most 64 characters and SHOULD truncate at
+  the last complete word separator when one exists.
 
 The version 1 MCP surface is limited to `exchange_list`, `exchange_read`,
 `exchange_post`, and `exchange_resolve`. The operator surface is

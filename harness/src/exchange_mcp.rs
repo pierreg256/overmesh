@@ -48,6 +48,7 @@ struct PostArguments {
     refs: Vec<MessageRef>,
     replies_to: Option<u32>,
     answered_by: Option<String>,
+    verification: Option<VerdictVerification>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -232,7 +233,7 @@ fn call_tool(
                     answered_by: arguments.answered_by,
                     outcome: None,
                     claimed_client_info: Some(claimed_client_info.clone()),
-                    verification: None,
+                    verification: arguments.verification,
                 },
             )?)?
         }
@@ -299,7 +300,7 @@ fn tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "exchange_post",
-            "description": "Post a typed finding, question, correction, spec, or report; omit thread to create one.",
+            "description": "Post a typed finding, question, correction, spec, or report; findings and reports may include verification metadata.",
             "inputSchema": {
                 "type": "object",
                 "required": ["kind", "subject", "body"],
@@ -315,7 +316,8 @@ fn tool_definitions() -> Vec<Value> {
                         "items": {"$ref": "#/$defs/ref"}
                     },
                     "repliesTo": {"type": "integer", "minimum": 1},
-                    "answeredBy": {"type": "string", "minLength": 1}
+                    "answeredBy": {"type": "string", "minLength": 1},
+                    "verification": verification_schema()
                 },
                 "$defs": {"ref": ref_schema()},
                 "additionalProperties": false
@@ -338,25 +340,7 @@ fn tool_definitions() -> Vec<Value> {
                         "minItems": 1,
                         "items": {"$ref": "#/$defs/ref"}
                     },
-                    "verification": {
-                        "type": "object",
-                        "required": ["methods", "commands"],
-                        "properties": {
-                            "methods": {
-                                "type": "array",
-                                "minItems": 1,
-                                "uniqueItems": true,
-                                "items": {
-                                    "enum": ["source-review", "tests-executed"]
-                                }
-                            },
-                            "commands": {
-                                "type": "array",
-                                "items": {"type": "string", "minLength": 1}
-                            }
-                        },
-                        "additionalProperties": false
-                    }
+                    "verification": verification_schema()
                 },
                 "$defs": {"ref": ref_schema()},
                 "additionalProperties": false
@@ -374,6 +358,28 @@ fn ref_schema() -> Value {
                 "enum": ["code", "commit", "artifact", "record", "url"]
             },
             "value": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+    })
+}
+
+fn verification_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["methods", "commands"],
+        "properties": {
+            "methods": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                    "enum": ["source-review", "tests-executed"]
+                }
+            },
+            "commands": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1}
+            }
         },
         "additionalProperties": false
     })
@@ -510,6 +516,38 @@ mod tests {
         assert_eq!(
             stored.messages[0].claimed_client_info.as_ref(),
             Some(&client_info())
+        );
+
+        let report = handle_request(
+            &exchange,
+            "copilot",
+            &mut copilot_session,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "exchange_post",
+                    "arguments": {
+                        "kind": "report",
+                        "thread": thread,
+                        "subject": "Executed verification",
+                        "body": "Recorded structurally",
+                        "refs": [{"kind": "code", "value": "code.rs"}],
+                        "verification": {
+                            "methods": ["tests-executed"],
+                            "commands": ["cargo test -p overmesh-harness exchange"]
+                        }
+                    }
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(report["result"]["structuredContent"]["seq"], 2);
+        let stored = exchange.read_operator(thread, 0).unwrap();
+        assert_eq!(
+            stored.messages[1].verification.as_ref().unwrap().commands,
+            vec!["cargo test -p overmesh-harness exchange"]
         );
     }
 

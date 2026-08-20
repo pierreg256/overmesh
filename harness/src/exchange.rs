@@ -1087,8 +1087,13 @@ fn validate_message_fields(request: &PostRequest, schema_version: u32, author: &
     if request.kind != MessageKind::Verdict && request.outcome.is_some() {
         bail!("only verdict and approval messages may set outcome");
     }
-    if request.kind != MessageKind::Verdict && request.verification.is_some() {
-        bail!("only verdict messages may set verification");
+    if request.verification.is_some()
+        && !matches!(
+            request.kind,
+            MessageKind::Finding | MessageKind::Report | MessageKind::Verdict
+        )
+    {
+        bail!("only finding, report, and verdict messages may set verification");
     }
     if schema_version == 1 {
         if request.claimed_client_info.is_some() || request.verification.is_some() {
@@ -1107,13 +1112,11 @@ fn validate_message_fields(request: &PostRequest, schema_version: u32, author: &
                     .context("schema v2 assistant messages require claimedClientInfo")?,
             )?;
         }
-        if request.kind == MessageKind::Verdict {
-            validate_verdict_verification(
-                request
-                    .verification
-                    .as_ref()
-                    .context("schema v2 verdicts require verification")?,
-            )?;
+        if request.kind == MessageKind::Verdict && request.verification.is_none() {
+            bail!("schema v2 verdicts require verification");
+        }
+        if let Some(verification) = request.verification.as_ref() {
+            validate_verification(verification)?;
         }
     }
     match request.kind {
@@ -1167,21 +1170,21 @@ fn validate_claimed_client_info(client: &ClaimedClientInfo) -> Result<()> {
     Ok(())
 }
 
-fn validate_verdict_verification(verification: &VerdictVerification) -> Result<()> {
+fn validate_verification(verification: &VerdictVerification) -> Result<()> {
     let methods = verification
         .methods
         .iter()
         .copied()
         .collect::<BTreeSet<_>>();
     if methods.is_empty() || methods.len() != verification.methods.len() {
-        bail!("verdict verification methods must be non-empty and unique");
+        bail!("verification methods must be non-empty and unique");
     }
     if verification
         .commands
         .iter()
         .any(|command| command.trim().is_empty())
     {
-        bail!("verdict verification commands must be non-empty strings");
+        bail!("verification commands must be non-empty strings");
     }
     if methods.contains(&VerificationMethod::TestsExecuted) && verification.commands.is_empty() {
         bail!("tests-executed verdicts require at least one verification command");
@@ -1316,29 +1319,29 @@ fn valid_author(author: &str) -> bool {
 fn slug(subject: &str) -> String {
     let mut value = String::new();
     let mut pending_separator = false;
+    let mut truncated_mid_word = false;
     for byte in subject.bytes() {
         if byte.is_ascii_alphanumeric() {
             if pending_separator && !value.is_empty() {
+                if value.len() + 2 > 64 {
+                    break;
+                }
                 value.push('-');
+            }
+            if value.len() == 64 {
+                truncated_mid_word = true;
+                break;
             }
             value.push(byte.to_ascii_lowercase() as char);
             pending_separator = false;
         } else {
             pending_separator = true;
         }
-        if value.len() >= 64 {
-            break;
-        }
     }
-    value
-        .trim_matches('-')
-        .to_owned()
-        .chars()
-        .take(64)
-        .collect::<String>()
-        .trim_matches('-')
-        .to_owned()
-        .pipe_if_empty("thread")
+    if truncated_mid_word && let Some(separator) = value.rfind('-') {
+        value.truncate(separator);
+    }
+    value.trim_matches('-').to_owned().pipe_if_empty("thread")
 }
 
 trait EmptyFallback {
@@ -1684,6 +1687,40 @@ mod tests {
     }
 
     #[test]
+    fn schema_v2_finding_accepts_validated_verification() {
+        let root = fixture();
+        let exchange = exchange(&root);
+        let mut verified_finding = finding(None, "verified finding");
+        verified_finding.verification = Some(VerdictVerification {
+            methods: vec![VerificationMethod::TestsExecuted],
+            commands: vec!["cargo test -p overmesh-harness exchange".to_owned()],
+        });
+        let posted = exchange
+            .post("copilot", PostOrigin::Mcp, verified_finding)
+            .unwrap();
+        assert_eq!(
+            exchange.read_operator(&posted.thread, 0).unwrap().messages[0]
+                .verification
+                .as_ref()
+                .unwrap()
+                .methods,
+            vec![VerificationMethod::TestsExecuted]
+        );
+
+        let mut question = finding(None, "question");
+        question.kind = MessageKind::Question;
+        question.answered_by = Some("source review".to_owned());
+        question.verification = Some(source_review());
+        assert!(
+            exchange
+                .post("copilot", PostOrigin::Mcp, question)
+                .unwrap_err()
+                .to_string()
+                .contains("only finding, report, and verdict")
+        );
+    }
+
+    #[test]
     fn verdict_requires_other_author_and_approval_to_resolve() {
         let root = fixture();
         let exchange = exchange(&root);
@@ -1732,6 +1769,18 @@ mod tests {
         let view = exchange.read(&first.thread, 0).unwrap();
         assert_eq!(view.state, ThreadState::Resolved);
         assert_eq!(view.waiting_on, None);
+
+        let mut late_report = finding(Some(first.thread.clone()), "late evidence");
+        late_report.kind = MessageKind::Report;
+        late_report.verification = Some(source_review());
+        let appended = exchange
+            .post("copilot", PostOrigin::Mcp, late_report)
+            .unwrap();
+        assert_eq!(appended.state, ThreadState::Resolved);
+        assert_eq!(
+            exchange.read(&first.thread, 0).unwrap().state,
+            ThreadState::Resolved
+        );
     }
 
     #[test]
@@ -1996,6 +2045,15 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn slug_truncation_prefers_the_last_complete_word() {
+        assert_eq!(
+            slug(&format!("alpha beta {}", "c".repeat(80))),
+            "alpha-beta"
+        );
+        assert_eq!(slug(&"x".repeat(80)), "x".repeat(64));
     }
 
     #[cfg(unix)]

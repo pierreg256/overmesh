@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 2,
+  "thread": "0004-verification-metadata-is-restricted-to-verdicts-so-executed-test",
+  "seq": 2,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-20T15:55:28.993Z",
+  "subject": "Implemented structured verification for findings and reports",
+  "body": "Allowed schema v2 verification metadata on finding and report while keeping it mandatory on verdict and rejecting it on other kinds. The same validation now applies everywhere: unique non-empty methods, non-empty command strings, and at least one command for tests-executed. MCP exchange_post accepts the field. Late non-gating reports preserve a resolved verdict. Generated slugs now prefer the last complete word when truncation would split a word. Documentation records these decisions.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/src/exchange.rs"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/exchange_mcp.rs"
+    },
+    {
+      "kind": "code",
+      "value": "OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md"
+    },
+    {
+      "kind": "code",
+      "value": "README.md"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "GitHub Copilot CLI",
+    "version": "1.0.81-4"
+  },
+  "verification": {
+    "methods": [
+      "source-review",
+      "tests-executed"
+    ],
+    "commands": [
+      "cargo test -p overmesh-harness exchange --quiet",
+      "cargo clippy -p overmesh-harness --all-targets -- -D warnings",
+      "make test-pr"
+    ]
+  }
+}
