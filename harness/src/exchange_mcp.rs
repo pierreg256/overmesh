@@ -150,7 +150,7 @@ pub fn handle_request(exchange: &Exchange, author: &str, request: &Value) -> Opt
 fn call_tool(exchange: &Exchange, author: &str, params: CallToolParams) -> Result<Value> {
     exchange.validate_mcp_author(author)?;
     let value = match params.name.as_str() {
-        "exchange_list" => serde_json::to_value(exchange.list()?)?,
+        "exchange_list" => json!({"threads": exchange.list()?}),
         "exchange_read" => {
             let arguments: ReadArguments =
                 serde_json::from_value(params.arguments).context("invalid exchange_read args")?;
@@ -193,6 +193,9 @@ fn call_tool(exchange: &Exchange, author: &str, params: CallToolParams) -> Resul
         }
         name => anyhow::bail!("unknown exchange tool {name:?}"),
     };
+    if !value.is_object() {
+        anyhow::bail!("exchange tool result must be a JSON object");
+    }
     let text = serde_json::to_string_pretty(&value)?;
     Ok(json!({
         "content": [{"type": "text", "text": text}],
@@ -329,6 +332,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(response["result"]["tools"].as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn every_tool_result_has_object_structured_content() {
+        let (_root, exchange) = fixture();
+        let listed = call_tool(
+            &exchange,
+            "copilot",
+            CallToolParams {
+                name: "exchange_list".to_owned(),
+                arguments: json!({}),
+            },
+        )
+        .unwrap();
+        assert!(listed["structuredContent"].is_object());
+        assert!(listed["structuredContent"]["threads"].is_array());
     }
 
     #[test]

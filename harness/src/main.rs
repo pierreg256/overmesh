@@ -12,10 +12,7 @@ use overmesh_harness::{
     dataset::generate,
     doc_check,
     environment::local_service_statuses,
-    exchange::{
-        DEFAULT_CONSECUTIVE_LIMIT, Exchange, MessageKind, MessageRef, PostOrigin, PostRequest,
-        RefKind,
-    },
+    exchange::{Exchange, MessageKind, MessageRef, PostOrigin, PostRequest, RefKind},
     exchange_mcp,
     identity::{TestPrincipal, TestTokenKind, issue_test_token},
     manifest_validation::{
@@ -597,23 +594,7 @@ async fn execute() -> Result<ExitCode> {
 }
 
 fn exchange_from_environment(repository_root: &Path) -> Result<Exchange> {
-    let authors = env::var("OVERMESH_EXCHANGE_AUTHORS")
-        .unwrap_or_else(|_| "claude,copilot".to_owned())
-        .split(',')
-        .map(str::trim)
-        .map(str::to_owned)
-        .filter(|author| !author.is_empty())
-        .collect::<Vec<_>>();
-    let limit = env::var("OVERMESH_EXCHANGE_CONSECUTIVE_LIMIT")
-        .ok()
-        .map(|value| {
-            value
-                .parse::<usize>()
-                .context("OVERMESH_EXCHANGE_CONSECUTIVE_LIMIT must be a positive integer")
-        })
-        .transpose()?
-        .unwrap_or(DEFAULT_CONSECUTIVE_LIMIT);
-    Exchange::new(repository_root, authors, limit)
+    Exchange::configured_for_repository(repository_root)
 }
 
 fn parse_exchange_ref(value: &str) -> Result<MessageRef> {

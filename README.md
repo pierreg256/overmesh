@@ -78,7 +78,9 @@ OVERMESH_EXCHANGE_REPOSITORY=/path/to/overmesh \
 Exchange messages are immutable JSON files under `.overmesh/exchange/` and are
 staged, never committed, by the server. Findings and decisions cite validated
 repository refs. Specs and verdicts require operator approval; five consecutive
-non-human messages escalate the thread.
+non-human messages escalate the thread. The assistant allowlist and escalation
+limit come only from the committed `.overmesh/exchange/config.json`; a server
+process cannot widen them through environment variables.
 
 Run the process-level gateway authentication and signed dual-write smoke test:
 

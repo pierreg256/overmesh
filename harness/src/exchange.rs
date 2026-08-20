@@ -16,6 +16,7 @@ use time::{OffsetDateTime, macros::format_description};
 pub const DEFAULT_CONSECUTIVE_LIMIT: usize = 5;
 pub const MAX_BODY_BYTES: usize = 16 * 1024;
 const SCHEMA_VERSION: u32 = 1;
+const CONFIG_SCHEMA_VERSION: u32 = 1;
 const CREATED_AT_FORMAT: &[time::format_description::BorrowedFormatItem<'static>] =
     format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
 
@@ -122,7 +123,7 @@ pub struct ThreadSummary {
     pub thread: String,
     pub subject: String,
     pub state: ThreadState,
-    pub waiting_on: String,
+    pub waiting_on: Option<String>,
     pub messages: usize,
     pub last_author: String,
     pub updated_at: String,
@@ -153,7 +154,7 @@ pub struct ThreadView {
     pub thread: String,
     pub subject: String,
     pub state: ThreadState,
-    pub waiting_on: String,
+    pub waiting_on: Option<String>,
     pub messages: Vec<ReadMessage>,
 }
 
@@ -161,6 +162,14 @@ pub struct ThreadView {
 pub enum PostOrigin {
     Cli,
     Mcp,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExchangeConfig {
+    schema_version: u32,
+    assistants: Vec<String>,
+    consecutive_message_limit: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -213,6 +222,28 @@ impl Exchange {
             repository_root,
             ["claude".to_owned(), "copilot".to_owned()],
             DEFAULT_CONSECUTIVE_LIMIT,
+        )
+    }
+
+    pub fn configured_for_repository(repository_root: impl Into<PathBuf>) -> Result<Self> {
+        let repository_root = repository_root.into();
+        let path = repository_root.join(".overmesh/exchange/config.json");
+        let config: ExchangeConfig = serde_json::from_slice(
+            &fs::read(&path)
+                .with_context(|| format!("failed to read exchange config {}", path.display()))?,
+        )
+        .with_context(|| format!("failed to parse exchange config {}", path.display()))?;
+        if config.schema_version != CONFIG_SCHEMA_VERSION {
+            bail!(
+                "unsupported exchange config schemaVersion {}; expected {}",
+                config.schema_version,
+                CONFIG_SCHEMA_VERSION
+            );
+        }
+        Self::new(
+            repository_root,
+            config.assistants,
+            config.consecutive_message_limit,
         )
     }
 
@@ -1081,22 +1112,27 @@ fn waiting_on(
     messages: &[ExchangeMessage],
     state: ThreadState,
     allowed_assistants: &BTreeSet<String>,
-) -> String {
+) -> Option<String> {
+    if state == ThreadState::Resolved {
+        return None;
+    }
     if matches!(
         state,
         ThreadState::AwaitingApproval | ThreadState::Escalated
     ) {
-        return "human".to_owned();
+        return Some("human".to_owned());
     }
     let Some(last) = messages.last() else {
-        return "participants".to_owned();
+        return Some("participants".to_owned());
     };
     if last.author != "human" {
-        return allowed_assistants
-            .iter()
-            .find(|author| **author != last.author)
-            .cloned()
-            .unwrap_or_else(|| "human".to_owned());
+        return Some(
+            allowed_assistants
+                .iter()
+                .find(|author| **author != last.author)
+                .cloned()
+                .unwrap_or_else(|| "human".to_owned()),
+        );
     }
     if let Some(target_author) = last.replies_to.and_then(|seq| {
         messages
@@ -1104,13 +1140,15 @@ fn waiting_on(
             .find(|message| message.seq == seq)
             .map(|message| message.author.as_str())
     }) {
-        return allowed_assistants
-            .iter()
-            .find(|author| author.as_str() != target_author)
-            .cloned()
-            .unwrap_or_else(|| "participants".to_owned());
+        return Some(
+            allowed_assistants
+                .iter()
+                .find(|author| author.as_str() != target_author)
+                .cloned()
+                .unwrap_or_else(|| "participants".to_owned()),
+        );
     }
-    "participants".to_owned()
+    Some("participants".to_owned())
 }
 
 fn code_ref_path(value: &str) -> Result<&Path> {
@@ -1460,6 +1498,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(approved.state, ThreadState::Resolved);
+        let view = exchange.read(&first.thread, 0).unwrap();
+        assert_eq!(view.state, ThreadState::Resolved);
+        assert_eq!(view.waiting_on, None);
     }
 
     #[test]
@@ -1797,6 +1838,40 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("cannot write as human")
+        );
+    }
+
+    #[test]
+    fn loads_assistants_and_limit_from_committed_config() {
+        let root = fixture();
+        let config_path = root.path().join(".overmesh/exchange/config.json");
+        fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        fs::write(
+            &config_path,
+            r#"{
+                "schemaVersion": 1,
+                "assistants": ["reviewer", "writer"],
+                "consecutiveMessageLimit": 1
+            }"#,
+        )
+        .unwrap();
+        let exchange = Exchange::configured_for_repository(root.path()).unwrap();
+        exchange.validate_mcp_author("reviewer").unwrap();
+        assert!(exchange.validate_mcp_author("copilot").is_err());
+        let posted = exchange
+            .post("writer", PostOrigin::Mcp, finding(None, "one"))
+            .unwrap();
+        assert_eq!(posted.state, ThreadState::Escalated);
+        assert!(
+            exchange
+                .post(
+                    "reviewer",
+                    PostOrigin::Mcp,
+                    finding(Some(posted.thread), "two"),
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("human message")
         );
     }
 

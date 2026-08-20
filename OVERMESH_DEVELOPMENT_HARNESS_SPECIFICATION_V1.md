@@ -178,6 +178,9 @@ service.
 - A `verdict` MUST NOT resolve a thread until an operator approval follows it.
 - The sixth consecutive non-human message MUST be rejected. Five consecutive
   non-human messages place the thread in `escalated` state until a human posts.
+- The assistant allowlist and consecutive-message limit MUST be loaded from the
+  committed `.overmesh/exchange/config.json`. Environment variables MUST NOT
+  override either control.
 - The author of the last non-verdict message MUST NOT author the verdict.
 - The stdio MCP server MUST reject a missing, unapproved, or `human` server
   identity. Human messages MUST enter through the operator CLI.
