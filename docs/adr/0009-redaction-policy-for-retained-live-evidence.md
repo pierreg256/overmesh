@@ -138,7 +138,9 @@ Implemented. The 0.9.0 source evidence is assembled privately, redacted into
 its canonical published form, then signed. The raw archive is retained on all
 three private validation accounts with a recorded SHA-256. No unredacted
 release bundle entered Git history. `doc-check` R8 scans every retained
-artefact and fails on GUIDs, subscription paths, or Azure service hostnames.
+artefact and fails on GUIDs, subscription paths, Azure service hostnames,
+workstation home paths, IP literals, email addresses, authorization material,
+SAS fragments, or AzCopy job data.
 
 ## When to revisit
 
@@ -163,8 +165,8 @@ correlating with new ones. Treat it as a format version, not a refactor.
 - `harness/artifacts/live/0.9.0/manifest-v090-public.pem` — the published
   public key, which is what a third party verifies signatures against
 - `harness/src/doc_check.rs::rejects_unredacted_live_evidence` — retained
-  artefacts fail R8 when they expose subscription paths, GUIDs or Azure service
-  hostnames
+  artefacts fail R8 when they expose infrastructure, workstation, identity or
+  credential material
 - `harness/artifacts/live/0.9.0/overmesh-v090-live-evidence.json` — canonical
   redacted bundle containing the raw bundle hash and every source hash
 - `harness/artifacts/live/0.9.0/overmesh-v090-live-evidence.sig.json` —

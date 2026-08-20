@@ -22,7 +22,18 @@ class BuildLiveEvidenceTests(unittest.TestCase):
                             "environment": (
                                 "https://example.vault.azure.net/"
                                 "subscriptions/e74f6a12-1dd5-4652-96a0-f49007c59990"
-                            )
+                            ),
+                            "operatorHome": "/Users/alice/.azcopy/jobs/123.log",
+                            "operatorIp": "203.0.113.42",
+                            "operatorIpV6": "2001:db8::1",
+                            "operatorEmail": "alice@example.test",
+                            "authorization": "Authorization: token-value",
+                            "credential": "Bearer token-value",
+                            "directUrl": (
+                                "https://example.invalid/blob"
+                                "?sv=2026-01-01&se=2026-08-20&sig=secret"
+                            ),
+                            "jobId": "azcopy-job-123",
                         },
                     }
                 ),
@@ -53,6 +64,19 @@ class BuildLiveEvidenceTests(unittest.TestCase):
                 "e74f6a12-1dd5-4652-96a0-f49007c59990",
                 json.dumps(canonical),
             )
+            serialized = json.dumps(canonical)
+            for forbidden in (
+                "/Users/",
+                "203.0.113.42",
+                "2001:db8::1",
+                "alice@example.test",
+                "token-value",
+                "sig=secret",
+                ".azcopy",
+                "azcopy-job-123",
+                "jobId",
+            ):
+                self.assertNotIn(forbidden, serialized)
             self.assertEqual(
                 canonical["redaction"]["canonicalForm"],
                 "redacted-before-signing",

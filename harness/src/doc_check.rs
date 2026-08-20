@@ -2,8 +2,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
     fs,
+    net::{Ipv4Addr, Ipv6Addr},
     path::{Component, Path},
     process::{Command, Stdio},
+    str::FromStr,
 };
 
 use anyhow::{Context, Result};
@@ -765,23 +767,7 @@ fn check_retained_artifact_redaction(
             .with_context(|| format!("failed to read retained artifact {relative}"))?;
         let content = String::from_utf8_lossy(&bytes);
         for (index, line) in content.lines().enumerate() {
-            let lower = line.to_ascii_lowercase();
-            let forbidden = [
-                ("/subscriptions/", "Azure subscription resource path"),
-                (".azurefd.net", "Azure Front Door hostname"),
-                (".vault.azure.net", "Azure Key Vault hostname"),
-                (".blob.core.windows.net", "Azure Blob Storage hostname"),
-                (".azurecontainerapps.io", "Azure Container Apps hostname"),
-                (".azurecr.io", "Azure Container Registry hostname"),
-                ("\\u001b", "serialized ANSI escape sequence"),
-                ("\\x1b", "serialized ANSI escape sequence"),
-            ]
-            .into_iter()
-            .find(|(pattern, _)| lower.contains(pattern))
-            .map(|(_, description)| description)
-            .or_else(|| line.contains('\u{1b}').then_some("ANSI escape sequence"))
-            .or_else(|| contains_guid(line).then_some("GUID"));
-            if let Some(description) = forbidden {
+            if let Some(description) = forbidden_retained_artifact_pattern(line) {
                 report.push(
                     "R8",
                     &relative,
@@ -795,6 +781,38 @@ fn check_retained_artifact_redaction(
     Ok(())
 }
 
+fn forbidden_retained_artifact_pattern(line: &str) -> Option<&'static str> {
+    let lower = line.to_ascii_lowercase();
+    [
+        ("/subscriptions/", "Azure subscription resource path"),
+        (".azurefd.net", "Azure Front Door hostname"),
+        (".vault.azure.net", "Azure Key Vault hostname"),
+        (".blob.core.windows.net", "Azure Blob Storage hostname"),
+        (".azurecontainerapps.io", "Azure Container Apps hostname"),
+        (".azurecr.io", "Azure Container Registry hostname"),
+        ("/users/", "macOS home directory path"),
+        ("/home/", "Linux home directory path"),
+        ("c:\\users\\", "Windows home directory path"),
+        ("c:\\\\users\\\\", "serialized Windows home directory path"),
+        ("authorization:", "Authorization header"),
+        ("bearer ", "Bearer credential"),
+        (".azcopy", "AzCopy job-log path"),
+        ("azcopy job", "AzCopy job identifier"),
+        ("\"jobid\"", "AzCopy job identifier"),
+        ("\"job_id\"", "AzCopy job identifier"),
+        ("\\u001b", "serialized ANSI escape sequence"),
+        ("\\x1b", "serialized ANSI escape sequence"),
+    ]
+    .into_iter()
+    .find(|(pattern, _)| lower.contains(pattern))
+    .map(|(_, description)| description)
+    .or_else(|| line.contains('\u{1b}').then_some("ANSI escape sequence"))
+    .or_else(|| contains_guid(line).then_some("GUID"))
+    .or_else(|| contains_ip_literal(line).then_some("IP address literal"))
+    .or_else(|| contains_email_address(line).then_some("email address"))
+    .or_else(|| contains_sas_fragment(&lower).then_some("SAS query fragment"))
+}
+
 fn contains_guid(value: &str) -> bool {
     value.as_bytes().windows(36).any(|candidate| {
         candidate
@@ -805,6 +823,53 @@ fn contains_guid(value: &str) -> bool {
                 _ => byte.is_ascii_hexdigit(),
             })
     })
+}
+
+fn contains_ip_literal(value: &str) -> bool {
+    value
+        .split(|character: char| {
+            !(character.is_ascii_hexdigit() || matches!(character, ':' | '.' | '[' | ']' | '%'))
+        })
+        .filter(|candidate| !candidate.is_empty())
+        .any(|candidate| {
+            let candidate = candidate.trim_matches(['[', ']']);
+            Ipv4Addr::from_str(candidate).is_ok()
+                || (candidate != "::"
+                    && (candidate.len() >= 7 || candidate.starts_with("::"))
+                    && candidate.split_once('%').map_or_else(
+                        || Ipv6Addr::from_str(candidate).is_ok(),
+                        |(address, _)| Ipv6Addr::from_str(address).is_ok(),
+                    ))
+        })
+}
+
+fn contains_email_address(value: &str) -> bool {
+    value
+        .split(|character: char| {
+            character.is_ascii_whitespace()
+                || matches!(
+                    character,
+                    '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
+                )
+        })
+        .any(|candidate| {
+            let Some((local, domain)) = candidate.rsplit_once('@') else {
+                return false;
+            };
+            !local.is_empty()
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+                && domain
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+        })
+}
+
+fn contains_sas_fragment(lower: &str) -> bool {
+    ["sig=", "?sv=", "&sv=", "?se=", "&se="]
+        .into_iter()
+        .any(|pattern| lower.contains(pattern))
 }
 
 fn check_retained_artifact_provenance(
@@ -1273,7 +1338,11 @@ reason = "Intentional fixture."
             r#"{
   "subscription": "/subscriptions/11111111-2222-3333-4444-555555555555",
   "endpoint": "https://example.azurefd.net",
-  "diagnostic": "\u001b[31mfailed\u001b[0m"
+  "diagnostic": "\u001b[31mfailed\u001b[0m",
+  "home": "/Users/operator/.azcopy/jobs.log",
+  "address": "203.0.113.42",
+  "addressV6": "2001:db8::1",
+  "credential": "Authorization: Bearer secret"
 }"#,
         );
 
@@ -1283,11 +1352,30 @@ reason = "Intentional fixture."
             .iter()
             .filter(|violation| violation.rule == "R8")
             .collect::<Vec<_>>();
-        assert_eq!(violations.len(), 3);
+        assert_eq!(violations.len(), 7);
         assert!(
             violations.iter().all(|violation| {
                 violation.path == "harness/artifacts/live/0.9.0/evidence.json"
             })
+        );
+        let descriptions = violations
+            .iter()
+            .map(|violation| violation.message.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            descriptions
+                .iter()
+                .any(|message| message.contains("home directory"))
+        );
+        assert!(
+            descriptions
+                .iter()
+                .any(|message| message.contains("IP address literal"))
+        );
+        assert!(
+            descriptions
+                .iter()
+                .any(|message| message.contains("Authorization header"))
         );
     }
 
