@@ -80,7 +80,16 @@ staged, never committed, by the server. Findings and decisions cite validated
 repository refs. Specs and verdicts require operator approval; five consecutive
 non-human messages escalate the thread. The assistant allowlist and escalation
 limit come only from the committed `.overmesh/exchange/config.json`; a server
-process cannot widen them through environment variables.
+process cannot widen them through environment variables. New messages use
+schema v2: MCP messages record the client's claimed `clientInfo`, and verdicts
+record whether they were based on source review, executed tests, or both.
+
+`claimedClientInfo` is attribution supplied by the MCP client, not
+authentication. Because the exchange uses a shared local filesystem, it cannot
+cryptographically prove an assistant's identity or independence. Spec-body
+withholding applies only to `exchange_read`; a participant with direct local
+file access can read the JSON. Distinct OS identities and permissions would be
+required for isolation. Operator approval remains the trust boundary.
 
 Run the process-level gateway authentication and signed dual-write smoke test:
 

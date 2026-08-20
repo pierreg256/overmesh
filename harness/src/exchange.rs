@@ -15,7 +15,8 @@ use time::{OffsetDateTime, macros::format_description};
 
 pub const DEFAULT_CONSECUTIVE_LIMIT: usize = 5;
 pub const MAX_BODY_BYTES: usize = 16 * 1024;
-const SCHEMA_VERSION: u32 = 1;
+const SCHEMA_VERSION: u32 = 2;
+const MIN_SUPPORTED_SCHEMA_VERSION: u32 = 1;
 const CONFIG_SCHEMA_VERSION: u32 = 1;
 const CREATED_AT_FORMAT: &[time::format_description::BorrowedFormatItem<'static>] =
     format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z");
@@ -78,6 +79,27 @@ pub struct MessageRef {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClaimedClientInfo {
+    pub name: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VerificationMethod {
+    SourceReview,
+    TestsExecuted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct VerdictVerification {
+    pub methods: Vec<VerificationMethod>,
+    pub commands: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExchangeMessage {
     pub schema_version: u32,
@@ -93,6 +115,10 @@ pub struct ExchangeMessage {
     pub refs: Vec<MessageRef>,
     pub answered_by: Option<String>,
     pub outcome: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claimed_client_info: Option<ClaimedClientInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<VerdictVerification>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -107,6 +133,18 @@ pub struct PostRequest {
     pub replies_to: Option<u32>,
     pub answered_by: Option<String>,
     pub outcome: Option<String>,
+    pub claimed_client_info: Option<ClaimedClientInfo>,
+    pub verification: Option<VerdictVerification>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolveRequest {
+    pub thread: String,
+    pub outcome: VerdictOutcome,
+    pub body: String,
+    pub refs: Vec<MessageRef>,
+    pub claimed_client_info: ClaimedClientInfo,
+    pub verification: VerdictVerification,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -144,6 +182,10 @@ pub struct ReadMessage {
     pub refs: Vec<MessageRef>,
     pub answered_by: Option<String>,
     pub outcome: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claimed_client_info: Option<ClaimedClientInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification: Option<VerdictVerification>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub withheld: Option<String>,
 }
@@ -323,6 +365,8 @@ impl Exchange {
                     refs: message.refs.clone(),
                     answered_by: message.answered_by.clone(),
                     outcome: message.outcome.clone(),
+                    claimed_client_info: message.claimed_client_info.clone(),
+                    verification: message.verification.clone(),
                     withheld: withheld.then(|| "awaiting approval".to_owned()),
                 }
             })
@@ -340,10 +384,13 @@ impl Exchange {
         &self,
         author: &str,
         origin: PostOrigin,
-        request: PostRequest,
+        mut request: PostRequest,
     ) -> Result<PostResult> {
         self.validate_author(author, origin)?;
-        validate_message_fields(&request)?;
+        if origin == PostOrigin::Cli {
+            request.claimed_client_info = None;
+        }
+        validate_message_fields(&request, SCHEMA_VERSION, author)?;
         if request.kind == MessageKind::Approval {
             bail!("approval is only postable through exchange approve or reject");
         }
@@ -371,10 +418,7 @@ impl Exchange {
         &self,
         author: &str,
         origin: PostOrigin,
-        thread: &str,
-        outcome: VerdictOutcome,
-        body: String,
-        refs: Vec<MessageRef>,
+        request: ResolveRequest,
     ) -> Result<PostResult> {
         self.post(
             author,
@@ -382,12 +426,14 @@ impl Exchange {
             PostRequest {
                 kind: MessageKind::Verdict,
                 subject: "Thread verdict".to_owned(),
-                body,
-                thread: Some(thread.to_owned()),
-                refs,
+                body: request.body,
+                thread: Some(request.thread),
+                refs: request.refs,
                 replies_to: None,
                 answered_by: None,
-                outcome: Some(outcome.as_str().to_owned()),
+                outcome: Some(request.outcome.as_str().to_owned()),
+                claimed_client_info: Some(request.claimed_client_info),
+                verification: Some(request.verification),
             },
         )
     }
@@ -439,6 +485,8 @@ impl Exchange {
                 replies_to: Some(target.seq),
                 answered_by: None,
                 outcome: Some(action.to_owned()),
+                claimed_client_info: None,
+                verification: None,
             },
             &messages,
         )
@@ -665,6 +713,8 @@ impl Exchange {
             refs: request.refs,
             answered_by: request.answered_by,
             outcome: request.outcome,
+            claimed_client_info: request.claimed_client_info,
+            verification: request.verification,
         };
         let bytes = serde_json::to_vec_pretty(&message)?;
         file.write_all(&bytes)
@@ -829,7 +879,7 @@ impl Exchange {
                     .with_context(|| format!("failed to read {}", entry.path().display()))?,
             )
             .with_context(|| format!("failed to parse {}", entry.path().display()))?;
-            if message.schema_version != SCHEMA_VERSION
+            if !(MIN_SUPPORTED_SCHEMA_VERSION..=SCHEMA_VERSION).contains(&message.schema_version)
                 || message.thread != thread
                 || !valid_author(&message.author)
             {
@@ -877,6 +927,8 @@ impl Exchange {
                     || !matches!(message.outcome.as_deref(), Some("approved" | "rejected"))
                     || !message.refs.is_empty()
                     || message.answered_by.is_some()
+                    || message.claimed_client_info.is_some()
+                    || message.verification.is_some()
                 {
                     bail!(
                         "exchange approval {} violates operator approval invariants",
@@ -891,16 +943,22 @@ impl Exchange {
                     bail!("exchange approval target must be a spec or verdict");
                 }
             } else {
-                validate_message_fields(&PostRequest {
-                    kind: message.kind,
-                    subject: message.subject.clone(),
-                    body: message.body.clone(),
-                    thread: Some(thread.to_owned()),
-                    refs: message.refs.clone(),
-                    replies_to: message.replies_to,
-                    answered_by: message.answered_by.clone(),
-                    outcome: message.outcome.clone(),
-                })?;
+                validate_message_fields(
+                    &PostRequest {
+                        kind: message.kind,
+                        subject: message.subject.clone(),
+                        body: message.body.clone(),
+                        thread: Some(thread.to_owned()),
+                        refs: message.refs.clone(),
+                        replies_to: message.replies_to,
+                        answered_by: message.answered_by.clone(),
+                        outcome: message.outcome.clone(),
+                        claimed_client_info: message.claimed_client_info.clone(),
+                        verification: message.verification.clone(),
+                    },
+                    message.schema_version,
+                    &message.author,
+                )?;
                 self.validate_against_thread(
                     &message.author,
                     &PostRequest {
@@ -912,6 +970,8 @@ impl Exchange {
                         replies_to: message.replies_to,
                         answered_by: message.answered_by.clone(),
                         outcome: message.outcome.clone(),
+                        claimed_client_info: message.claimed_client_info.clone(),
+                        verification: message.verification.clone(),
                     },
                     &history,
                 )?;
@@ -1011,7 +1071,7 @@ fn git_path(repository_root: &Path, name: &str) -> Result<PathBuf> {
     })
 }
 
-fn validate_message_fields(request: &PostRequest) -> Result<()> {
+fn validate_message_fields(request: &PostRequest, schema_version: u32, author: &str) -> Result<()> {
     if request.subject.trim().is_empty() {
         bail!("exchange message subject must be non-empty");
     }
@@ -1026,6 +1086,35 @@ fn validate_message_fields(request: &PostRequest) -> Result<()> {
         .any(|reference| reference.kind != RefKind::Url);
     if request.kind != MessageKind::Verdict && request.outcome.is_some() {
         bail!("only verdict and approval messages may set outcome");
+    }
+    if request.kind != MessageKind::Verdict && request.verification.is_some() {
+        bail!("only verdict messages may set verification");
+    }
+    if schema_version == 1 {
+        if request.claimed_client_info.is_some() || request.verification.is_some() {
+            bail!("schema v1 messages cannot contain v2 provenance fields");
+        }
+    } else {
+        if author == "human" {
+            if request.claimed_client_info.is_some() {
+                bail!("human messages cannot claim MCP client information");
+            }
+        } else {
+            validate_claimed_client_info(
+                request
+                    .claimed_client_info
+                    .as_ref()
+                    .context("schema v2 assistant messages require claimedClientInfo")?,
+            )?;
+        }
+        if request.kind == MessageKind::Verdict {
+            validate_verdict_verification(
+                request
+                    .verification
+                    .as_ref()
+                    .context("schema v2 verdicts require verification")?,
+            )?;
+        }
     }
     match request.kind {
         MessageKind::Finding if !has_non_url => {
@@ -1067,6 +1156,35 @@ fn validate_message_fields(request: &PostRequest) -> Result<()> {
             bail!("approval must use the operator approval path")
         }
         _ => {}
+    }
+    Ok(())
+}
+
+fn validate_claimed_client_info(client: &ClaimedClientInfo) -> Result<()> {
+    if client.name.trim().is_empty() || client.version.trim().is_empty() {
+        bail!("claimedClientInfo name and version must be non-empty");
+    }
+    Ok(())
+}
+
+fn validate_verdict_verification(verification: &VerdictVerification) -> Result<()> {
+    let methods = verification
+        .methods
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    if methods.is_empty() || methods.len() != verification.methods.len() {
+        bail!("verdict verification methods must be non-empty and unique");
+    }
+    if verification
+        .commands
+        .iter()
+        .any(|command| command.trim().is_empty())
+    {
+        bail!("verdict verification commands must be non-empty strings");
+    }
+    if methods.contains(&VerificationMethod::TestsExecuted) && verification.commands.is_empty() {
+        bail!("tests-executed verdicts require at least one verification command");
     }
     Ok(())
 }
@@ -1282,6 +1400,20 @@ mod tests {
         }
     }
 
+    fn client_info() -> ClaimedClientInfo {
+        ClaimedClientInfo {
+            name: "test-client".to_owned(),
+            version: "1.0.0".to_owned(),
+        }
+    }
+
+    fn source_review() -> VerdictVerification {
+        VerdictVerification {
+            methods: vec![VerificationMethod::SourceReview],
+            commands: Vec::new(),
+        }
+    }
+
     fn finding(thread: Option<String>, body: &str) -> PostRequest {
         PostRequest {
             kind: MessageKind::Finding,
@@ -1292,6 +1424,8 @@ mod tests {
             replies_to: None,
             answered_by: None,
             outcome: None,
+            claimed_client_info: Some(client_info()),
+            verification: None,
         }
     }
 
@@ -1342,6 +1476,8 @@ mod tests {
             replies_to: None,
             answered_by: None,
             outcome: None,
+            claimed_client_info: Some(client_info()),
+            verification: None,
         };
         assert!(
             exchange
@@ -1359,6 +1495,8 @@ mod tests {
             replies_to: None,
             answered_by: Some(" ".to_owned()),
             outcome: None,
+            claimed_client_info: Some(client_info()),
+            verification: None,
         };
         assert!(
             exchange
@@ -1443,6 +1581,8 @@ mod tests {
                     replies_to: None,
                     answered_by: None,
                     outcome: None,
+                    claimed_client_info: Some(client_info()),
+                    verification: None,
                 },
             )
             .unwrap();
@@ -1461,6 +1601,89 @@ mod tests {
     }
 
     #[test]
+    fn reads_schema_v1_messages_without_rewriting_them() {
+        let root = fixture();
+        let thread = "0001-legacy";
+        let directory = root.path().join(".overmesh/exchange").join(thread);
+        fs::create_dir_all(&directory).unwrap();
+        let legacy = ExchangeMessage {
+            schema_version: 1,
+            thread: thread.to_owned(),
+            seq: 1,
+            author: "copilot".to_owned(),
+            kind: MessageKind::Finding,
+            created_at: now_rfc3339().unwrap(),
+            subject: "Legacy finding".to_owned(),
+            body: "Still readable".to_owned(),
+            replies_to: None,
+            refs: vec![code_ref()],
+            answered_by: None,
+            outcome: None,
+            claimed_client_info: None,
+            verification: None,
+        };
+        let path = directory.join("001-copilot.json");
+        fs::write(&path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+
+        let view = exchange(&root).read(thread, 0).unwrap();
+        assert_eq!(view.messages[0].schema_version, 1);
+        assert_eq!(view.messages[0].claimed_client_info, None);
+        assert_eq!(
+            serde_json::from_slice::<ExchangeMessage>(&fs::read(path).unwrap())
+                .unwrap()
+                .schema_version,
+            1
+        );
+    }
+
+    #[test]
+    fn schema_v2_verdict_requires_actionable_verification() {
+        let root = fixture();
+        let exchange = exchange(&root);
+        let first = exchange
+            .post("copilot", PostOrigin::Mcp, finding(None, "finding"))
+            .unwrap();
+
+        let empty_methods = exchange
+            .resolve(
+                "claude",
+                PostOrigin::Mcp,
+                ResolveRequest {
+                    thread: first.thread.clone(),
+                    outcome: VerdictOutcome::Verified,
+                    body: "Verified".to_owned(),
+                    refs: vec![code_ref()],
+                    claimed_client_info: client_info(),
+                    verification: VerdictVerification {
+                        methods: Vec::new(),
+                        commands: Vec::new(),
+                    },
+                },
+            )
+            .unwrap_err();
+        assert!(empty_methods.to_string().contains("non-empty"));
+
+        let missing_command = exchange
+            .resolve(
+                "claude",
+                PostOrigin::Mcp,
+                ResolveRequest {
+                    thread: first.thread.clone(),
+                    outcome: VerdictOutcome::Verified,
+                    body: "Verified".to_owned(),
+                    refs: vec![code_ref()],
+                    claimed_client_info: client_info(),
+                    verification: VerdictVerification {
+                        methods: vec![VerificationMethod::TestsExecuted],
+                        commands: Vec::new(),
+                    },
+                },
+            )
+            .unwrap_err();
+        assert!(missing_command.to_string().contains("at least one"));
+    }
+
+    #[test]
     fn verdict_requires_other_author_and_approval_to_resolve() {
         let root = fixture();
         let exchange = exchange(&root);
@@ -1471,10 +1694,14 @@ mod tests {
             .resolve(
                 "copilot",
                 PostOrigin::Mcp,
-                &first.thread,
-                VerdictOutcome::Verified,
-                "Verified".to_owned(),
-                vec![code_ref()],
+                ResolveRequest {
+                    thread: first.thread.clone(),
+                    outcome: VerdictOutcome::Verified,
+                    body: "Verified".to_owned(),
+                    refs: vec![code_ref()],
+                    claimed_client_info: client_info(),
+                    verification: source_review(),
+                },
             )
             .unwrap_err();
         assert!(error.to_string().contains("side that last spoke"));
@@ -1482,10 +1709,14 @@ mod tests {
             .resolve(
                 "claude",
                 PostOrigin::Mcp,
-                &first.thread,
-                VerdictOutcome::Verified,
-                "Verified".to_owned(),
-                vec![code_ref()],
+                ResolveRequest {
+                    thread: first.thread.clone(),
+                    outcome: VerdictOutcome::Verified,
+                    body: "Verified".to_owned(),
+                    refs: vec![code_ref()],
+                    claimed_client_info: client_info(),
+                    verification: source_review(),
+                },
             )
             .unwrap();
         assert_eq!(verdict.state, ThreadState::AwaitingApproval);
@@ -1631,6 +1862,8 @@ mod tests {
                     replies_to: None,
                     answered_by: None,
                     outcome: None,
+                    claimed_client_info: Some(client_info()),
+                    verification: None,
                 },
             )
             .unwrap();
@@ -1675,6 +1908,8 @@ mod tests {
                     replies_to: None,
                     answered_by: None,
                     outcome: None,
+                    claimed_client_info: Some(client_info()),
+                    verification: None,
                 },
             )
             .unwrap();
@@ -1691,6 +1926,8 @@ mod tests {
             refs: Vec::new(),
             answered_by: None,
             outcome: Some("approved".to_owned()),
+            claimed_client_info: Some(client_info()),
+            verification: None,
         };
         fs::write(
             root.path()
@@ -1726,6 +1963,8 @@ mod tests {
                     replies_to: None,
                     answered_by: None,
                     outcome: None,
+                    claimed_client_info: Some(client_info()),
+                    verification: None,
                 },
             )
             .unwrap();

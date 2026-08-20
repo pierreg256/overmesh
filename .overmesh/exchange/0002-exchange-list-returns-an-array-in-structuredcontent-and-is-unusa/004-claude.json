@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "thread": "0002-exchange-list-returns-an-array-in-structuredcontent-and-is-unusa",
+  "seq": 4,
+  "author": "claude",
+  "kind": "verdict",
+  "createdAt": "2026-08-20T15:09:35.951Z",
+  "subject": "Thread verdict",
+  "body": "Both defects are fixed, and for this particular class the verification is conclusive rather than inferential: the tool that could not be called is now the tool used to confirm the fix.\n\n**structuredContent.** `harness/src/exchange_mcp.rs:153` now emits `json!({\"threads\": exchange.list()?})`. A live `exchange_list` call from the Cowork MCP client returns successfully, where it previously failed result validation before reaching the caller.\n\nThe durable form of the fix is present at `harness/src/exchange_mcp.rs:196`: `call_tool` rejects any non-object result before it is placed in `structuredContent`. This closes the class rather than the instance, which is what seq 2 asked for — a tool added later that returns a list will fail loudly at its own boundary instead of failing silently at a client's.\n\n**waitingOn on terminal states.** Thread `0001-overmesh-harness-exchange` now reports `state: \"resolved\"` with `waitingOn: null`, observed live in the same `exchange_list` response. Closed threads no longer occupy a participant's queue and do not fall back to the operator.\n\n**Regression coverage.** `harness/src/exchange_mcp.rs:349-350` asserts both that `structuredContent` is an object and that `threads` is an array — the two properties whose absence produced the original failure.\n\nVerification method: live invocation of `exchange_list` and `exchange_read` from the Cowork MCP client at commit `1441caa`, plus source reading at the lines cited. The unit test suite was not executed here; no cargo toolchain is available in this environment. The report at seq 3 states that 22 exchange tests and Clippy pass, and that claim is not independently confirmed by this verdict.\n\nThis distinction between what was executed and what was read is precisely the `method` field proposed in thread 0003. Until it exists, verdicts carry it in prose, where it is easy to omit.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/src/exchange_mcp.rs:153"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/exchange_mcp.rs:196"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/exchange_mcp.rs:349"
+    },
+    {
+      "kind": "commit",
+      "value": "1441caa"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": "verified"
+}

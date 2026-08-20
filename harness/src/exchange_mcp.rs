@@ -4,7 +4,10 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::exchange::{Exchange, MessageKind, MessageRef, PostOrigin, PostRequest, VerdictOutcome};
+use crate::exchange::{
+    ClaimedClientInfo, Exchange, MessageKind, MessageRef, PostOrigin, PostRequest, ResolveRequest,
+    VerdictOutcome, VerdictVerification,
+};
 
 const MCP_PROTOCOL_VERSION: &str = "2025-03-26";
 
@@ -13,6 +16,17 @@ struct CallToolParams {
     name: String,
     #[serde(default)]
     arguments: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InitializeParams {
+    client_info: ClaimedClientInfo,
+}
+
+#[derive(Debug, Default)]
+struct SessionState {
+    claimed_client_info: Option<ClaimedClientInfo>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,12 +56,14 @@ struct ResolveArguments {
     outcome: VerdictOutcome,
     body: String,
     refs: Vec<MessageRef>,
+    verification: VerdictVerification,
 }
 
 pub fn serve_stdio(exchange: &Exchange, author: &str) -> Result<()> {
     exchange.validate_mcp_author(author)?;
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
+    let mut session = SessionState::default();
     for line in stdin.lock().lines() {
         let line = line.context("failed to read MCP request")?;
         if line.trim().is_empty() {
@@ -63,7 +79,7 @@ pub fn serve_stdio(exchange: &Exchange, author: &str) -> Result<()> {
                 continue;
             }
         };
-        if let Some(response) = dispatch_message(exchange, author, &request) {
+        if let Some(response) = dispatch_message(exchange, author, &mut session, &request) {
             write_response(&mut stdout, &response)?;
         }
     }
@@ -77,21 +93,31 @@ fn write_response(output: &mut impl Write, response: &Value) -> Result<()> {
     Ok(())
 }
 
-fn dispatch_message(exchange: &Exchange, author: &str, message: &Value) -> Option<Value> {
+fn dispatch_message(
+    exchange: &Exchange,
+    author: &str,
+    session: &mut SessionState,
+    message: &Value,
+) -> Option<Value> {
     let Some(batch) = message.as_array() else {
-        return handle_request(exchange, author, message);
+        return handle_request(exchange, author, session, message);
     };
     if batch.is_empty() {
         return Some(json_rpc_error(Value::Null, -32600, "invalid request"));
     }
     let responses = batch
         .iter()
-        .filter_map(|request| handle_request(exchange, author, request))
+        .filter_map(|request| handle_request(exchange, author, session, request))
         .collect::<Vec<_>>();
     (!responses.is_empty()).then_some(Value::Array(responses))
 }
 
-pub fn handle_request(exchange: &Exchange, author: &str, request: &Value) -> Option<Value> {
+fn handle_request(
+    exchange: &Exchange,
+    author: &str,
+    session: &mut SessionState,
+    request: &Value,
+) -> Option<Value> {
     let Some(object) = request.as_object() else {
         return Some(json_rpc_error(Value::Null, -32600, "invalid request"));
     };
@@ -114,25 +140,49 @@ pub fn handle_request(exchange: &Exchange, author: &str, request: &Value) -> Opt
         return Some(json_rpc_error(id, -32602, &error.to_string()));
     }
     let result = match method {
-        "initialize" => Ok(json!({
-            "protocolVersion": MCP_PROTOCOL_VERSION,
-            "capabilities": {"tools": {}},
-            "serverInfo": {
-                "name": "overmesh-harness-exchange",
-                "version": env!("CARGO_PKG_VERSION")
-            }
-        })),
-        "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({"tools": tool_definitions()})),
-        "tools/call" => request
+        "initialize" => request
             .get("params")
             .cloned()
-            .context("tools/call params are required")
+            .context("initialize params are required")
             .and_then(|params| {
-                serde_json::from_value::<CallToolParams>(params)
-                    .context("invalid tools/call params")
+                serde_json::from_value::<InitializeParams>(params)
+                    .context("initialize requires non-empty clientInfo.name and clientInfo.version")
             })
-            .and_then(|params| call_tool(exchange, author, params)),
+            .and_then(|params| {
+                if params.client_info.name.trim().is_empty()
+                    || params.client_info.version.trim().is_empty()
+                {
+                    anyhow::bail!(
+                        "initialize requires non-empty clientInfo.name and clientInfo.version"
+                    );
+                }
+                session.claimed_client_info = Some(params.client_info);
+                Ok(json!({
+                    "protocolVersion": MCP_PROTOCOL_VERSION,
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {
+                        "name": "overmesh-harness-exchange",
+                        "version": env!("CARGO_PKG_VERSION")
+                    }
+                }))
+            }),
+        "ping" => Ok(json!({})),
+        "tools/list" => Ok(json!({"tools": tool_definitions()})),
+        "tools/call" => session
+            .claimed_client_info
+            .clone()
+            .context("tools/call rejected before successful initialize")
+            .and_then(|claimed_client_info| {
+                request
+                    .get("params")
+                    .cloned()
+                    .context("tools/call params are required")
+                    .and_then(|params| {
+                        serde_json::from_value::<CallToolParams>(params)
+                            .context("invalid tools/call params")
+                    })
+                    .and_then(|params| call_tool(exchange, author, &claimed_client_info, params))
+            }),
         method => {
             return Some(json_rpc_error(
                 id,
@@ -147,7 +197,12 @@ pub fn handle_request(exchange: &Exchange, author: &str, request: &Value) -> Opt
     })
 }
 
-fn call_tool(exchange: &Exchange, author: &str, params: CallToolParams) -> Result<Value> {
+fn call_tool(
+    exchange: &Exchange,
+    author: &str,
+    claimed_client_info: &ClaimedClientInfo,
+    params: CallToolParams,
+) -> Result<Value> {
     exchange.validate_mcp_author(author)?;
     let value = match params.name.as_str() {
         "exchange_list" => json!({"threads": exchange.list()?}),
@@ -176,6 +231,8 @@ fn call_tool(exchange: &Exchange, author: &str, params: CallToolParams) -> Resul
                     replies_to: arguments.replies_to,
                     answered_by: arguments.answered_by,
                     outcome: None,
+                    claimed_client_info: Some(claimed_client_info.clone()),
+                    verification: None,
                 },
             )?)?
         }
@@ -185,10 +242,14 @@ fn call_tool(exchange: &Exchange, author: &str, params: CallToolParams) -> Resul
             serde_json::to_value(exchange.resolve(
                 author,
                 PostOrigin::Mcp,
-                &arguments.thread,
-                arguments.outcome,
-                arguments.body,
-                arguments.refs,
+                ResolveRequest {
+                    thread: arguments.thread,
+                    outcome: arguments.outcome,
+                    body: arguments.body,
+                    refs: arguments.refs,
+                    claimed_client_info: claimed_client_info.clone(),
+                    verification: arguments.verification,
+                },
             )?)?
         }
         name => anyhow::bail!("unknown exchange tool {name:?}"),
@@ -265,7 +326,7 @@ fn tool_definitions() -> Vec<Value> {
             "description": "Post a deliberate verdict. A human approval is still required to resolve the thread.",
             "inputSchema": {
                 "type": "object",
-                "required": ["thread", "outcome", "body", "refs"],
+                "required": ["thread", "outcome", "body", "refs", "verification"],
                 "properties": {
                     "thread": {"type": "string"},
                     "outcome": {
@@ -276,6 +337,25 @@ fn tool_definitions() -> Vec<Value> {
                         "type": "array",
                         "minItems": 1,
                         "items": {"$ref": "#/$defs/ref"}
+                    },
+                    "verification": {
+                        "type": "object",
+                        "required": ["methods", "commands"],
+                        "properties": {
+                            "methods": {
+                                "type": "array",
+                                "minItems": 1,
+                                "uniqueItems": true,
+                                "items": {
+                                    "enum": ["source-review", "tests-executed"]
+                                }
+                            },
+                            "commands": {
+                                "type": "array",
+                                "items": {"type": "string", "minLength": 1}
+                            }
+                        },
+                        "additionalProperties": false
                     }
                 },
                 "$defs": {"ref": ref_schema()},
@@ -322,12 +402,39 @@ mod tests {
         (root, exchange)
     }
 
+    fn client_info() -> ClaimedClientInfo {
+        ClaimedClientInfo {
+            name: "test-client".to_owned(),
+            version: "1.0.0".to_owned(),
+        }
+    }
+
+    fn initialized_session(exchange: &Exchange, author: &str) -> SessionState {
+        let mut session = SessionState::default();
+        let response = handle_request(
+            exchange,
+            author,
+            &mut session,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 0,
+                "method": "initialize",
+                "params": {"clientInfo": client_info()}
+            }),
+        )
+        .unwrap();
+        assert!(response.get("result").is_some(), "{response}");
+        session
+    }
+
     #[test]
     fn lists_exactly_four_tools() {
         let (_root, exchange) = fixture();
+        let mut session = SessionState::default();
         let response = handle_request(
             &exchange,
             "copilot",
+            &mut session,
             &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
         )
         .unwrap();
@@ -340,6 +447,7 @@ mod tests {
         let listed = call_tool(
             &exchange,
             "copilot",
+            &client_info(),
             CallToolParams {
                 name: "exchange_list".to_owned(),
                 arguments: json!({}),
@@ -353,9 +461,11 @@ mod tests {
     #[test]
     fn posts_and_withholds_spec_through_mcp() {
         let (_root, exchange) = fixture();
+        let mut copilot_session = initialized_session(&exchange, "copilot");
         let posted = handle_request(
             &exchange,
             "copilot",
+            &mut copilot_session,
             &json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -374,9 +484,11 @@ mod tests {
         let thread = posted["result"]["structuredContent"]["thread"]
             .as_str()
             .unwrap();
+        let mut claude_session = initialized_session(&exchange, "claude");
         let read = handle_request(
             &exchange,
             "claude",
+            &mut claude_session,
             &json!({
                 "jsonrpc": "2.0",
                 "id": 2,
@@ -393,14 +505,91 @@ mod tests {
             read["result"]["structuredContent"]["messages"][0]["withheld"],
             "awaiting approval"
         );
+        let stored = exchange.read_operator(thread, 0).unwrap();
+        assert_eq!(stored.messages[0].schema_version, 2);
+        assert_eq!(
+            stored.messages[0].claimed_client_info.as_ref(),
+            Some(&client_info())
+        );
+    }
+
+    #[test]
+    fn rejects_tool_calls_before_successful_initialize() {
+        let (_root, exchange) = fixture();
+        let mut session = SessionState::default();
+        let response = handle_request(
+            &exchange,
+            "copilot",
+            &mut session,
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "exchange_list", "arguments": {}}
+            }),
+        )
+        .unwrap();
+        assert_eq!(response["error"]["code"], -32602);
+        assert!(
+            response["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("before successful initialize")
+        );
+    }
+
+    #[test]
+    fn rejects_missing_or_empty_initialize_client_info() {
+        let (_root, exchange) = fixture();
+        for params in [
+            json!({}),
+            json!({"clientInfo": {"name": "", "version": "1.0"}}),
+            json!({"clientInfo": {"name": "client", "version": " "}}),
+        ] {
+            let mut session = SessionState::default();
+            let response = handle_request(
+                &exchange,
+                "copilot",
+                &mut session,
+                &json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": params
+                }),
+            )
+            .unwrap();
+            assert_eq!(response["error"]["code"], -32602);
+            assert!(session.claimed_client_info.is_none());
+        }
+    }
+
+    #[test]
+    fn resolve_schema_requires_verification() {
+        let definition = tool_definitions()
+            .into_iter()
+            .find(|tool| tool["name"] == "exchange_resolve")
+            .unwrap();
+        assert!(
+            definition["inputSchema"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("verification"))
+        );
+        assert_eq!(
+            definition["inputSchema"]["properties"]["verification"]["properties"]["methods"]["minItems"],
+            1
+        );
     }
 
     #[test]
     fn rejects_human_server_identity() {
         let (_root, exchange) = fixture();
+        let mut session = SessionState::default();
         let response = handle_request(
             &exchange,
             "human",
+            &mut session,
             &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
         )
         .unwrap();
@@ -410,10 +599,12 @@ mod tests {
     #[test]
     fn ignores_notifications() {
         let (_root, exchange) = fixture();
+        let mut session = SessionState::default();
         assert!(
             handle_request(
                 &exchange,
                 "copilot",
+                &mut session,
                 &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
             )
             .is_none()
@@ -423,13 +614,14 @@ mod tests {
     #[test]
     fn rejects_invalid_json_rpc_envelopes() {
         let (_root, exchange) = fixture();
+        let mut session = SessionState::default();
         for request in [
             json!("not an object"),
             json!({"id": 1, "method": "tools/list"}),
             json!({"jsonrpc": "2.0", "id": true, "method": "tools/list"}),
             json!({"jsonrpc": "2.0", "id": 1}),
         ] {
-            let response = handle_request(&exchange, "copilot", &request).unwrap();
+            let response = handle_request(&exchange, "copilot", &mut session, &request).unwrap();
             assert_eq!(response["error"]["code"], -32600);
         }
     }
@@ -437,9 +629,11 @@ mod tests {
     #[test]
     fn dispatches_json_rpc_batches_and_omits_notifications() {
         let (_root, exchange) = fixture();
+        let mut session = SessionState::default();
         let response = dispatch_message(
             &exchange,
             "copilot",
+            &mut session,
             &json!([
                 {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
                 {"jsonrpc": "2.0", "method": "notifications/initialized"},
@@ -455,6 +649,7 @@ mod tests {
             dispatch_message(
                 &exchange,
                 "copilot",
+                &mut session,
                 &json!([
                     {"jsonrpc": "2.0", "method": "notifications/initialized"}
                 ]),
@@ -462,7 +657,7 @@ mod tests {
             .is_none()
         );
         assert_eq!(
-            dispatch_message(&exchange, "copilot", &json!([])).unwrap()["error"]["code"],
+            dispatch_message(&exchange, "copilot", &mut session, &json!([])).unwrap()["error"]["code"],
             -32600
         );
     }

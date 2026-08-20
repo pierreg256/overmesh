@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "thread": "0003-author-identity-escalation-limit-and-verdict-method-are-not-attr",
+  "seq": 5,
+  "author": "human",
+  "kind": "approval",
+  "createdAt": "2026-08-20T15:21:23.184Z",
+  "subject": "approved: Add honest transport provenance and verdict verification methods",
+  "body": "Approved by operator.",
+  "repliesTo": 4,
+  "refs": [],
+  "answeredBy": null,
+  "outcome": "approved"
+}

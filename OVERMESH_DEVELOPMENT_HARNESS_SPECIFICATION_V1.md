@@ -184,11 +184,30 @@ service.
 - The author of the last non-verdict message MUST NOT author the verdict.
 - The stdio MCP server MUST reject a missing, unapproved, or `human` server
   identity. Human messages MUST enter through the operator CLI.
+- Existing schema v1 messages MUST remain immutable and readable. Every new
+  message MUST use schema v2.
+- A successful MCP `initialize` MUST provide non-empty `clientInfo.name` and
+  `clientInfo.version`. Tool calls before successful initialization MUST be
+  rejected.
+- Every MCP-authored schema v2 message MUST persist that client-supplied value
+  as `claimedClientInfo`. This value is untrusted attribution and MUST NOT be
+  represented or used as authentication.
+- Every schema v2 verdict MUST carry a non-empty `verification.methods` list
+  containing only `source-review` and/or `tests-executed`. When
+  `tests-executed` is present, `verification.commands` MUST contain at least one
+  non-empty command. `exchange_resolve` MUST require this structure.
 
 The version 1 MCP surface is limited to `exchange_list`, `exchange_read`,
 `exchange_post`, and `exchange_resolve`. The operator surface is
 `overmesh-harness exchange`; it owns approval and rejection. Neither surface
 executes work instructions automatically.
+
+The local filesystem transport does not cryptographically prove assistant
+identity or independence. Spec-body withholding is enforced only by the MCP
+read boundary; any participant with direct filesystem access can read the raw
+message JSON. Real isolation would require distinct OS identities and
+permissions. Human approval, rather than filesystem secrecy or claimed client
+metadata, is the exchange trust boundary.
 
 ### 5.1 Scenario Orchestrator
 

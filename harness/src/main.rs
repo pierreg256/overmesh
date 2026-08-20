@@ -12,7 +12,10 @@ use overmesh_harness::{
     dataset::generate,
     doc_check,
     environment::local_service_statuses,
-    exchange::{Exchange, MessageKind, MessageRef, PostOrigin, PostRequest, RefKind},
+    exchange::{
+        Exchange, MessageKind, MessageRef, PostOrigin, PostRequest, RefKind, VerdictVerification,
+        VerificationMethod,
+    },
     exchange_mcp,
     identity::{TestPrincipal, TestTokenKind, issue_test_token},
     manifest_validation::{
@@ -157,6 +160,10 @@ enum ExchangeCommand {
         answered_by: Option<String>,
         #[arg(long, value_enum)]
         outcome: Option<ExchangeOutcomeArgument>,
+        #[arg(long = "verification-method", value_enum)]
+        verification_methods: Vec<ExchangeVerificationMethodArgument>,
+        #[arg(long = "verification-command")]
+        verification_commands: Vec<String>,
     },
 }
 
@@ -176,6 +183,12 @@ enum ExchangeOutcomeArgument {
     NotVerified,
     Withdrawn,
     Superseded,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ExchangeVerificationMethodArgument {
+    SourceReview,
+    TestsExecuted,
 }
 
 #[derive(Debug, Subcommand)]
@@ -274,6 +287,15 @@ impl ExchangeOutcomeArgument {
             Self::NotVerified => "not-verified",
             Self::Withdrawn => "withdrawn",
             Self::Superseded => "superseded",
+        }
+    }
+}
+
+impl From<ExchangeVerificationMethodArgument> for VerificationMethod {
+    fn from(value: ExchangeVerificationMethodArgument) -> Self {
+        match value {
+            ExchangeVerificationMethodArgument::SourceReview => Self::SourceReview,
+            ExchangeVerificationMethodArgument::TestsExecuted => Self::TestsExecuted,
         }
     }
 }
@@ -560,6 +582,8 @@ async fn execute() -> Result<ExitCode> {
                     replies_to,
                     answered_by,
                     outcome,
+                    verification_methods,
+                    verification_commands,
                 } => {
                     let subject = subject.unwrap_or_else(|| subject_from_body(&message));
                     let result = exchange.post(
@@ -577,6 +601,13 @@ async fn execute() -> Result<ExitCode> {
                             replies_to,
                             answered_by,
                             outcome: outcome.map(|outcome| outcome.as_str().to_owned()),
+                            claimed_client_info: None,
+                            verification: (!verification_methods.is_empty()
+                                || !verification_commands.is_empty())
+                            .then(|| VerdictVerification {
+                                methods: verification_methods.into_iter().map(Into::into).collect(),
+                                commands: verification_commands,
+                            }),
                         },
                     )?;
                     println!("{}", serde_json::to_string_pretty(&result)?);
