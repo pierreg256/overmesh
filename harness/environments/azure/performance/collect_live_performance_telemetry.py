@@ -474,6 +474,146 @@ def request_counts_by_fingerprint(
     return counts
 
 
+FingerprintCountVector = tuple[tuple[str, int | None, str, int], ...]
+
+
+def deduplicate_events(
+    events: list[tuple[datetime, str]],
+) -> list[tuple[datetime, str]]:
+    return sorted(set(events), key=lambda event: (event[0], event[1]))
+
+
+def fingerprint_count_vector(
+    events: list[tuple[datetime, str]],
+    gateway_cases: list[dict[str, Any]],
+    run_id: str,
+) -> FingerprintCountVector:
+    vector: list[tuple[str, int | None, str, int]] = []
+    for benchmark_case in gateway_cases:
+        runs = benchmark_case.get("runs")
+        scopes = runs if runs is not None else [benchmark_case]
+        for scope in scopes:
+            expected = (
+                measured_request_fingerprints_for_run(
+                    run_id,
+                    benchmark_case,
+                    scope,
+                )
+                if runs is not None
+                else measured_request_fingerprints(run_id, benchmark_case)
+            )
+            messages = [
+                message
+                for _, message in events_in_case_window(events, scope)
+            ]
+            counts = request_counts_by_fingerprint(messages, expected)
+            repeat = scope["repeat"] if runs is not None else None
+            vector.extend(
+                (
+                    benchmark_case["id"],
+                    repeat,
+                    fingerprint,
+                    counts[fingerprint],
+                )
+                for fingerprint in sorted(expected)
+            )
+    return tuple(vector)
+
+
+def fingerprint_count_vector_complete(
+    vector: FingerprintCountVector,
+    gateway_cases: list[dict[str, Any]],
+) -> bool:
+    grouped: dict[tuple[str, int | None], list[int]] = {}
+    for case_id, repeat, _, count in vector:
+        grouped.setdefault((case_id, repeat), []).append(count)
+
+    for benchmark_case in gateway_cases:
+        runs = benchmark_case.get("runs")
+        repeats = (
+            [run["repeat"] for run in runs] if runs is not None else [None]
+        )
+        per_repeat_counts: list[int] = []
+        for repeat in repeats:
+            counts = grouped.get((benchmark_case["id"], repeat), [])
+            if not counts or any(count == 0 for count in counts):
+                return False
+            if runs is None:
+                continue
+            distinct_counts = set(counts)
+            if len(distinct_counts) != 1:
+                return False
+            per_repeat_counts.append(next(iter(distinct_counts)))
+        if runs is None:
+            continue
+        if len(set(per_repeat_counts)) != 1:
+            return False
+        expected_budget = benchmark_case.get(
+            "expectedBackendRequestsPerOperation"
+        )
+        if (
+            expected_budget is not None
+            and per_repeat_counts[0] != expected_budget
+        ):
+            return False
+    return True
+
+
+def fingerprint_count_diagnostics(
+    vector: FingerprintCountVector,
+    gateway_cases: list[dict[str, Any]],
+) -> list[str]:
+    grouped: dict[
+        tuple[str, int | None],
+        list[tuple[str, int]],
+    ] = {}
+    for case_id, repeat, fingerprint, count in vector:
+        grouped.setdefault((case_id, repeat), []).append(
+            (fingerprint, count)
+        )
+
+    diagnostics: list[str] = []
+    for benchmark_case in gateway_cases:
+        runs = benchmark_case.get("runs")
+        repeats = (
+            [run["repeat"] for run in runs] if runs is not None else [None]
+        )
+        expected_budget = benchmark_case.get(
+            "expectedBackendRequestsPerOperation"
+        )
+        positive_counts = [
+            count
+            for repeat in repeats
+            for _, count in grouped.get(
+                (benchmark_case["id"], repeat),
+                [],
+            )
+            if count > 0
+        ]
+        target = (
+            expected_budget
+            if expected_budget is not None
+            else (
+                Counter(positive_counts).most_common(1)[0][0]
+                if positive_counts
+                else 1
+            )
+        )
+        for repeat in repeats:
+            counts = grouped.get((benchmark_case["id"], repeat), [])
+            for fingerprint, count in counts:
+                if count != target:
+                    repeat_detail = (
+                        f" repeat={repeat}" if repeat is not None else ""
+                    )
+                    diagnostics.append(
+                        f"case={benchmark_case['id']}{repeat_detail} "
+                        f"fingerprint={fingerprint} count={count} "
+                        f"expected={target}"
+                    )
+    return diagnostics
+
+
 def placement_coverage(
     run_id: str,
     benchmark_case: dict[str, Any],
@@ -550,16 +690,16 @@ def placement_coverage(
 
 
 def next_stability(
-    previous_count: int | None,
+    previous_vector: FingerprintCountVector | None,
     stable_polls: int,
-    current_count: int,
-    fully_covered: bool,
-) -> tuple[int | None, int]:
-    if not fully_covered:
+    current_vector: FingerprintCountVector,
+    complete: bool,
+) -> tuple[FingerprintCountVector | None, int]:
+    if not complete:
         return None, 0
-    if previous_count == current_count:
-        return current_count, stable_polls + 1
-    return current_count, 1
+    if previous_vector == current_vector:
+        return current_vector, stable_polls + 1
+    return current_vector, 1
 
 
 def telemetry_query_windows(
@@ -582,6 +722,70 @@ def telemetry_query_windows(
         )
         for repeat_index in range(repeat_count)
     ]
+
+
+def collect_stable_events(
+    workspace: str,
+    app_names: str | list[str],
+    query_windows: list[tuple[str, str]],
+    gateway_cases: list[dict[str, Any]],
+    run_id: str,
+    wait_seconds: int,
+    poll_seconds: int,
+    stable_polls_required: int,
+) -> list[tuple[datetime, str]]:
+    deadline = time.monotonic() + wait_seconds
+    previous_vector: FingerprintCountVector | None = None
+    stable_polls = 0
+    while True:
+        events = deduplicate_events(
+            [
+                event
+                for window_started_at, window_finished_at in query_windows
+                for event in query_logs(
+                    workspace,
+                    app_names,
+                    window_started_at,
+                    window_finished_at,
+                )
+            ]
+        )
+        current_vector = fingerprint_count_vector(
+            events,
+            gateway_cases,
+            run_id,
+        )
+        complete = fingerprint_count_vector_complete(
+            current_vector,
+            gateway_cases,
+        )
+        previous_vector, stable_polls = next_stability(
+            previous_vector,
+            stable_polls,
+            current_vector,
+            complete,
+        )
+        if stable_polls >= stable_polls_required:
+            return events
+        if time.monotonic() >= deadline:
+            diagnostics = fingerprint_count_diagnostics(
+                current_vector,
+                gateway_cases,
+            )
+            detail = (
+                "fingerprint counts incomplete or mismatched: "
+                + "; ".join(diagnostics)
+                if diagnostics
+                else (
+                    "complete fingerprint count vector did not stabilize "
+                    f"for {stable_polls_required} polls"
+                )
+            )
+            raise RuntimeError(
+                "Azure Monitor did not return complete backend telemetry "
+                f"within {wait_seconds} seconds; {detail}"
+            )
+        time.sleep(poll_seconds)
 
 
 def main() -> int:
@@ -619,63 +823,16 @@ def main() -> int:
     ]
     campaign = evidence["campaign"]
     query_windows = telemetry_query_windows(gateway_cases, campaign)
-    deadline = time.monotonic() + wait_seconds
-    events: list[tuple[datetime, str]] = []
-    previous_count: int | None = None
-    stable_polls = 0
-    while True:
-        events = [
-            event
-            for window_started_at, window_finished_at in query_windows
-            for event in query_logs(
-                workspace,
-                app_names,
-                window_started_at,
-                window_finished_at,
-            )
-        ]
-        covered = covered_gateway_cases(
-            events,
-            gateway_cases,
-            campaign["runId"],
-        )
-        relevant_event_count = len(
-            {
-                (timestamp, message)
-                for benchmark_case in gateway_cases
-                for timestamp, message in events_in_case_window(
-                    events,
-                    benchmark_case,
-                )
-            }
-        )
-        previous_count, stable_polls = next_stability(
-            previous_count,
-            stable_polls,
-            relevant_event_count,
-            len(covered) == len(gateway_cases),
-        )
-        if stable_polls >= stable_polls_required:
-            break
-        if time.monotonic() >= deadline:
-            missing_cases = sorted(
-                benchmark_case["id"]
-                for benchmark_case in gateway_cases
-                if benchmark_case["id"] not in covered
-            )
-            detail = (
-                f"missing cases: {', '.join(missing_cases)}"
-                if missing_cases
-                else (
-                    "event count did not stabilize "
-                    f"for {stable_polls_required} polls"
-                )
-            )
-            raise RuntimeError(
-                "Azure Monitor did not return complete backend telemetry "
-                f"within {wait_seconds} seconds; {detail}"
-            )
-        time.sleep(poll_seconds)
+    events = collect_stable_events(
+        workspace,
+        app_names,
+        query_windows,
+        gateway_cases,
+        campaign["runId"],
+        wait_seconds,
+        poll_seconds,
+        stable_polls_required,
+    )
 
     for benchmark_case in gateway_cases:
         runs = benchmark_case.get("runs")

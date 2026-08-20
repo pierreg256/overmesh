@@ -6,10 +6,14 @@ from unittest.mock import patch
 
 from collect_live_performance_telemetry import (
     aggregate_events,
+    collect_stable_events,
     comma_separated_values,
     covered_gateway_cases,
+    deduplicate_events,
     event_timestamp,
     events_in_case_window,
+    fingerprint_count_vector,
+    fingerprint_count_vector_complete,
     log_rows,
     measured_request_fingerprints,
     next_stability,
@@ -315,15 +319,173 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
             query,
         )
 
-    def test_event_count_must_stabilize_after_all_cases_are_covered(self) -> None:
-        previous, stable = next_stability(None, 0, 100, False)
+    def test_fingerprint_vector_must_be_complete_before_stabilizing(
+        self,
+    ) -> None:
+        incomplete = (("case", 1, "fingerprint-a", 1),)
+        complete = (("case", 1, "fingerprint-a", 2),)
+        previous, stable = next_stability(None, 0, incomplete, False)
         self.assertEqual((previous, stable), (None, 0))
-        previous, stable = next_stability(previous, stable, 100, True)
-        self.assertEqual((previous, stable), (100, 1))
-        previous, stable = next_stability(previous, stable, 120, True)
-        self.assertEqual((previous, stable), (120, 1))
-        previous, stable = next_stability(previous, stable, 120, True)
-        self.assertEqual((previous, stable), (120, 2))
+        previous, stable = next_stability(previous, stable, complete, True)
+        self.assertEqual((previous, stable), (complete, 1))
+        previous, stable = next_stability(
+            previous,
+            stable,
+            complete,
+            True,
+        )
+        self.assertEqual((previous, stable), (complete, 2))
+
+    @patch("collect_live_performance_telemetry.time.sleep")
+    @patch("collect_live_performance_telemetry.time.monotonic")
+    @patch("collect_live_performance_telemetry.query_logs")
+    def test_globally_stable_wrong_count_retries_until_vector_is_complete(
+        self,
+        query_logs,
+        monotonic,
+        sleep,
+    ) -> None:
+        case = {
+            "id": "delete-1kib-c16",
+            "warmupIterations": 1,
+            "expectedBackendRequestsPerOperation": 2,
+            "repeatability": {"runs": 1},
+            "runs": [
+                {
+                    "repeat": 1,
+                    "iterations": 2,
+                    "startedAt": "2026-01-01T00:00:01Z",
+                    "finishedAt": "2026-01-01T00:00:02Z",
+                }
+            ],
+        }
+        fingerprints = sorted(
+            measured_request_fingerprints("run", case)
+        )
+
+        def event(fingerprint: str, sequence: int):
+            timestamp = datetime(
+                2026,
+                1,
+                1,
+                0,
+                0,
+                1,
+                sequence,
+                tzinfo=timezone.utc,
+            )
+            message = (
+                'event="overmesh_backend_request" '
+                f'client_request_fingerprint="{fingerprint}" '
+                "backend_id=storage-a operation=delete "
+                "object_class=logical_blob status=200 "
+                "response_headers_duration_us=1 "
+                f"transport_success=true sequence={sequence}"
+            )
+            return timestamp, message
+
+        wrong_first = [
+            event(fingerprints[0], 1),
+            event(fingerprints[0], 2),
+            event(fingerprints[1], 1),
+        ]
+        wrong_second = [
+            event(fingerprints[0], 1),
+            event(fingerprints[1], 1),
+            event(fingerprints[1], 2),
+        ]
+        complete = [
+            event(fingerprint, sequence)
+            for fingerprint in fingerprints
+            for sequence in (1, 2)
+        ]
+        complete_with_duplicate = [*complete, complete[0]]
+        query_logs.side_effect = [
+            wrong_first,
+            wrong_second,
+            complete_with_duplicate,
+            complete_with_duplicate,
+        ]
+        monotonic.side_effect = [0, 1, 2, 3]
+
+        events = collect_stable_events(
+            "workspace",
+            "gateway",
+            [("start", "finish")],
+            [case],
+            "run",
+            100,
+            0,
+            2,
+        )
+
+        self.assertEqual(query_logs.call_count, 4)
+        self.assertEqual(sleep.call_count, 3)
+        self.assertEqual(events, deduplicate_events(complete))
+        vector = fingerprint_count_vector(events, [case], "run")
+        self.assertTrue(fingerprint_count_vector_complete(vector, [case]))
+        self.assertEqual(
+            aggregate_events([message for _, message in events])[
+                "backendRequests"
+            ]["count"],
+            4,
+        )
+
+    @patch("collect_live_performance_telemetry.time.monotonic")
+    @patch("collect_live_performance_telemetry.query_logs")
+    def test_timeout_reports_only_pseudonymous_count_diagnostics(
+        self,
+        query_logs,
+        monotonic,
+    ) -> None:
+        case = {
+            "id": "delete-1kib-c16",
+            "warmupIterations": 1,
+            "expectedBackendRequestsPerOperation": 2,
+            "repeatability": {"runs": 1},
+            "runs": [
+                {
+                    "repeat": 1,
+                    "iterations": 1,
+                    "startedAt": "2026-01-01T00:00:01Z",
+                    "finishedAt": "2026-01-01T00:00:02Z",
+                }
+            ],
+        }
+        fingerprint = next(iter(measured_request_fingerprints("run", case)))
+        query_logs.return_value = [
+            (
+                datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+                'event="overmesh_backend_request" '
+                f'client_request_fingerprint="{fingerprint}" '
+                "backend_id=private-backend "
+                "response_headers_duration_us=1 "
+                "transport_success=true raw_path=/private/blob",
+            )
+        ]
+        monotonic.side_effect = [0, 1]
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            (
+                rf"case=delete-1kib-c16 repeat=1 "
+                rf"fingerprint={fingerprint} count=1 expected=2"
+            ),
+        ) as raised:
+            collect_stable_events(
+                "workspace",
+                "gateway",
+                [("start", "finish")],
+                [case],
+                "run",
+                0,
+                0,
+                2,
+            )
+
+        message = str(raised.exception)
+        self.assertNotIn("private-backend", message)
+        self.assertNotIn("/private/blob", message)
 
     @patch("collect_live_performance_telemetry.run_json")
     def test_short_metric_window_is_padded_to_two_minutes(
