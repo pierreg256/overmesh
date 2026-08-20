@@ -14,8 +14,12 @@ from collect_live_performance_telemetry import (
     measured_request_fingerprints,
     next_stability,
     parse_fields,
+    placement_coverage,
     query_logs,
     query_metrics,
+    request_fingerprint,
+    request_id,
+    telemetry_query_windows,
 )
 
 
@@ -189,6 +193,111 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
             ],
             ["measured", "missing-fingerprint"],
         )
+
+    def test_repeated_case_fingerprints_and_windows_are_disjoint(self) -> None:
+        case = {
+            "id": "get-1kib-c1",
+            "warmupIterations": 6,
+            "iterations": 4,
+            "repeatability": {"runs": 2},
+            "runs": [
+                {
+                    "repeat": 1,
+                    "iterations": 2,
+                    "startedAt": "2026-01-01T00:00:01Z",
+                    "finishedAt": "2026-01-01T00:00:02Z",
+                },
+                {
+                    "repeat": 2,
+                    "iterations": 2,
+                    "startedAt": "2026-01-01T00:00:04Z",
+                    "finishedAt": "2026-01-01T00:00:05Z",
+                },
+            ],
+        }
+        self.assertEqual(len(measured_request_fingerprints("run", case)), 4)
+        events = [
+            (
+                datetime(2026, 1, 1, 0, 0, second, tzinfo=timezone.utc),
+                str(second),
+            )
+            for second in range(1, 6)
+        ]
+        self.assertEqual(
+            [message for _, message in events_in_case_window(events, case)],
+            ["1", "2", "4", "5"],
+        )
+        self.assertEqual(
+            telemetry_query_windows(
+                [case],
+                {
+                    "startedAt": "2026-01-01T00:00:00Z",
+                    "finishedAt": "2026-01-01T00:00:06Z",
+                },
+            ),
+            [
+                (
+                    "2026-01-01T00:00:01Z",
+                    "2026-01-01T00:00:02Z",
+                ),
+                (
+                    "2026-01-01T00:00:04Z",
+                    "2026-01-01T00:00:05Z",
+                ),
+            ],
+        )
+
+    def test_placement_coverage_requires_three_stable_pairs(self) -> None:
+        case = {
+            "id": "get-1kib-c1",
+            "pathPoolSize": 3,
+            "warmupIterations": 3,
+            "repeatability": {"runs": 1},
+            "runs": [{"repeat": 1, "iterations": 3}],
+        }
+        messages = []
+        for index, backends in enumerate(
+            [
+                ("storage-a", "storage-b"),
+                ("storage-b", "storage-c"),
+                ("storage-a", "storage-c"),
+            ]
+        ):
+            fingerprint = request_fingerprint(
+                request_id(
+                    "run",
+                    "gateway",
+                    case["id"],
+                    index + 3,
+                    0,
+                )
+            )
+            messages.extend(
+                [
+                    (
+                        'event="overmesh_backend_request" '
+                        f'client_request_fingerprint="{fingerprint}" '
+                        f'backend_id="{backend}"'
+                    )
+                    for backend in backends
+                ]
+            )
+        coverage = placement_coverage(
+            "run",
+            case,
+            [messages],
+            {
+                "backendRequests": {
+                    "byBackend": {
+                        "storage-a": 2,
+                        "storage-b": 2,
+                        "storage-c": 2,
+                    }
+                }
+            },
+        )
+        self.assertEqual(coverage["distinctPaths"], 3)
+        self.assertEqual(coverage["distinctPlacementPairs"], 3)
 
     @patch("collect_live_performance_telemetry.run_json")
     def test_log_query_includes_every_gateway_app(self, run_json) -> None:

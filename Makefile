@@ -78,7 +78,7 @@ doc-check:
 
 performance-contract-check:
 	python3 harness/environments/azure/performance/overmesh_live_performance.py \
-		--contract harness/performance/live-v3.toml \
+		--contract harness/performance/live-v4.toml \
 		--plan >/dev/null
 	PYTHONPATH=harness/environments/azure/performance \
 		python3 -m unittest discover \

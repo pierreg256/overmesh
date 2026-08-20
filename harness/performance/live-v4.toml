@@ -1,0 +1,93 @@
+schema_version = 4
+warmup_iterations = 3
+campaign_repeats = 3
+read_path_pool_size = 24
+request_timeout_seconds = 120
+target_order = ["direct", "gateway"]
+
+[non_regression]
+backend_requests_per_operation = "blocking"
+p50_stability_spread_ratio_threshold = 1.10
+p50_regression_ratio_threshold = 1.10
+p95_latency = "informational"
+
+[[payload]]
+id = "1kib"
+size_bytes = 1024
+
+[[payload]]
+id = "1mib"
+size_bytes = 1048576
+
+[[payload]]
+id = "16mib"
+size_bytes = 16777216
+
+[[workload]]
+operation = "put_blob"
+payloads = ["1kib", "1mib"]
+concurrency = [1, 4, 16]
+measured_iterations = 30
+backend_requests_per_operation = 49
+
+[[workload]]
+operation = "put_blob"
+payloads = ["16mib"]
+concurrency = [1, 4]
+measured_iterations = 30
+backend_requests_per_operation = 49
+
+[[workload]]
+operation = "overwrite_blob"
+payloads = ["1kib"]
+concurrency = [1, 4, 16]
+measured_iterations = 30
+backend_requests_per_operation = 49
+
+[[workload]]
+operation = "get_blob"
+payloads = ["1kib", "1mib"]
+concurrency = [1, 4, 16]
+measured_iterations = 60
+backend_requests_per_operation = 15
+
+[[workload]]
+operation = "get_blob"
+payloads = ["16mib"]
+concurrency = [1, 4, 16]
+measured_iterations = 60
+backend_requests_per_operation = 18
+
+[[workload]]
+operation = "get_range"
+payloads = ["16mib"]
+concurrency = [1, 4, 16]
+range_bytes = 1048576
+measured_iterations = 60
+backend_requests_per_operation = 15
+
+[[workload]]
+operation = "head_blob"
+payloads = ["1mib"]
+concurrency = [1, 16]
+measured_iterations = 60
+backend_requests_per_operation = 10
+
+[[workload]]
+operation = "delete_blob"
+payloads = ["1kib"]
+concurrency = [1, 4, 16]
+measured_iterations = 30
+backend_requests_per_operation = 43
+
+[[exclusion]]
+operation = "put_blob"
+payload = "16mib"
+concurrency = 16
+reason = "The first baseline omitted this high-memory client case; add it only with an explicit VM capacity increase so client pressure is not mistaken for Gateway latency."
+
+[[exclusion]]
+operation = "head_blob"
+payload = "1mib"
+concurrency = 4
+reason = "The first baseline accidentally omitted this intermediate point; v4 preserves the explicit matrix gap while reallocating the read sampling budget across full-matrix repeats."

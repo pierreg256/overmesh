@@ -368,7 +368,7 @@ fixed two-replica commit protocol and says so.
 
 ## 10. Status
 
-Overmesh is an advanced prototype in milestone 0.10.1 of a V1 plan that reaches
+Overmesh is an advanced prototype in milestone 0.11.0 of a V1 plan that reaches
 1.0.
 
 **Implemented and tested:** the signed Ring with rollback and predecessor
@@ -383,7 +383,7 @@ block staging APIs with their own retention and collection, reconciliation with
 repair and quarantine, and continuous RBAC posture auditing against Azure
 Resource Manager.
 
-**How it is validated:** 192 unit and integration tests, 23 declarative
+**How it is validated:** 193 unit and integration tests, 23 declarative
 scenarios against an independent reference model, three process-level suites
 and a Rust system validator running against Azurite backends behind a fault
 proxy, and a live Azure gate that verifies account posture, authorization
@@ -444,7 +444,8 @@ Bundle SHA-256  547172399a2bc24ab494b41c9dd37e9b2ceaa054e6e37a17960e1c7e5e244bc9
 
 A signed 0.10.1 performance baseline now measures the fixed request
 amplification described in section 8, with attributed object-class budgets and
-the read-stabilized blocking `live-v3` reference used by 0.11.
+the single-path `live-v3` predecessor whose run-to-run variance motivated the
+repeated, placement-rotated v4 instrument for 0.11.
 
 ## 11. Where to start if you want to fork it
 

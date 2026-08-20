@@ -2,8 +2,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
     fs,
+    net::{Ipv4Addr, Ipv6Addr},
     path::{Component, Path},
-    process::Command,
+    process::{Command, Stdio},
+    str::FromStr,
 };
 
 use anyhow::{Context, Result};
@@ -144,6 +146,7 @@ pub fn check(repository_root: &Path) -> Result<DocumentationReport> {
     check_evidence(repository_root, &traceability, &adr_metadata, &mut report)?;
     check_assertions(repository_root, &traceability, &mut report)?;
     check_retained_artifact_redaction(repository_root, &mut report)?;
+    check_retained_artifact_provenance(repository_root, &mut report)?;
 
     report.violations.sort_by(|left, right| {
         (
@@ -764,23 +767,7 @@ fn check_retained_artifact_redaction(
             .with_context(|| format!("failed to read retained artifact {relative}"))?;
         let content = String::from_utf8_lossy(&bytes);
         for (index, line) in content.lines().enumerate() {
-            let lower = line.to_ascii_lowercase();
-            let forbidden = [
-                ("/subscriptions/", "Azure subscription resource path"),
-                (".azurefd.net", "Azure Front Door hostname"),
-                (".vault.azure.net", "Azure Key Vault hostname"),
-                (".blob.core.windows.net", "Azure Blob Storage hostname"),
-                (".azurecontainerapps.io", "Azure Container Apps hostname"),
-                (".azurecr.io", "Azure Container Registry hostname"),
-                ("\\u001b", "serialized ANSI escape sequence"),
-                ("\\x1b", "serialized ANSI escape sequence"),
-            ]
-            .into_iter()
-            .find(|(pattern, _)| lower.contains(pattern))
-            .map(|(_, description)| description)
-            .or_else(|| line.contains('\u{1b}').then_some("ANSI escape sequence"))
-            .or_else(|| contains_guid(line).then_some("GUID"));
-            if let Some(description) = forbidden {
+            if let Some(description) = forbidden_retained_artifact_pattern(line) {
                 report.push(
                     "R8",
                     &relative,
@@ -794,6 +781,38 @@ fn check_retained_artifact_redaction(
     Ok(())
 }
 
+fn forbidden_retained_artifact_pattern(line: &str) -> Option<&'static str> {
+    let lower = line.to_ascii_lowercase();
+    [
+        ("/subscriptions/", "Azure subscription resource path"),
+        (".azurefd.net", "Azure Front Door hostname"),
+        (".vault.azure.net", "Azure Key Vault hostname"),
+        (".blob.core.windows.net", "Azure Blob Storage hostname"),
+        (".azurecontainerapps.io", "Azure Container Apps hostname"),
+        (".azurecr.io", "Azure Container Registry hostname"),
+        ("/users/", "macOS home directory path"),
+        ("/home/", "Linux home directory path"),
+        ("c:\\users\\", "Windows home directory path"),
+        ("c:\\\\users\\\\", "serialized Windows home directory path"),
+        ("authorization:", "Authorization header"),
+        ("bearer ", "Bearer credential"),
+        (".azcopy", "AzCopy job-log path"),
+        ("azcopy job", "AzCopy job identifier"),
+        ("\"jobid\"", "AzCopy job identifier"),
+        ("\"job_id\"", "AzCopy job identifier"),
+        ("\\u001b", "serialized ANSI escape sequence"),
+        ("\\x1b", "serialized ANSI escape sequence"),
+    ]
+    .into_iter()
+    .find(|(pattern, _)| lower.contains(pattern))
+    .map(|(_, description)| description)
+    .or_else(|| line.contains('\u{1b}').then_some("ANSI escape sequence"))
+    .or_else(|| contains_guid(line).then_some("GUID"))
+    .or_else(|| contains_ip_literal(line).then_some("IP address literal"))
+    .or_else(|| contains_email_address(line).then_some("email address"))
+    .or_else(|| contains_sas_fragment(&lower).then_some("SAS query fragment"))
+}
+
 fn contains_guid(value: &str) -> bool {
     value.as_bytes().windows(36).any(|candidate| {
         candidate
@@ -804,6 +823,142 @@ fn contains_guid(value: &str) -> bool {
                 _ => byte.is_ascii_hexdigit(),
             })
     })
+}
+
+fn contains_ip_literal(value: &str) -> bool {
+    value
+        .split(|character: char| {
+            !(character.is_ascii_hexdigit() || matches!(character, ':' | '.' | '[' | ']' | '%'))
+        })
+        .filter(|candidate| !candidate.is_empty())
+        .any(|candidate| {
+            let candidate = candidate.trim_matches(['[', ']']);
+            Ipv4Addr::from_str(candidate).is_ok()
+                || (candidate != "::"
+                    && (candidate.len() >= 7 || candidate.starts_with("::"))
+                    && candidate.split_once('%').map_or_else(
+                        || Ipv6Addr::from_str(candidate).is_ok(),
+                        |(address, _)| Ipv6Addr::from_str(address).is_ok(),
+                    ))
+        })
+}
+
+fn contains_email_address(value: &str) -> bool {
+    value
+        .split(|character: char| {
+            character.is_ascii_whitespace()
+                || matches!(
+                    character,
+                    '"' | '\'' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
+                )
+        })
+        .any(|candidate| {
+            let Some((local, domain)) = candidate.rsplit_once('@') else {
+                return false;
+            };
+            !local.is_empty()
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+                && domain
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+        })
+}
+
+fn contains_sas_fragment(lower: &str) -> bool {
+    ["sig=", "?sv=", "&sv=", "?se=", "&se="]
+        .into_iter()
+        .any(|pattern| lower.contains(pattern))
+}
+
+fn check_retained_artifact_provenance(
+    repository_root: &Path,
+    report: &mut DocumentationReport,
+) -> Result<()> {
+    let artifacts = repository_root.join(RETAINED_ARTIFACTS_DIRECTORY);
+    if !artifacts.is_dir() {
+        return Ok(());
+    }
+    let main_reference = ["refs/heads/main", "refs/remotes/origin/main"]
+        .into_iter()
+        .find(|reference| git_revision_exists(repository_root, reference));
+
+    for entry in WalkDir::new(&artifacts)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|value| value == "json")
+        })
+    {
+        let relative = entry
+            .path()
+            .strip_prefix(repository_root)
+            .context("retained artifact escaped repository root")?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let content = fs::read_to_string(entry.path())
+            .with_context(|| format!("failed to read retained artifact {relative}"))?;
+        let Ok(document) = serde_json::from_str::<serde_json::Value>(&content) else {
+            continue;
+        };
+        let Some(commit) = document
+            .get("campaign")
+            .and_then(|campaign| campaign.get("commit"))
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            report.push(
+                "R9",
+                &relative,
+                None,
+                format!("campaign.commit {commit:?} is not a full Git commit SHA"),
+                "retain the full 40-character commit SHA in campaign.commit",
+            );
+            continue;
+        }
+        let Some(main_reference) = main_reference else {
+            report.push(
+                "R9",
+                &relative,
+                None,
+                "cannot verify campaign.commit because the main ref is unavailable",
+                "fetch main history before running doc-check",
+            );
+            continue;
+        };
+        let status = Command::new("git")
+            .args(["merge-base", "--is-ancestor", commit, main_reference])
+            .current_dir(repository_root)
+            .status()
+            .with_context(|| format!("failed to check provenance for {relative}"))?;
+        if !status.success() {
+            report.push(
+                "R9",
+                &relative,
+                None,
+                format!("campaign.commit {commit} is not an ancestor of main"),
+                "merge the campaign commit into main before retaining its evidence",
+            );
+        }
+    }
+    Ok(())
+}
+
+fn git_revision_exists(repository_root: &Path, revision: &str) -> bool {
+    Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", revision])
+        .current_dir(repository_root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn documentation_metrics(repository_root: &Path) -> Result<BTreeMap<String, String>> {
@@ -1183,7 +1338,11 @@ reason = "Intentional fixture."
             r#"{
   "subscription": "/subscriptions/11111111-2222-3333-4444-555555555555",
   "endpoint": "https://example.azurefd.net",
-  "diagnostic": "\u001b[31mfailed\u001b[0m"
+  "diagnostic": "\u001b[31mfailed\u001b[0m",
+  "home": "/Users/operator/.azcopy/jobs.log",
+  "address": "203.0.113.42",
+  "addressV6": "2001:db8::1",
+  "credential": "Authorization: Bearer secret"
 }"#,
         );
 
@@ -1193,12 +1352,63 @@ reason = "Intentional fixture."
             .iter()
             .filter(|violation| violation.rule == "R8")
             .collect::<Vec<_>>();
-        assert_eq!(violations.len(), 3);
+        assert_eq!(violations.len(), 7);
         assert!(
             violations.iter().all(|violation| {
                 violation.path == "harness/artifacts/live/0.9.0/evidence.json"
             })
         );
+        let descriptions = violations
+            .iter()
+            .map(|violation| violation.message.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            descriptions
+                .iter()
+                .any(|message| message.contains("home directory"))
+        );
+        assert!(
+            descriptions
+                .iter()
+                .any(|message| message.contains("IP address literal"))
+        );
+        assert!(
+            descriptions
+                .iter()
+                .any(|message| message.contains("Authorization header"))
+        );
+    }
+
+    #[test]
+    fn retained_campaign_commit_must_be_an_ancestor_of_main() {
+        let fixture = documentation_fixture();
+        git(
+            fixture.path(),
+            &["config", "user.email", "fixture@example.test"],
+        );
+        git(fixture.path(), &["config", "user.name", "Fixture"]);
+        git(fixture.path(), &["add", "."]);
+        git(fixture.path(), &["commit", "--quiet", "-m", "main"]);
+        git(fixture.path(), &["branch", "-M", "main"]);
+        git(fixture.path(), &["switch", "--quiet", "-c", "campaign"]);
+        write(fixture.path(), "campaign.txt", "unmerged\n");
+        git(fixture.path(), &["add", "campaign.txt"]);
+        git(
+            fixture.path(),
+            &["commit", "--quiet", "-m", "unmerged campaign"],
+        );
+        let campaign_commit = git_output(fixture.path(), &["rev-parse", "HEAD"]);
+        git(fixture.path(), &["switch", "--quiet", "main"]);
+        write(
+            fixture.path(),
+            "harness/artifacts/live/0.10.0/performance.json",
+            &format!(r#"{{"campaign":{{"commit":"{campaign_commit}"}}}}"#),
+        );
+
+        let report = check(fixture.path()).expect("check fixture");
+        assert!(report.violations.iter().any(|violation| {
+            violation.rule == "R9" && violation.message.contains("is not an ancestor of main")
+        }));
     }
 
     #[test]
@@ -1428,5 +1638,27 @@ pattern = "milestone {}"
         let mut existing = fs::read_to_string(&path).expect("read fixture");
         existing.push_str(content);
         fs::write(path, existing).expect("append fixture");
+    }
+
+    fn git(root: &Path, arguments: &[&str]) {
+        let status = Command::new("git")
+            .args(arguments)
+            .current_dir(root)
+            .status()
+            .expect("run git");
+        assert!(status.success(), "git {arguments:?} failed");
+    }
+
+    fn git_output(root: &Path, arguments: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(arguments)
+            .current_dir(root)
+            .output()
+            .expect("run git");
+        assert!(output.status.success(), "git {arguments:?} failed");
+        String::from_utf8(output.stdout)
+            .expect("git output is UTF-8")
+            .trim()
+            .to_owned()
     }
 }

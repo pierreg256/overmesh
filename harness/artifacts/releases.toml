@@ -1,0 +1,35 @@
+schema_version = 1
+
+[[release]]
+milestone = "0.9.0"
+tag = "v0.9.0"
+close_commit = "bb75a4cde6ebf0076ef0c6809c9d7341f3f8252d"
+retained_bundles = [
+  "live/0.9.0/overmesh-v090-live-evidence.json",
+  "live/0.9.0/client-compat-v090-live-evidence.json",
+  "live/0.9.0/reconciliation-v090-live-evidence.json",
+  "live/0.9.0/placement-v090-live-evidence.jsonl",
+  "live/0.9.0/posture-v090-live-evidence.json",
+  "live/0.9.0/gateway-auth-v090-live-evidence.txt",
+]
+
+[[release]]
+milestone = "0.9.1"
+tag = "v0.9.1"
+close_commit = "74987bd96c2703b8a11915efaeb0f0d19bb41c0d"
+retained_bundles = []
+
+[[release]]
+milestone = "0.10.0"
+tag = "v0.10.0"
+close_commit = "d7f97737d832eb63c799bc4578db614f6cacf58c"
+retained_bundles = ["live/0.10.0/performance-v010-evidence.json"]
+
+[[release]]
+milestone = "0.10.1"
+tag = "v0.10.1"
+close_commit = "3d89adb23129fbf3c9690a6cbf7870b384c781b4"
+retained_bundles = [
+  "live/0.10.1/performance-v010-evidence.json",
+  "live/0.10.1/performance-v010-v3-evidence.json",
+]

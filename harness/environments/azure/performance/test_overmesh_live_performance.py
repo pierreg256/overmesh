@@ -53,6 +53,26 @@ class PerformanceContractTests(unittest.TestCase):
             },
             {30},
         )
+        repeated = load_contract(Path("harness/performance/live-v4.toml"))
+        self.assertEqual(len(repeated.cases), 28)
+        self.assertEqual(repeated.campaign_repeats, 3)
+        self.assertEqual(repeated.read_path_pool_size, 24)
+        self.assertEqual(
+            {
+                benchmark_case.measured_iterations
+                for benchmark_case in repeated.cases
+                if benchmark_case.operation
+                in {"get_blob", "get_range", "head_blob"}
+            },
+            {60},
+        )
+        self.assertEqual(
+            {
+                benchmark_case.backend_requests_per_operation
+                for benchmark_case in repeated.cases
+            },
+            {10, 15, 18, 43, 49},
+        )
 
     def test_unknown_payload_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -135,6 +155,12 @@ concurrency = [1]
         self.assertNotEqual(
             setup_request_id("run", "gateway", "overwrite", 3),
             request_id("run", "gateway", "overwrite", 3),
+        )
+
+    def test_repeated_requests_have_distinct_ids(self) -> None:
+        self.assertNotEqual(
+            request_id("run", "gateway", "get", 3, 0),
+            request_id("run", "gateway", "get", 3, 1),
         )
 
     def test_request_id_uses_the_storage_sdk_supported_option(self) -> None:

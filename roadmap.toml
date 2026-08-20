@@ -1,5 +1,5 @@
 schema_version = 1
-project_version = "0.10.1"
+project_version = "0.11.0"
 active_generation = "V1"
 
 [[milestones]]
@@ -119,9 +119,9 @@ deliverables = [
 version = "0.11.0"
 generation = "V1"
 name = "Performance optimization and regression hardening"
-status = "planned"
+status = "active"
 deliverables = [
-  "Profile bottlenecks demonstrated by the 0.10.1 read-stabilized baseline.",
+  "Profile bottlenecks demonstrated by the repeated, placement-rotated 0.11.0 baseline.",
   "Reduce avoidable round trips, serialization, signing, buffering, and scheduling overhead without weakening invariants.",
   "Re-run the identical live benchmark matrix and record before-and-after evidence.",
   "Add performance regression budgets to release validation where measurements are stable.",

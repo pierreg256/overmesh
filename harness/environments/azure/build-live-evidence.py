@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import json
 import re
 import shutil
@@ -47,6 +48,29 @@ HOST_PATTERNS = [
     ),
     (re.compile(r"[a-zA-Z0-9.-]+\.azurecr\.io", re.IGNORECASE), "acr"),
 ]
+LOCAL_PATH = re.compile(
+    r"(?:/Users/|/home/|[A-Za-z]:\\Users\\)[^\"'\s]+",
+    re.IGNORECASE,
+)
+EMAIL = re.compile(
+    r"(?<![A-Za-z0-9._%+-])"
+    r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+    r"(?![A-Za-z0-9.-])"
+)
+IP_CANDIDATE = re.compile(
+    r"(?<![0-9A-Fa-f:.])"
+    r"(?:[0-9A-Fa-f:.]*[:.][0-9A-Fa-f:.]+)"
+    r"(?:%[A-Za-z0-9._-]+)?"
+    r"(?![0-9A-Fa-f:.])"
+)
+AUTHORIZATION = re.compile(
+    r"(?i)\bAuthorization\s*:\s*(?:Bearer\s+)?[^\"'\s,}]+"
+)
+BEARER = re.compile(r"(?i)\bBearer\s+[^\"'\s,}]+")
+SAS_FRAGMENT = re.compile(
+    r"(?i)([?&]?(?:sig|sv|se)=)[^&\"'\s,}]+"
+)
+AZCOPY_PATH = re.compile(r"[^\"'\s]*\.azcopy[^\"'\s]*", re.IGNORECASE)
 
 
 def pseudonym(kind: str, value: str) -> str:
@@ -73,13 +97,40 @@ def redact_text(value: str) -> str:
         lambda match: f"/storageAccounts/{pseudonym('st', match.group(1))}",
         value,
     )
+    value = LOCAL_PATH.sub(lambda match: pseudonym("path", match.group(0)), value)
+    value = AZCOPY_PATH.sub(
+        lambda match: pseudonym("azcopy", match.group(0)), value
+    )
+    value = EMAIL.sub(lambda match: pseudonym("email", match.group(0).lower()), value)
+    value = AUTHORIZATION.sub("Authorization: redacted", value)
+    value = BEARER.sub("Bearer redacted", value)
+    value = SAS_FRAGMENT.sub(lambda match: f"{match.group(1)}redacted", value)
+    value = re.sub(r"(?i)\bAuthorization\s*:", "auth-redacted", value)
+    value = re.sub(r"(?i)\bBearer\s+", "credential-redacted ", value)
+    value = re.sub(
+        r"(?i)[?&]?(?:sig|sv|se)=redacted",
+        "sas-redacted",
+        value,
+    )
+    value = IP_CANDIDATE.sub(redact_ip_candidate, value)
     return GUID.sub(lambda match: pseudonym("id", match.group(0)), value)
+
+
+def redact_ip_candidate(match: re.Match[str]) -> str:
+    candidate = match.group(0)
+    address, separator, zone = candidate.partition("%")
+    try:
+        normalized = str(ipaddress.ip_address(address))
+    except ValueError:
+        return candidate
+    source = normalized if not separator else f"{normalized}%{zone}"
+    return pseudonym("ip", source)
 
 
 def redact_json(value: object, key: str | None = None) -> object:
     if isinstance(value, dict):
         return {
-            name: redact_json(child, name)
+            redact_json_key(name): redact_json(child, name)
             for name, child in value.items()
         }
     if isinstance(value, list):
@@ -98,9 +149,17 @@ def redact_json(value: object, key: str | None = None) -> object:
         "objectid",
         "clientid",
         "managedidentityclientid",
+        "jobid",
+        "job_id",
     }:
         return pseudonym("id", value)
     return redact_text(value)
+
+
+def redact_json_key(name: str) -> str:
+    if name.lower() in {"jobid", "job_id"}:
+        return "redactedJobReference"
+    return name
 
 
 def redact_file(source: Path, destination: Path) -> None:
