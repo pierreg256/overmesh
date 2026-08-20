@@ -1,0 +1,4941 @@
+{
+  "apiVersion": "performance.overmesh.io/v1",
+  "campaign": {
+    "commit": "0b1d265e1a70e18d820f964c6dc4279e344d3ea0",
+    "deployment": "sha256:08e8dee161805a3e09b109c9788202a1052831bbe2d7dc573338a5e38fd7011d",
+    "environment": "isolated-validation-vm-francecentral-single-selected-origin",
+    "finishedAt": "2026-08-19T21:34:10.808752Z",
+    "isolatedEnvironment": true,
+    "projectVersion": "0.10.1",
+    "ringHash": "sha256:d8e2b6aef1a8ea0e32d032c002e4f0f7f1f0493b49bf50172d8d6d2ee65ad425",
+    "ringVersion": "1",
+    "runId": "20260819T210647Z",
+    "startedAt": "2026-08-19T21:06:49.050695Z",
+    "storageApiVersion": "2024-08-04"
+  },
+  "campaignTelemetry": {
+    "containerApp": {
+      "cpuCores": {
+        "average": 0.013157,
+        "maximum": 0.115507,
+        "resources": 2,
+        "samples": 28
+      },
+      "interval": "1m",
+      "memoryBytes": {
+        "average": 280822286.628571,
+        "maximum": 324141056.0,
+        "resources": 2,
+        "samples": 28
+      },
+      "replicas": {
+        "average": 20.0,
+        "maximum": 20.0,
+        "resources": 2,
+        "samples": 28
+      },
+      "resourceCount": 2,
+      "window": {
+        "finishedAt": "2026-08-19T21:34:10.808752Z",
+        "startedAt": "2026-08-19T21:06:49.050695Z"
+      }
+    }
+  },
+  "cases": [
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:06:49.445102Z",
+      "id": "put_blob-1kib-c1",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 110981.65,
+        "errorCount": 0,
+        "maxMs": 10.643,
+        "meanMs": 9.194,
+        "minMs": 8.442,
+        "operationsPerSecond": 108.381,
+        "p50Ms": 9.081,
+        "p90Ms": 10.115,
+        "p95Ms": 10.25,
+        "successCount": 30,
+        "wallSeconds": 0.276803
+      },
+      "operation": "put_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "startedAt": "2026-08-19T21:06:49.168267Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:07:32.048701Z",
+      "id": "put_blob-1kib-c1",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 814.698,
+        "errorCount": 0,
+        "maxMs": 1580.3,
+        "meanMs": 1256.821,
+        "minMs": 925.41,
+        "operationsPerSecond": 0.796,
+        "p50Ms": 1255.486,
+        "p90Ms": 1518.757,
+        "p95Ms": 1564.995,
+        "successCount": 30,
+        "wallSeconds": 37.707216
+      },
+      "operation": "put_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 389,
+            "storage-b": 481,
+            "storage-c": 600
+          },
+          "byObjectClass": {
+            "block_manifest": 120,
+            "block_manifest_page": 60,
+            "catalogue": 180,
+            "compaction_checkpoint": 120,
+            "content": 60,
+            "head": 180,
+            "high_water_current": 240,
+            "high_water_history": 60,
+            "lock": 90,
+            "prepared_manifest": 180,
+            "quarantine": 60,
+            "terminal_manifest": 120
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "201": 60,
+              "404": 60
+            },
+            "block_manifest_page": {
+              "201": 60
+            },
+            "catalogue": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "compaction_checkpoint": {
+              "404": 120
+            },
+            "content": {
+              "201": 60
+            },
+            "head": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "high_water_current": {
+              "200": 60,
+              "201": 60,
+              "404": 120
+            },
+            "high_water_history": {
+              "201": 60
+            },
+            "lock": {
+              "200": 30,
+              "201": 60
+            },
+            "prepared_manifest": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "quarantine": {
+              "404": 60
+            },
+            "terminal_manifest": {
+              "201": 60,
+              "404": 60
+            }
+          },
+          "byOperation": {
+            "caller_put_data_file": 60,
+            "control_acquire_lock": 30,
+            "control_get_object": 840,
+            "control_put_bytes": 510,
+            "control_release_lock": 30
+          },
+          "byOperationAndObjectClass": {
+            "caller_put_data_file": {
+              "content": 60
+            },
+            "control_acquire_lock": {
+              "lock": 30
+            },
+            "control_get_object": {
+              "block_manifest": 60,
+              "catalogue": 120,
+              "compaction_checkpoint": 120,
+              "head": 120,
+              "high_water_current": 180,
+              "prepared_manifest": 120,
+              "quarantine": 60,
+              "terminal_manifest": 60
+            },
+            "control_put_bytes": {
+              "block_manifest": 60,
+              "block_manifest_page": 60,
+              "catalogue": 60,
+              "head": 60,
+              "high_water_current": 60,
+              "high_water_history": 60,
+              "lock": 30,
+              "prepared_manifest": 60,
+              "terminal_manifest": 60
+            },
+            "control_release_lock": {
+              "lock": 30
+            }
+          },
+          "byStatus": {
+            "200": 270,
+            "201": 600,
+            "404": 600
+          },
+          "clientRequestCount": 30,
+          "count": 1470,
+          "responseHeadersDuration": {
+            "count": 1470,
+            "maxDurationUs": 202655,
+            "p50DurationUs": 35048,
+            "p95DurationUs": 47546,
+            "p99DurationUs": 125292,
+            "totalDurationUs": 47198485
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "BlockManifest": 30,
+            "CommitManifest": 60
+          },
+          "count": 90,
+          "failures": 0,
+          "maxDurationUs": 237110,
+          "p50DurationUs": 44783,
+          "p95DurationUs": 104515,
+          "p99DurationUs": 237110,
+          "totalDurationUs": 4979424
+        }
+      },
+      "startedAt": "2026-08-19T21:06:54.341454Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:08:04.838208Z",
+      "id": "put_blob-1kib-c4",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 248152.225,
+        "errorCount": 0,
+        "maxMs": 118.985,
+        "meanMs": 15.243,
+        "minMs": 8.919,
+        "operationsPerSecond": 242.336,
+        "p50Ms": 10.747,
+        "p90Ms": 16.292,
+        "p95Ms": 20.15,
+        "successCount": 30,
+        "wallSeconds": 0.123795
+      },
+      "operation": "put_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "startedAt": "2026-08-19T21:08:04.714379Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:08:16.001163Z",
+      "id": "put_blob-1kib-c4",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 3243.508,
+        "errorCount": 0,
+        "maxMs": 1355.51,
+        "meanMs": 1184.514,
+        "minMs": 942.462,
+        "operationsPerSecond": 3.167,
+        "p50Ms": 1250.532,
+        "p90Ms": 1334.373,
+        "p95Ms": 1353.726,
+        "successCount": 30,
+        "wallSeconds": 9.471226
+      },
+      "operation": "put_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 487,
+            "storage-b": 473,
+            "storage-c": 510
+          },
+          "byObjectClass": {
+            "block_manifest": 120,
+            "block_manifest_page": 60,
+            "catalogue": 180,
+            "compaction_checkpoint": 120,
+            "content": 60,
+            "head": 180,
+            "high_water_current": 240,
+            "high_water_history": 60,
+            "lock": 90,
+            "prepared_manifest": 180,
+            "quarantine": 60,
+            "terminal_manifest": 120
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "201": 60,
+              "404": 60
+            },
+            "block_manifest_page": {
+              "201": 60
+            },
+            "catalogue": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "compaction_checkpoint": {
+              "404": 120
+            },
+            "content": {
+              "201": 60
+            },
+            "head": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "high_water_current": {
+              "200": 60,
+              "201": 60,
+              "404": 120
+            },
+            "high_water_history": {
+              "201": 60
+            },
+            "lock": {
+              "200": 30,
+              "201": 60
+            },
+            "prepared_manifest": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "quarantine": {
+              "404": 60
+            },
+            "terminal_manifest": {
+              "201": 60,
+              "404": 60
+            }
+          },
+          "byOperation": {
+            "caller_put_data_file": 60,
+            "control_acquire_lock": 30,
+            "control_get_object": 840,
+            "control_put_bytes": 510,
+            "control_release_lock": 30
+          },
+          "byOperationAndObjectClass": {
+            "caller_put_data_file": {
+              "content": 60
+            },
+            "control_acquire_lock": {
+              "lock": 30
+            },
+            "control_get_object": {
+              "block_manifest": 60,
+              "catalogue": 120,
+              "compaction_checkpoint": 120,
+              "head": 120,
+              "high_water_current": 180,
+              "prepared_manifest": 120,
+              "quarantine": 60,
+              "terminal_manifest": 60
+            },
+            "control_put_bytes": {
+              "block_manifest": 60,
+              "block_manifest_page": 60,
+              "catalogue": 60,
+              "head": 60,
+              "high_water_current": 60,
+              "high_water_history": 60,
+              "lock": 30,
+              "prepared_manifest": 60,
+              "terminal_manifest": 60
+            },
+            "control_release_lock": {
+              "lock": 30
+            }
+          },
+          "byStatus": {
+            "200": 270,
+            "201": 600,
+            "404": 600
+          },
+          "clientRequestCount": 30,
+          "count": 1470,
+          "responseHeadersDuration": {
+            "count": 1470,
+            "maxDurationUs": 68430,
+            "p50DurationUs": 33699,
+            "p95DurationUs": 46860,
+            "p99DurationUs": 51748,
+            "totalDurationUs": 42330784
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "BlockManifest": 30,
+            "CommitManifest": 60
+          },
+          "count": 90,
+          "failures": 0,
+          "maxDurationUs": 228376,
+          "p50DurationUs": 42900,
+          "p95DurationUs": 66522,
+          "p99DurationUs": 228376,
+          "totalDurationUs": 4202504
+        }
+      },
+      "startedAt": "2026-08-19T21:08:06.529899Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:08:48.157521Z",
+      "id": "put_blob-1kib-c16",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 71828.073,
+        "errorCount": 0,
+        "maxMs": 399.844,
+        "meanMs": 160.867,
+        "minMs": 11.359,
+        "operationsPerSecond": 70.145,
+        "p50Ms": 51.047,
+        "p90Ms": 385.854,
+        "p95Ms": 392.062,
+        "successCount": 30,
+        "wallSeconds": 0.427688
+      },
+      "operation": "put_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "startedAt": "2026-08-19T21:08:47.729752Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:08:52.670278Z",
+      "id": "put_blob-1kib-c16",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 10682.057,
+        "errorCount": 0,
+        "maxMs": 1636.321,
+        "meanMs": 1313.319,
+        "minMs": 920.43,
+        "operationsPerSecond": 10.432,
+        "p50Ms": 1264.465,
+        "p90Ms": 1608.315,
+        "p95Ms": 1633.839,
+        "successCount": 30,
+        "wallSeconds": 2.875851
+      },
+      "operation": "put_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 484,
+            "storage-b": 470,
+            "storage-c": 516
+          },
+          "byObjectClass": {
+            "block_manifest": 120,
+            "block_manifest_page": 60,
+            "catalogue": 180,
+            "compaction_checkpoint": 120,
+            "content": 60,
+            "head": 180,
+            "high_water_current": 240,
+            "high_water_history": 60,
+            "lock": 90,
+            "prepared_manifest": 180,
+            "quarantine": 60,
+            "terminal_manifest": 120
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "201": 60,
+              "404": 60
+            },
+            "block_manifest_page": {
+              "201": 60
+            },
+            "catalogue": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "compaction_checkpoint": {
+              "404": 120
+            },
+            "content": {
+              "201": 60
+            },
+            "head": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "high_water_current": {
+              "200": 60,
+              "201": 60,
+              "404": 120
+            },
+            "high_water_history": {
+              "201": 60
+            },
+            "lock": {
+              "200": 30,
+              "201": 60
+            },
+            "prepared_manifest": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "quarantine": {
+              "404": 60
+            },
+            "terminal_manifest": {
+              "201": 60,
+              "404": 60
+            }
+          },
+          "byOperation": {
+            "caller_put_data_file": 60,
+            "control_acquire_lock": 30,
+            "control_get_object": 840,
+            "control_put_bytes": 510,
+            "control_release_lock": 30
+          },
+          "byOperationAndObjectClass": {
+            "caller_put_data_file": {
+              "content": 60
+            },
+            "control_acquire_lock": {
+              "lock": 30
+            },
+            "control_get_object": {
+              "block_manifest": 60,
+              "catalogue": 120,
+              "compaction_checkpoint": 120,
+              "head": 120,
+              "high_water_current": 180,
+              "prepared_manifest": 120,
+              "quarantine": 60,
+              "terminal_manifest": 60
+            },
+            "control_put_bytes": {
+              "block_manifest": 60,
+              "block_manifest_page": 60,
+              "catalogue": 60,
+              "head": 60,
+              "high_water_current": 60,
+              "high_water_history": 60,
+              "lock": 30,
+              "prepared_manifest": 60,
+              "terminal_manifest": 60
+            },
+            "control_release_lock": {
+              "lock": 30
+            }
+          },
+          "byStatus": {
+            "200": 270,
+            "201": 600,
+            "404": 600
+          },
+          "clientRequestCount": 30,
+          "count": 1470,
+          "responseHeadersDuration": {
+            "count": 1470,
+            "maxDurationUs": 81817,
+            "p50DurationUs": 33746,
+            "p95DurationUs": 45784,
+            "p99DurationUs": 52331,
+            "totalDurationUs": 41813276
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "BlockManifest": 30,
+            "CommitManifest": 60
+          },
+          "count": 90,
+          "failures": 0,
+          "maxDurationUs": 86386,
+          "p50DurationUs": 36951,
+          "p95DurationUs": 72264,
+          "p99DurationUs": 86386,
+          "totalDurationUs": 3765322
+        }
+      },
+      "startedAt": "2026-08-19T21:08:49.794362Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:09:24.685452Z",
+      "id": "put_blob-1mib-c1",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 48235315.045,
+        "errorCount": 0,
+        "maxMs": 47.006,
+        "meanMs": 21.695,
+        "minMs": 16.987,
+        "operationsPerSecond": 46.001,
+        "p50Ms": 20.06,
+        "p90Ms": 27.943,
+        "p95Ms": 30.056,
+        "successCount": 30,
+        "wallSeconds": 0.652163
+      },
+      "operation": "put_blob",
+      "payload": "1mib",
+      "payloadBytes": 1048576,
+      "startedAt": "2026-08-19T21:09:24.033261Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:10:11.064162Z",
+      "id": "put_blob-1mib-c1",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 759512.208,
+        "errorCount": 0,
+        "maxMs": 1636.397,
+        "meanMs": 1380.546,
+        "minMs": 1107.129,
+        "operationsPerSecond": 0.724,
+        "p50Ms": 1379.711,
+        "p90Ms": 1566.296,
+        "p95Ms": 1604.127,
+        "successCount": 30,
+        "wallSeconds": 41.417741
+      },
+      "operation": "put_blob",
+      "payload": "1mib",
+      "payloadBytes": 1048576,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 582,
+            "storage-b": 412,
+            "storage-c": 476
+          },
+          "byObjectClass": {
+            "block_manifest": 120,
+            "block_manifest_page": 60,
+            "catalogue": 180,
+            "compaction_checkpoint": 120,
+            "content": 60,
+            "head": 180,
+            "high_water_current": 240,
+            "high_water_history": 60,
+            "lock": 90,
+            "prepared_manifest": 180,
+            "quarantine": 60,
+            "terminal_manifest": 120
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "201": 60,
+              "404": 60
+            },
+            "block_manifest_page": {
+              "201": 60
+            },
+            "catalogue": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "compaction_checkpoint": {
+              "404": 120
+            },
+            "content": {
+              "201": 60
+            },
+            "head": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "high_water_current": {
+              "200": 60,
+              "201": 60,
+              "404": 120
+            },
+            "high_water_history": {
+              "201": 60
+            },
+            "lock": {
+              "200": 30,
+              "201": 60
+            },
+            "prepared_manifest": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "quarantine": {
+              "404": 60
+            },
+            "terminal_manifest": {
+              "201": 60,
+              "404": 60
+            }
+          },
+          "byOperation": {
+            "caller_put_data_file": 60,
+            "control_acquire_lock": 30,
+            "control_get_object": 840,
+            "control_put_bytes": 510,
+            "control_release_lock": 30
+          },
+          "byOperationAndObjectClass": {
+            "caller_put_data_file": {
+              "content": 60
+            },
+            "control_acquire_lock": {
+              "lock": 30
+            },
+            "control_get_object": {
+              "block_manifest": 60,
+              "catalogue": 120,
+              "compaction_checkpoint": 120,
+              "head": 120,
+              "high_water_current": 180,
+              "prepared_manifest": 120,
+              "quarantine": 60,
+              "terminal_manifest": 60
+            },
+            "control_put_bytes": {
+              "block_manifest": 60,
+              "block_manifest_page": 60,
+              "catalogue": 60,
+              "head": 60,
+              "high_water_current": 60,
+              "high_water_history": 60,
+              "lock": 30,
+              "prepared_manifest": 60,
+              "terminal_manifest": 60
+            },
+            "control_release_lock": {
+              "lock": 30
+            }
+          },
+          "byStatus": {
+            "200": 270,
+            "201": 600,
+            "404": 600
+          },
+          "clientRequestCount": 30,
+          "count": 1470,
+          "responseHeadersDuration": {
+            "count": 1470,
+            "maxDurationUs": 317091,
+            "p50DurationUs": 32746,
+            "p95DurationUs": 47685,
+            "p99DurationUs": 265518,
+            "totalDurationUs": 46924176
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "BlockManifest": 30,
+            "CommitManifest": 60
+          },
+          "count": 90,
+          "failures": 0,
+          "maxDurationUs": 114091,
+          "p50DurationUs": 43546,
+          "p95DurationUs": 65309,
+          "p99DurationUs": 114091,
+          "totalDurationUs": 4159182
+        }
+      },
+      "startedAt": "2026-08-19T21:09:29.646391Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:10:42.857087Z",
+      "id": "put_blob-1mib-c4",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 189616776.135,
+        "errorCount": 0,
+        "maxMs": 28.471,
+        "meanMs": 21.066,
+        "minMs": 17.565,
+        "operationsPerSecond": 180.833,
+        "p50Ms": 20.11,
+        "p90Ms": 24.288,
+        "p95Ms": 25.552,
+        "successCount": 30,
+        "wallSeconds": 0.165899
+      },
+      "operation": "put_blob",
+      "payload": "1mib",
+      "payloadBytes": 1048576,
+      "startedAt": "2026-08-19T21:10:42.691156Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:10:55.159735Z",
+      "id": "put_blob-1mib-c4",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 3043096.356,
+        "errorCount": 0,
+        "maxMs": 1593.032,
+        "meanMs": 1306.203,
+        "minMs": 1019.908,
+        "operationsPerSecond": 2.902,
+        "p50Ms": 1251.564,
+        "p90Ms": 1494.278,
+        "p95Ms": 1529.418,
+        "successCount": 30,
+        "wallSeconds": 10.337261
+      },
+      "operation": "put_blob",
+      "payload": "1mib",
+      "payloadBytes": 1048576,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 559,
+            "storage-b": 317,
+            "storage-c": 594
+          },
+          "byObjectClass": {
+            "block_manifest": 120,
+            "block_manifest_page": 60,
+            "catalogue": 180,
+            "compaction_checkpoint": 120,
+            "content": 60,
+            "head": 180,
+            "high_water_current": 240,
+            "high_water_history": 60,
+            "lock": 90,
+            "prepared_manifest": 180,
+            "quarantine": 60,
+            "terminal_manifest": 120
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "201": 60,
+              "404": 60
+            },
+            "block_manifest_page": {
+              "201": 60
+            },
+            "catalogue": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "compaction_checkpoint": {
+              "404": 120
+            },
+            "content": {
+              "201": 60
+            },
+            "head": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "high_water_current": {
+              "200": 60,
+              "201": 60,
+              "404": 120
+            },
+            "high_water_history": {
+              "201": 60
+            },
+            "lock": {
+              "200": 30,
+              "201": 60
+            },
+            "prepared_manifest": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "quarantine": {
+              "404": 60
+            },
+            "terminal_manifest": {
+              "201": 60,
+              "404": 60
+            }
+          },
+          "byOperation": {
+            "caller_put_data_file": 60,
+            "control_acquire_lock": 30,
+            "control_get_object": 840,
+            "control_put_bytes": 510,
+            "control_release_lock": 30
+          },
+          "byOperationAndObjectClass": {
+            "caller_put_data_file": {
+              "content": 60
+            },
+            "control_acquire_lock": {
+              "lock": 30
+            },
+            "control_get_object": {
+              "block_manifest": 60,
+              "catalogue": 120,
+              "compaction_checkpoint": 120,
+              "head": 120,
+              "high_water_current": 180,
+              "prepared_manifest": 120,
+              "quarantine": 60,
+              "terminal_manifest": 60
+            },
+            "control_put_bytes": {
+              "block_manifest": 60,
+              "block_manifest_page": 60,
+              "catalogue": 60,
+              "head": 60,
+              "high_water_current": 60,
+              "high_water_history": 60,
+              "lock": 30,
+              "prepared_manifest": 60,
+              "terminal_manifest": 60
+            },
+            "control_release_lock": {
+              "lock": 30
+            }
+          },
+          "byStatus": {
+            "200": 270,
+            "201": 600,
+            "404": 600
+          },
+          "clientRequestCount": 30,
+          "count": 1470,
+          "responseHeadersDuration": {
+            "count": 1470,
+            "maxDurationUs": 283397,
+            "p50DurationUs": 32605,
+            "p95DurationUs": 47493,
+            "p99DurationUs": 213374,
+            "totalDurationUs": 44789175
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "BlockManifest": 30,
+            "CommitManifest": 60
+          },
+          "count": 90,
+          "failures": 0,
+          "maxDurationUs": 164914,
+          "p50DurationUs": 41455,
+          "p95DurationUs": 63511,
+          "p99DurationUs": 164914,
+          "totalDurationUs": 3963240
+        }
+      },
+      "startedAt": "2026-08-19T21:10:44.822440Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:11:25.945188Z",
+      "id": "put_blob-1mib-c16",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 115259112.504,
+        "errorCount": 0,
+        "maxMs": 218.357,
+        "meanMs": 55.858,
+        "minMs": 22.82,
+        "operationsPerSecond": 109.92,
+        "p50Ms": 41.525,
+        "p90Ms": 53.464,
+        "p95Ms": 200.742,
+        "successCount": 30,
+        "wallSeconds": 0.272927
+      },
+      "operation": "put_blob",
+      "payload": "1mib",
+      "payloadBytes": 1048576,
+      "startedAt": "2026-08-19T21:11:25.672202Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:11:31.423058Z",
+      "id": "put_blob-1mib-c16",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 8826731.848,
+        "errorCount": 0,
+        "maxMs": 2010.81,
+        "meanMs": 1492.873,
+        "minMs": 1023.339,
+        "operationsPerSecond": 8.418,
+        "p50Ms": 1507.962,
+        "p90Ms": 1844.58,
+        "p95Ms": 1945.645,
+        "successCount": 30,
+        "wallSeconds": 3.563865
+      },
+      "operation": "put_blob",
+      "payload": "1mib",
+      "payloadBytes": 1048576,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 516,
+            "storage-b": 404,
+            "storage-c": 550
+          },
+          "byObjectClass": {
+            "block_manifest": 120,
+            "block_manifest_page": 60,
+            "catalogue": 180,
+            "compaction_checkpoint": 120,
+            "content": 60,
+            "head": 180,
+            "high_water_current": 240,
+            "high_water_history": 60,
+            "lock": 90,
+            "prepared_manifest": 180,
+            "quarantine": 60,
+            "terminal_manifest": 120
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "201": 60,
+              "404": 60
+            },
+            "block_manifest_page": {
+              "201": 60
+            },
+            "catalogue": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "compaction_checkpoint": {
+              "404": 120
+            },
+            "content": {
+              "201": 60
+            },
+            "head": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "high_water_current": {
+              "200": 60,
+              "201": 60,
+              "404": 120
+            },
+            "high_water_history": {
+              "201": 60
+            },
+            "lock": {
+              "200": 30,
+              "201": 60
+            },
+            "prepared_manifest": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "quarantine": {
+              "404": 60
+            },
+            "terminal_manifest": {
+              "201": 60,
+              "404": 60
+            }
+          },
+          "byOperation": {
+            "caller_put_data_file": 60,
+            "control_acquire_lock": 30,
+            "control_get_object": 840,
+            "control_put_bytes": 510,
+            "control_release_lock": 30
+          },
+          "byOperationAndObjectClass": {
+            "caller_put_data_file": {
+              "content": 60
+            },
+            "control_acquire_lock": {
+              "lock": 30
+            },
+            "control_get_object": {
+              "block_manifest": 60,
+              "catalogue": 120,
+              "compaction_checkpoint": 120,
+              "head": 120,
+              "high_water_current": 180,
+              "prepared_manifest": 120,
+              "quarantine": 60,
+              "terminal_manifest": 60
+            },
+            "control_put_bytes": {
+              "block_manifest": 60,
+              "block_manifest_page": 60,
+              "catalogue": 60,
+              "head": 60,
+              "high_water_current": 60,
+              "high_water_history": 60,
+              "lock": 30,
+              "prepared_manifest": 60,
+              "terminal_manifest": 60
+            },
+            "control_release_lock": {
+              "lock": 30
+            }
+          },
+          "byStatus": {
+            "200": 270,
+            "201": 600,
+            "404": 600
+          },
+          "clientRequestCount": 30,
+          "count": 1470,
+          "responseHeadersDuration": {
+            "count": 1470,
+            "maxDurationUs": 428718,
+            "p50DurationUs": 32893,
+            "p95DurationUs": 47555,
+            "p99DurationUs": 260683,
+            "totalDurationUs": 47755917
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "BlockManifest": 30,
+            "CommitManifest": 60
+          },
+          "count": 90,
+          "failures": 0,
+          "maxDurationUs": 83531,
+          "p50DurationUs": 36934,
+          "p95DurationUs": 56859,
+          "p99DurationUs": 83531,
+          "totalDurationUs": 3514307
+        }
+      },
+      "startedAt": "2026-08-19T21:11:27.859126Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:12:07.102382Z",
+      "id": "put_blob-16mib-c1",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 119229803.55,
+        "errorCount": 0,
+        "maxMs": 165.736,
+        "meanMs": 140.671,
+        "minMs": 98.526,
+        "operationsPerSecond": 7.107,
+        "p50Ms": 141.537,
+        "p90Ms": 148.916,
+        "p95Ms": 162.862,
+        "successCount": 30,
+        "wallSeconds": 4.221398
+      },
+      "operation": "put_blob",
+      "payload": "16mib",
+      "payloadBytes": 16777216,
+      "startedAt": "2026-08-19T21:12:02.880954Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:13:47.409686Z",
+      "id": "put_blob-16mib-c1",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 5524528.215,
+        "errorCount": 0,
+        "maxMs": 4913.308,
+        "meanMs": 3036.814,
+        "minMs": 2241.923,
+        "operationsPerSecond": 0.329,
+        "p50Ms": 2986.138,
+        "p90Ms": 3561.425,
+        "p95Ms": 4780.291,
+        "successCount": 30,
+        "wallSeconds": 91.105785
+      },
+      "operation": "put_blob",
+      "payload": "16mib",
+      "payloadBytes": 16777216,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 510,
+            "storage-b": 453,
+            "storage-c": 507
+          },
+          "byObjectClass": {
+            "block_manifest": 120,
+            "block_manifest_page": 60,
+            "catalogue": 180,
+            "compaction_checkpoint": 120,
+            "content": 60,
+            "head": 180,
+            "high_water_current": 240,
+            "high_water_history": 60,
+            "lock": 90,
+            "prepared_manifest": 180,
+            "quarantine": 60,
+            "terminal_manifest": 120
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "201": 60,
+              "404": 60
+            },
+            "block_manifest_page": {
+              "201": 60
+            },
+            "catalogue": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "compaction_checkpoint": {
+              "404": 120
+            },
+            "content": {
+              "201": 60
+            },
+            "head": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "high_water_current": {
+              "200": 60,
+              "201": 60,
+              "404": 120
+            },
+            "high_water_history": {
+              "201": 60
+            },
+            "lock": {
+              "200": 30,
+              "201": 60
+            },
+            "prepared_manifest": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "quarantine": {
+              "404": 60
+            },
+            "terminal_manifest": {
+              "201": 60,
+              "404": 60
+            }
+          },
+          "byOperation": {
+            "caller_put_data_file": 60,
+            "control_acquire_lock": 30,
+            "control_get_object": 840,
+            "control_put_bytes": 510,
+            "control_release_lock": 30
+          },
+          "byOperationAndObjectClass": {
+            "caller_put_data_file": {
+              "content": 60
+            },
+            "control_acquire_lock": {
+              "lock": 30
+            },
+            "control_get_object": {
+              "block_manifest": 60,
+              "catalogue": 120,
+              "compaction_checkpoint": 120,
+              "head": 120,
+              "high_water_current": 180,
+              "prepared_manifest": 120,
+              "quarantine": 60,
+              "terminal_manifest": 60
+            },
+            "control_put_bytes": {
+              "block_manifest": 60,
+              "block_manifest_page": 60,
+              "catalogue": 60,
+              "head": 60,
+              "high_water_current": 60,
+              "high_water_history": 60,
+              "lock": 30,
+              "prepared_manifest": 60,
+              "terminal_manifest": 60
+            },
+            "control_release_lock": {
+              "lock": 30
+            }
+          },
+          "byStatus": {
+            "200": 270,
+            "201": 600,
+            "404": 600
+          },
+          "clientRequestCount": 30,
+          "count": 1470,
+          "responseHeadersDuration": {
+            "count": 1470,
+            "maxDurationUs": 3558484,
+            "p50DurationUs": 33919,
+            "p95DurationUs": 51655,
+            "p99DurationUs": 1715948,
+            "totalDurationUs": 113030768
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "BlockManifest": 30,
+            "CommitManifest": 60
+          },
+          "count": 90,
+          "failures": 0,
+          "maxDurationUs": 138443,
+          "p50DurationUs": 47338,
+          "p95DurationUs": 72014,
+          "p99DurationUs": 138443,
+          "totalDurationUs": 4418413
+        }
+      },
+      "startedAt": "2026-08-19T21:12:16.303870Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:14:24.895873Z",
+      "id": "put_blob-16mib-c4",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 120061290.138,
+        "errorCount": 0,
+        "maxMs": 889.465,
+        "meanMs": 552.865,
+        "minMs": 319.973,
+        "operationsPerSecond": 7.156,
+        "p50Ms": 579.959,
+        "p90Ms": 829.513,
+        "p95Ms": 868.922,
+        "successCount": 30,
+        "wallSeconds": 4.192163
+      },
+      "operation": "put_blob",
+      "payload": "16mib",
+      "payloadBytes": 16777216,
+      "startedAt": "2026-08-19T21:14:20.703674Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:14:53.978440Z",
+      "id": "put_blob-16mib-c4",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 19938577.435,
+        "errorCount": 0,
+        "maxMs": 4608.401,
+        "meanMs": 3095.304,
+        "minMs": 2035.358,
+        "operationsPerSecond": 1.188,
+        "p50Ms": 3102.472,
+        "p90Ms": 3839.034,
+        "p95Ms": 4596.594,
+        "successCount": 30,
+        "wallSeconds": 25.24335
+      },
+      "operation": "put_blob",
+      "payload": "16mib",
+      "payloadBytes": 16777216,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 556,
+            "storage-b": 415,
+            "storage-c": 499
+          },
+          "byObjectClass": {
+            "block_manifest": 120,
+            "block_manifest_page": 60,
+            "catalogue": 180,
+            "compaction_checkpoint": 120,
+            "content": 60,
+            "head": 180,
+            "high_water_current": 240,
+            "high_water_history": 60,
+            "lock": 90,
+            "prepared_manifest": 180,
+            "quarantine": 60,
+            "terminal_manifest": 120
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "201": 60,
+              "404": 60
+            },
+            "block_manifest_page": {
+              "201": 60
+            },
+            "catalogue": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "compaction_checkpoint": {
+              "404": 120
+            },
+            "content": {
+              "201": 60
+            },
+            "head": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "high_water_current": {
+              "200": 60,
+              "201": 60,
+              "404": 120
+            },
+            "high_water_history": {
+              "201": 60
+            },
+            "lock": {
+              "200": 30,
+              "201": 60
+            },
+            "prepared_manifest": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "quarantine": {
+              "404": 60
+            },
+            "terminal_manifest": {
+              "201": 60,
+              "404": 60
+            }
+          },
+          "byOperation": {
+            "caller_put_data_file": 60,
+            "control_acquire_lock": 30,
+            "control_get_object": 840,
+            "control_put_bytes": 510,
+            "control_release_lock": 30
+          },
+          "byOperationAndObjectClass": {
+            "caller_put_data_file": {
+              "content": 60
+            },
+            "control_acquire_lock": {
+              "lock": 30
+            },
+            "control_get_object": {
+              "block_manifest": 60,
+              "catalogue": 120,
+              "compaction_checkpoint": 120,
+              "head": 120,
+              "high_water_current": 180,
+              "prepared_manifest": 120,
+              "quarantine": 60,
+              "terminal_manifest": 60
+            },
+            "control_put_bytes": {
+              "block_manifest": 60,
+              "block_manifest_page": 60,
+              "catalogue": 60,
+              "head": 60,
+              "high_water_current": 60,
+              "high_water_history": 60,
+              "lock": 30,
+              "prepared_manifest": 60,
+              "terminal_manifest": 60
+            },
+            "control_release_lock": {
+              "lock": 30
+            }
+          },
+          "byStatus": {
+            "200": 270,
+            "201": 600,
+            "404": 600
+          },
+          "clientRequestCount": 30,
+          "count": 1470,
+          "responseHeadersDuration": {
+            "count": 1470,
+            "maxDurationUs": 3036073,
+            "p50DurationUs": 33321,
+            "p95DurationUs": 54771,
+            "p99DurationUs": 1738558,
+            "totalDurationUs": 114094817
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "BlockManifest": 30,
+            "CommitManifest": 60
+          },
+          "count": 90,
+          "failures": 0,
+          "maxDurationUs": 70432,
+          "p50DurationUs": 45174,
+          "p95DurationUs": 64760,
+          "p99DurationUs": 70432,
+          "totalDurationUs": 4104622
+        }
+      },
+      "startedAt": "2026-08-19T21:14:28.735053Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:15:25.592952Z",
+      "id": "overwrite_blob-1kib-c1",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 103573.798,
+        "errorCount": 0,
+        "maxMs": 12.211,
+        "meanMs": 9.857,
+        "minMs": 8.647,
+        "operationsPerSecond": 101.146,
+        "p50Ms": 9.703,
+        "p90Ms": 10.689,
+        "p95Ms": 11.567,
+        "successCount": 30,
+        "wallSeconds": 0.2966
+      },
+      "operation": "overwrite_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "startedAt": "2026-08-19T21:15:25.296325Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:16:43.073888Z",
+      "id": "overwrite_blob-1kib-c1",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 879.637,
+        "errorCount": 0,
+        "maxMs": 1395.22,
+        "meanMs": 1163.976,
+        "minMs": 922.751,
+        "operationsPerSecond": 0.859,
+        "p50Ms": 1212.786,
+        "p90Ms": 1306.35,
+        "p95Ms": 1321.834,
+        "successCount": 30,
+        "wallSeconds": 34.923496
+      },
+      "operation": "overwrite_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 565,
+            "storage-b": 473,
+            "storage-c": 432
+          },
+          "byObjectClass": {
+            "block_manifest": 120,
+            "block_manifest_page": 60,
+            "catalogue": 180,
+            "compaction_checkpoint": 120,
+            "content": 60,
+            "head": 180,
+            "high_water_current": 240,
+            "high_water_history": 60,
+            "lock": 90,
+            "prepared_manifest": 180,
+            "quarantine": 60,
+            "terminal_manifest": 120
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "201": 60,
+              "404": 60
+            },
+            "block_manifest_page": {
+              "201": 60
+            },
+            "catalogue": {
+              "200": 120,
+              "201": 60
+            },
+            "compaction_checkpoint": {
+              "404": 120
+            },
+            "content": {
+              "201": 60
+            },
+            "head": {
+              "200": 120,
+              "201": 60
+            },
+            "high_water_current": {
+              "200": 180,
+              "201": 60
+            },
+            "high_water_history": {
+              "201": 60
+            },
+            "lock": {
+              "200": 30,
+              "201": 30,
+              "409": 30
+            },
+            "prepared_manifest": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "quarantine": {
+              "404": 60
+            },
+            "terminal_manifest": {
+              "201": 60,
+              "404": 60
+            }
+          },
+          "byOperation": {
+            "caller_put_data_file": 60,
+            "control_acquire_lock": 30,
+            "control_get_object": 840,
+            "control_put_bytes": 510,
+            "control_release_lock": 30
+          },
+          "byOperationAndObjectClass": {
+            "caller_put_data_file": {
+              "content": 60
+            },
+            "control_acquire_lock": {
+              "lock": 30
+            },
+            "control_get_object": {
+              "block_manifest": 60,
+              "catalogue": 120,
+              "compaction_checkpoint": 120,
+              "head": 120,
+              "high_water_current": 180,
+              "prepared_manifest": 120,
+              "quarantine": 60,
+              "terminal_manifest": 60
+            },
+            "control_put_bytes": {
+              "block_manifest": 60,
+              "block_manifest_page": 60,
+              "catalogue": 60,
+              "head": 60,
+              "high_water_current": 60,
+              "high_water_history": 60,
+              "lock": 30,
+              "prepared_manifest": 60,
+              "terminal_manifest": 60
+            },
+            "control_release_lock": {
+              "lock": 30
+            }
+          },
+          "byStatus": {
+            "200": 510,
+            "201": 570,
+            "404": 360,
+            "409": 30
+          },
+          "clientRequestCount": 30,
+          "count": 1470,
+          "responseHeadersDuration": {
+            "count": 1470,
+            "maxDurationUs": 85106,
+            "p50DurationUs": 33195,
+            "p95DurationUs": 46058,
+            "p99DurationUs": 50241,
+            "totalDurationUs": 39987380
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "BlockManifest": 30,
+            "CommitManifest": 60
+          },
+          "count": 90,
+          "failures": 0,
+          "maxDurationUs": 156249,
+          "p50DurationUs": 45536,
+          "p95DurationUs": 69586,
+          "p99DurationUs": 156249,
+          "totalDurationUs": 4287036
+        }
+      },
+      "startedAt": "2026-08-19T21:16:08.150361Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:17:15.435088Z",
+      "id": "overwrite_blob-1kib-c4",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 336868.091,
+        "errorCount": 0,
+        "maxMs": 18.498,
+        "meanMs": 11.053,
+        "minMs": 8.002,
+        "operationsPerSecond": 328.973,
+        "p50Ms": 10.103,
+        "p90Ms": 14.42,
+        "p95Ms": 15.271,
+        "successCount": 30,
+        "wallSeconds": 0.091193
+      },
+      "operation": "overwrite_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "startedAt": "2026-08-19T21:17:15.343864Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:18:05.213090Z",
+      "id": "overwrite_blob-1kib-c4",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 3317.803,
+        "errorCount": 0,
+        "maxMs": 1516.707,
+        "meanMs": 1163.978,
+        "minMs": 915.657,
+        "operationsPerSecond": 3.24,
+        "p50Ms": 1173.648,
+        "p90Ms": 1277.391,
+        "p95Ms": 1417.427,
+        "successCount": 30,
+        "wallSeconds": 9.259138
+      },
+      "operation": "overwrite_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 548,
+            "storage-b": 487,
+            "storage-c": 435
+          },
+          "byObjectClass": {
+            "block_manifest": 120,
+            "block_manifest_page": 60,
+            "catalogue": 180,
+            "compaction_checkpoint": 120,
+            "content": 60,
+            "head": 180,
+            "high_water_current": 240,
+            "high_water_history": 60,
+            "lock": 90,
+            "prepared_manifest": 180,
+            "quarantine": 60,
+            "terminal_manifest": 120
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "201": 60,
+              "404": 60
+            },
+            "block_manifest_page": {
+              "201": 60
+            },
+            "catalogue": {
+              "200": 120,
+              "201": 60
+            },
+            "compaction_checkpoint": {
+              "404": 120
+            },
+            "content": {
+              "201": 60
+            },
+            "head": {
+              "200": 120,
+              "201": 60
+            },
+            "high_water_current": {
+              "200": 180,
+              "201": 60
+            },
+            "high_water_history": {
+              "201": 60
+            },
+            "lock": {
+              "200": 30,
+              "201": 30,
+              "409": 30
+            },
+            "prepared_manifest": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "quarantine": {
+              "404": 60
+            },
+            "terminal_manifest": {
+              "201": 60,
+              "404": 60
+            }
+          },
+          "byOperation": {
+            "caller_put_data_file": 60,
+            "control_acquire_lock": 30,
+            "control_get_object": 840,
+            "control_put_bytes": 510,
+            "control_release_lock": 30
+          },
+          "byOperationAndObjectClass": {
+            "caller_put_data_file": {
+              "content": 60
+            },
+            "control_acquire_lock": {
+              "lock": 30
+            },
+            "control_get_object": {
+              "block_manifest": 60,
+              "catalogue": 120,
+              "compaction_checkpoint": 120,
+              "head": 120,
+              "high_water_current": 180,
+              "prepared_manifest": 120,
+              "quarantine": 60,
+              "terminal_manifest": 60
+            },
+            "control_put_bytes": {
+              "block_manifest": 60,
+              "block_manifest_page": 60,
+              "catalogue": 60,
+              "head": 60,
+              "high_water_current": 60,
+              "high_water_history": 60,
+              "lock": 30,
+              "prepared_manifest": 60,
+              "terminal_manifest": 60
+            },
+            "control_release_lock": {
+              "lock": 30
+            }
+          },
+          "byStatus": {
+            "200": 510,
+            "201": 570,
+            "404": 360,
+            "409": 30
+          },
+          "clientRequestCount": 30,
+          "count": 1470,
+          "responseHeadersDuration": {
+            "count": 1470,
+            "maxDurationUs": 91857,
+            "p50DurationUs": 33137,
+            "p95DurationUs": 46024,
+            "p99DurationUs": 49708,
+            "totalDurationUs": 40659816
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "BlockManifest": 30,
+            "CommitManifest": 60
+          },
+          "count": 90,
+          "failures": 0,
+          "maxDurationUs": 155284,
+          "p50DurationUs": 39720,
+          "p95DurationUs": 78645,
+          "p99DurationUs": 155284,
+          "totalDurationUs": 3992705
+        }
+      },
+      "startedAt": "2026-08-19T21:17:55.953912Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:18:37.350545Z",
+      "id": "overwrite_blob-1kib-c16",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 69890.08,
+        "errorCount": 0,
+        "maxMs": 390.017,
+        "meanMs": 159.009,
+        "minMs": 12.932,
+        "operationsPerSecond": 68.252,
+        "p50Ms": 40.137,
+        "p90Ms": 386.489,
+        "p95Ms": 389.48,
+        "successCount": 30,
+        "wallSeconds": 0.439547
+      },
+      "operation": "overwrite_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "startedAt": "2026-08-19T21:18:36.910941Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:19:20.006409Z",
+      "id": "overwrite_blob-1kib-c16",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 10282.751,
+        "errorCount": 0,
+        "maxMs": 1738.49,
+        "meanMs": 1323.89,
+        "minMs": 873.979,
+        "operationsPerSecond": 10.042,
+        "p50Ms": 1274.691,
+        "p90Ms": 1659.831,
+        "p95Ms": 1729.524,
+        "successCount": 30,
+        "wallSeconds": 2.987527
+      },
+      "operation": "overwrite_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 519,
+            "storage-b": 513,
+            "storage-c": 438
+          },
+          "byObjectClass": {
+            "block_manifest": 120,
+            "block_manifest_page": 60,
+            "catalogue": 180,
+            "compaction_checkpoint": 120,
+            "content": 60,
+            "head": 180,
+            "high_water_current": 240,
+            "high_water_history": 60,
+            "lock": 90,
+            "prepared_manifest": 180,
+            "quarantine": 60,
+            "terminal_manifest": 120
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "201": 60,
+              "404": 60
+            },
+            "block_manifest_page": {
+              "201": 60
+            },
+            "catalogue": {
+              "200": 120,
+              "201": 60
+            },
+            "compaction_checkpoint": {
+              "404": 120
+            },
+            "content": {
+              "201": 60
+            },
+            "head": {
+              "200": 120,
+              "201": 60
+            },
+            "high_water_current": {
+              "200": 180,
+              "201": 60
+            },
+            "high_water_history": {
+              "201": 60
+            },
+            "lock": {
+              "200": 30,
+              "201": 30,
+              "409": 30
+            },
+            "prepared_manifest": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "quarantine": {
+              "404": 60
+            },
+            "terminal_manifest": {
+              "201": 60,
+              "404": 60
+            }
+          },
+          "byOperation": {
+            "caller_put_data_file": 60,
+            "control_acquire_lock": 30,
+            "control_get_object": 840,
+            "control_put_bytes": 510,
+            "control_release_lock": 30
+          },
+          "byOperationAndObjectClass": {
+            "caller_put_data_file": {
+              "content": 60
+            },
+            "control_acquire_lock": {
+              "lock": 30
+            },
+            "control_get_object": {
+              "block_manifest": 60,
+              "catalogue": 120,
+              "compaction_checkpoint": 120,
+              "head": 120,
+              "high_water_current": 180,
+              "prepared_manifest": 120,
+              "quarantine": 60,
+              "terminal_manifest": 60
+            },
+            "control_put_bytes": {
+              "block_manifest": 60,
+              "block_manifest_page": 60,
+              "catalogue": 60,
+              "head": 60,
+              "high_water_current": 60,
+              "high_water_history": 60,
+              "lock": 30,
+              "prepared_manifest": 60,
+              "terminal_manifest": 60
+            },
+            "control_release_lock": {
+              "lock": 30
+            }
+          },
+          "byStatus": {
+            "200": 510,
+            "201": 570,
+            "404": 360,
+            "409": 30
+          },
+          "clientRequestCount": 30,
+          "count": 1470,
+          "responseHeadersDuration": {
+            "count": 1470,
+            "maxDurationUs": 160125,
+            "p50DurationUs": 33273,
+            "p95DurationUs": 47189,
+            "p99DurationUs": 58874,
+            "totalDurationUs": 41572354
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "BlockManifest": 30,
+            "CommitManifest": 60
+          },
+          "count": 90,
+          "failures": 0,
+          "maxDurationUs": 238787,
+          "p50DurationUs": 35927,
+          "p95DurationUs": 55188,
+          "p99DurationUs": 238787,
+          "totalDurationUs": 3673782
+        }
+      },
+      "startedAt": "2026-08-19T21:19:17.018816Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:19:52.431257Z",
+      "id": "get_blob-1kib-c1",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 165826.958,
+        "errorCount": 0,
+        "maxMs": 18.213,
+        "meanMs": 6.151,
+        "minMs": 5.095,
+        "operationsPerSecond": 161.94,
+        "p50Ms": 5.985,
+        "p90Ms": 6.832,
+        "p95Ms": 7.002,
+        "successCount": 240,
+        "wallSeconds": 1.482027
+      },
+      "operation": "get_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "startedAt": "2026-08-19T21:19:50.949204Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:20:29.931757Z",
+      "id": "get_blob-1kib-c1",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 6850.601,
+        "errorCount": 0,
+        "maxMs": 234.142,
+        "meanMs": 149.435,
+        "minMs": 136.725,
+        "operationsPerSecond": 6.69,
+        "p50Ms": 146.421,
+        "p90Ms": 158.683,
+        "p95Ms": 174.459,
+        "successCount": 240,
+        "wallSeconds": 35.874226
+      },
+      "operation": "get_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 1680,
+            "storage-c": 1920
+          },
+          "byObjectClass": {
+            "block_manifest": 480,
+            "block_manifest_page": 480,
+            "compaction_checkpoint": 480,
+            "content": 720,
+            "head": 480,
+            "high_water_current": 480,
+            "quarantine": 480
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "200": 480
+            },
+            "block_manifest_page": {
+              "200": 480
+            },
+            "compaction_checkpoint": {
+              "404": 480
+            },
+            "content": {
+              "200": 480,
+              "206": 240
+            },
+            "head": {
+              "200": 480
+            },
+            "high_water_current": {
+              "200": 480
+            },
+            "quarantine": {
+              "404": 480
+            }
+          },
+          "byOperation": {
+            "caller_get_data_range": 240,
+            "caller_head_data_object": 480,
+            "control_get_object": 2880
+          },
+          "byOperationAndObjectClass": {
+            "caller_get_data_range": {
+              "content": 240
+            },
+            "caller_head_data_object": {
+              "content": 480
+            },
+            "control_get_object": {
+              "block_manifest": 480,
+              "block_manifest_page": 480,
+              "compaction_checkpoint": 480,
+              "head": 480,
+              "high_water_current": 480,
+              "quarantine": 480
+            }
+          },
+          "byStatus": {
+            "200": 2400,
+            "206": 240,
+            "404": 960
+          },
+          "clientRequestCount": 240,
+          "count": 3600,
+          "responseHeadersDuration": {
+            "count": 3600,
+            "maxDurationUs": 122389,
+            "p50DurationUs": 31115,
+            "p95DurationUs": 35361,
+            "p99DurationUs": 41291,
+            "totalDurationUs": 76303581
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {},
+          "count": 0,
+          "failures": 0,
+          "maxDurationUs": 0,
+          "p50DurationUs": 0,
+          "p95DurationUs": 0,
+          "p99DurationUs": 0,
+          "totalDurationUs": 0
+        }
+      },
+      "startedAt": "2026-08-19T21:19:54.057492Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:20:31.388634Z",
+      "id": "get_blob-1kib-c4",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 451533.487,
+        "errorCount": 0,
+        "maxMs": 15.464,
+        "meanMs": 8.984,
+        "minMs": 6.273,
+        "operationsPerSecond": 440.951,
+        "p50Ms": 8.744,
+        "p90Ms": 11.026,
+        "p95Ms": 11.702,
+        "successCount": 240,
+        "wallSeconds": 0.544279
+      },
+      "operation": "get_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "startedAt": "2026-08-19T21:20:30.844319Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:20:44.320129Z",
+      "id": "get_blob-1kib-c4",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 21714.305,
+        "errorCount": 0,
+        "maxMs": 463.406,
+        "meanMs": 187.026,
+        "minMs": 170.429,
+        "operationsPerSecond": 21.205,
+        "p50Ms": 179.955,
+        "p90Ms": 205.326,
+        "p95Ms": 229.617,
+        "successCount": 240,
+        "wallSeconds": 11.317884
+      },
+      "operation": "get_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 1680,
+            "storage-b": 1920
+          },
+          "byObjectClass": {
+            "block_manifest": 480,
+            "block_manifest_page": 480,
+            "compaction_checkpoint": 480,
+            "content": 720,
+            "head": 480,
+            "high_water_current": 480,
+            "quarantine": 480
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "200": 480
+            },
+            "block_manifest_page": {
+              "200": 480
+            },
+            "compaction_checkpoint": {
+              "404": 480
+            },
+            "content": {
+              "200": 480,
+              "206": 240
+            },
+            "head": {
+              "200": 480
+            },
+            "high_water_current": {
+              "200": 480
+            },
+            "quarantine": {
+              "404": 480
+            }
+          },
+          "byOperation": {
+            "caller_get_data_range": 240,
+            "caller_head_data_object": 480,
+            "control_get_object": 2880
+          },
+          "byOperationAndObjectClass": {
+            "caller_get_data_range": {
+              "content": 240
+            },
+            "caller_head_data_object": {
+              "content": 480
+            },
+            "control_get_object": {
+              "block_manifest": 480,
+              "block_manifest_page": 480,
+              "compaction_checkpoint": 480,
+              "head": 480,
+              "high_water_current": 480,
+              "quarantine": 480
+            }
+          },
+          "byStatus": {
+            "200": 2400,
+            "206": 240,
+            "404": 960
+          },
+          "clientRequestCount": 240,
+          "count": 3600,
+          "responseHeadersDuration": {
+            "count": 3600,
+            "maxDurationUs": 322711,
+            "p50DurationUs": 39469,
+            "p95DurationUs": 44583,
+            "p99DurationUs": 72449,
+            "totalDurationUs": 93714805
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {},
+          "count": 0,
+          "failures": 0,
+          "maxDurationUs": 0,
+          "p50DurationUs": 0,
+          "p95DurationUs": 0,
+          "p99DurationUs": 0,
+          "totalDurationUs": 0
+        }
+      },
+      "startedAt": "2026-08-19T21:20:33.002199Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:20:46.106201Z",
+      "id": "get_blob-1kib-c16",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 376495.711,
+        "errorCount": 0,
+        "maxMs": 302.998,
+        "meanMs": 40.36,
+        "minMs": 7.911,
+        "operationsPerSecond": 367.672,
+        "p50Ms": 34.007,
+        "p90Ms": 63.288,
+        "p95Ms": 75.696,
+        "successCount": 240,
+        "wallSeconds": 0.652756
+      },
+      "operation": "get_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "startedAt": "2026-08-19T21:20:45.453384Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:20:50.522204Z",
+      "id": "get_blob-1kib-c16",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 83817.774,
+        "errorCount": 0,
+        "maxMs": 437.987,
+        "meanMs": 186.982,
+        "minMs": 169.211,
+        "operationsPerSecond": 81.853,
+        "p50Ms": 178.518,
+        "p90Ms": 193.989,
+        "p95Ms": 207.773,
+        "successCount": 240,
+        "wallSeconds": 2.932075
+      },
+      "operation": "get_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 1680,
+            "storage-b": 1920
+          },
+          "byObjectClass": {
+            "block_manifest": 480,
+            "block_manifest_page": 480,
+            "compaction_checkpoint": 480,
+            "content": 720,
+            "head": 480,
+            "high_water_current": 480,
+            "quarantine": 480
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "200": 480
+            },
+            "block_manifest_page": {
+              "200": 480
+            },
+            "compaction_checkpoint": {
+              "404": 480
+            },
+            "content": {
+              "200": 480,
+              "206": 240
+            },
+            "head": {
+              "200": 480
+            },
+            "high_water_current": {
+              "200": 480
+            },
+            "quarantine": {
+              "404": 480
+            }
+          },
+          "byOperation": {
+            "caller_get_data_range": 240,
+            "caller_head_data_object": 480,
+            "control_get_object": 2880
+          },
+          "byOperationAndObjectClass": {
+            "caller_get_data_range": {
+              "content": 240
+            },
+            "caller_head_data_object": {
+              "content": 480
+            },
+            "control_get_object": {
+              "block_manifest": 480,
+              "block_manifest_page": 480,
+              "compaction_checkpoint": 480,
+              "head": 480,
+              "high_water_current": 480,
+              "quarantine": 480
+            }
+          },
+          "byStatus": {
+            "200": 2400,
+            "206": 240,
+            "404": 960
+          },
+          "clientRequestCount": 240,
+          "count": 3600,
+          "responseHeadersDuration": {
+            "count": 3600,
+            "maxDurationUs": 76768,
+            "p50DurationUs": 38858,
+            "p95DurationUs": 43612,
+            "p99DurationUs": 50281,
+            "totalDurationUs": 90740408
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {},
+          "count": 0,
+          "failures": 0,
+          "maxDurationUs": 0,
+          "p50DurationUs": 0,
+          "p95DurationUs": 0,
+          "p99DurationUs": 0,
+          "totalDurationUs": 0
+        }
+      },
+      "startedAt": "2026-08-19T21:20:47.590059Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:20:55.588051Z",
+      "id": "get_blob-1mib-c1",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 64172402.949,
+        "errorCount": 0,
+        "maxMs": 60.433,
+        "meanMs": 16.31,
+        "minMs": 13.882,
+        "operationsPerSecond": 61.2,
+        "p50Ms": 15.356,
+        "p90Ms": 17.126,
+        "p95Ms": 21.746,
+        "successCount": 240,
+        "wallSeconds": 3.921596
+      },
+      "operation": "get_blob",
+      "payload": "1mib",
+      "payloadBytes": 1048576,
+      "startedAt": "2026-08-19T21:20:51.666421Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:21:57.449272Z",
+      "id": "get_blob-1mib-c1",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 4249878.618,
+        "errorCount": 0,
+        "maxMs": 430.606,
+        "meanMs": 246.692,
+        "minMs": 191.027,
+        "operationsPerSecond": 4.053,
+        "p50Ms": 230.093,
+        "p90Ms": 317.811,
+        "p95Ms": 373.621,
+        "successCount": 240,
+        "wallSeconds": 59.215395
+      },
+      "operation": "get_blob",
+      "payload": "1mib",
+      "payloadBytes": 1048576,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 1680,
+            "storage-b": 1920
+          },
+          "byObjectClass": {
+            "block_manifest": 480,
+            "block_manifest_page": 480,
+            "compaction_checkpoint": 480,
+            "content": 720,
+            "head": 480,
+            "high_water_current": 480,
+            "quarantine": 480
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "200": 480
+            },
+            "block_manifest_page": {
+              "200": 480
+            },
+            "compaction_checkpoint": {
+              "404": 480
+            },
+            "content": {
+              "200": 480,
+              "206": 240
+            },
+            "head": {
+              "200": 480
+            },
+            "high_water_current": {
+              "200": 480
+            },
+            "quarantine": {
+              "404": 480
+            }
+          },
+          "byOperation": {
+            "caller_get_data_range": 240,
+            "caller_head_data_object": 480,
+            "control_get_object": 2880
+          },
+          "byOperationAndObjectClass": {
+            "caller_get_data_range": {
+              "content": 240
+            },
+            "caller_head_data_object": {
+              "content": 480
+            },
+            "control_get_object": {
+              "block_manifest": 480,
+              "block_manifest_page": 480,
+              "compaction_checkpoint": 480,
+              "head": 480,
+              "high_water_current": 480,
+              "quarantine": 480
+            }
+          },
+          "byStatus": {
+            "200": 2400,
+            "206": 240,
+            "404": 960
+          },
+          "clientRequestCount": 240,
+          "count": 3600,
+          "responseHeadersDuration": {
+            "count": 3600,
+            "maxDurationUs": 93976,
+            "p50DurationUs": 39471,
+            "p95DurationUs": 45789,
+            "p99DurationUs": 48266,
+            "totalDurationUs": 92601537
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {},
+          "count": 0,
+          "failures": 0,
+          "maxDurationUs": 0,
+          "p50DurationUs": 0,
+          "p95DurationUs": 0,
+          "p99DurationUs": 0,
+          "totalDurationUs": 0
+        }
+      },
+      "startedAt": "2026-08-19T21:20:58.233838Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:22:00.644156Z",
+      "id": "get_blob-1mib-c4",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 128804759.57,
+        "errorCount": 0,
+        "maxMs": 43.589,
+        "meanMs": 32.389,
+        "minMs": 16.91,
+        "operationsPerSecond": 122.838,
+        "p50Ms": 32.613,
+        "p90Ms": 38.364,
+        "p95Ms": 39.907,
+        "successCount": 240,
+        "wallSeconds": 1.953796
+      },
+      "operation": "get_blob",
+      "payload": "1mib",
+      "payloadBytes": 1048576,
+      "startedAt": "2026-08-19T21:21:58.690319Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:22:19.772746Z",
+      "id": "get_blob-1mib-c4",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 14817528.719,
+        "errorCount": 0,
+        "maxMs": 1215.576,
+        "meanMs": 280.985,
+        "minMs": 184.175,
+        "operationsPerSecond": 14.131,
+        "p50Ms": 240.163,
+        "p90Ms": 420.469,
+        "p95Ms": 449.497,
+        "successCount": 240,
+        "wallSeconds": 16.98382
+      },
+      "operation": "get_blob",
+      "payload": "1mib",
+      "payloadBytes": 1048576,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-b": 1680,
+            "storage-c": 1920
+          },
+          "byObjectClass": {
+            "block_manifest": 480,
+            "block_manifest_page": 480,
+            "compaction_checkpoint": 480,
+            "content": 720,
+            "head": 480,
+            "high_water_current": 480,
+            "quarantine": 480
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "200": 480
+            },
+            "block_manifest_page": {
+              "200": 480
+            },
+            "compaction_checkpoint": {
+              "404": 480
+            },
+            "content": {
+              "200": 480,
+              "206": 240
+            },
+            "head": {
+              "200": 480
+            },
+            "high_water_current": {
+              "200": 480
+            },
+            "quarantine": {
+              "404": 480
+            }
+          },
+          "byOperation": {
+            "caller_get_data_range": 240,
+            "caller_head_data_object": 480,
+            "control_get_object": 2880
+          },
+          "byOperationAndObjectClass": {
+            "caller_get_data_range": {
+              "content": 240
+            },
+            "caller_head_data_object": {
+              "content": 480
+            },
+            "control_get_object": {
+              "block_manifest": 480,
+              "block_manifest_page": 480,
+              "compaction_checkpoint": 480,
+              "head": 480,
+              "high_water_current": 480,
+              "quarantine": 480
+            }
+          },
+          "byStatus": {
+            "200": 2400,
+            "206": 240,
+            "404": 960
+          },
+          "clientRequestCount": 240,
+          "count": 3600,
+          "responseHeadersDuration": {
+            "count": 3600,
+            "maxDurationUs": 140152,
+            "p50DurationUs": 38669,
+            "p95DurationUs": 44883,
+            "p99DurationUs": 75579,
+            "totalDurationUs": 138338399
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {},
+          "count": 0,
+          "failures": 0,
+          "maxDurationUs": 0,
+          "p50DurationUs": 0,
+          "p95DurationUs": 0,
+          "p99DurationUs": 0,
+          "totalDurationUs": 0
+        }
+      },
+      "startedAt": "2026-08-19T21:22:02.788882Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:22:23.034005Z",
+      "id": "get_blob-1mib-c16",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 117135130.189,
+        "errorCount": 0,
+        "maxMs": 618.474,
+        "meanMs": 138.959,
+        "minMs": 50.797,
+        "operationsPerSecond": 111.709,
+        "p50Ms": 125.564,
+        "p90Ms": 180.895,
+        "p95Ms": 207.174,
+        "successCount": 240,
+        "wallSeconds": 2.148444
+      },
+      "operation": "get_blob",
+      "payload": "1mib",
+      "payloadBytes": 1048576,
+      "startedAt": "2026-08-19T21:22:20.885497Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:22:29.142069Z",
+      "id": "get_blob-1mib-c16",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 59212043.642,
+        "errorCount": 0,
+        "maxMs": 865.305,
+        "meanMs": 272.247,
+        "minMs": 185.294,
+        "operationsPerSecond": 56.469,
+        "p50Ms": 228.554,
+        "p90Ms": 412.682,
+        "p95Ms": 540.287,
+        "successCount": 240,
+        "wallSeconds": 4.250119
+      },
+      "operation": "get_blob",
+      "payload": "1mib",
+      "payloadBytes": 1048576,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-b": 1680,
+            "storage-c": 1920
+          },
+          "byObjectClass": {
+            "block_manifest": 480,
+            "block_manifest_page": 480,
+            "compaction_checkpoint": 480,
+            "content": 720,
+            "head": 480,
+            "high_water_current": 480,
+            "quarantine": 480
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "200": 480
+            },
+            "block_manifest_page": {
+              "200": 480
+            },
+            "compaction_checkpoint": {
+              "404": 480
+            },
+            "content": {
+              "200": 480,
+              "206": 240
+            },
+            "head": {
+              "200": 480
+            },
+            "high_water_current": {
+              "200": 480
+            },
+            "quarantine": {
+              "404": 480
+            }
+          },
+          "byOperation": {
+            "caller_get_data_range": 240,
+            "caller_head_data_object": 480,
+            "control_get_object": 2880
+          },
+          "byOperationAndObjectClass": {
+            "caller_get_data_range": {
+              "content": 240
+            },
+            "caller_head_data_object": {
+              "content": 480
+            },
+            "control_get_object": {
+              "block_manifest": 480,
+              "block_manifest_page": 480,
+              "compaction_checkpoint": 480,
+              "head": 480,
+              "high_water_current": 480,
+              "quarantine": 480
+            }
+          },
+          "byStatus": {
+            "200": 2400,
+            "206": 240,
+            "404": 960
+          },
+          "clientRequestCount": 240,
+          "count": 3600,
+          "responseHeadersDuration": {
+            "count": 3600,
+            "maxDurationUs": 83548,
+            "p50DurationUs": 37934,
+            "p95DurationUs": 44333,
+            "p99DurationUs": 61292,
+            "totalDurationUs": 134915777
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {},
+          "count": 0,
+          "failures": 0,
+          "maxDurationUs": 0,
+          "p50DurationUs": 0,
+          "p95DurationUs": 0,
+          "p99DurationUs": 0,
+          "totalDurationUs": 0
+        }
+      },
+      "startedAt": "2026-08-19T21:22:24.891870Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:22:57.905437Z",
+      "id": "get_blob-16mib-c1",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 148375640.111,
+        "errorCount": 0,
+        "maxMs": 272.779,
+        "meanMs": 113.027,
+        "minMs": 104.659,
+        "operationsPerSecond": 8.844,
+        "p50Ms": 110.105,
+        "p90Ms": 119.837,
+        "p95Ms": 124.695,
+        "successCount": 240,
+        "wallSeconds": 27.137418
+      },
+      "operation": "get_blob",
+      "payload": "16mib",
+      "payloadBytes": 16777216,
+      "startedAt": "2026-08-19T21:22:30.767980Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:26:13.281326Z",
+      "id": "get_blob-16mib-c1",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 21199515.849,
+        "errorCount": 0,
+        "maxMs": 1556.313,
+        "meanMs": 791.35,
+        "minMs": 571.168,
+        "operationsPerSecond": 1.264,
+        "p50Ms": 813.857,
+        "p90Ms": 1051.85,
+        "p95Ms": 1097.1,
+        "successCount": 240,
+        "wallSeconds": 189.935085
+      },
+      "operation": "get_blob",
+      "payload": "16mib",
+      "payloadBytes": 16777216,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-b": 2640,
+            "storage-c": 1680
+          },
+          "byObjectClass": {
+            "block_manifest": 480,
+            "block_manifest_page": 480,
+            "compaction_checkpoint": 480,
+            "content": 1440,
+            "head": 480,
+            "high_water_current": 480,
+            "quarantine": 480
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "200": 480
+            },
+            "block_manifest_page": {
+              "200": 480
+            },
+            "compaction_checkpoint": {
+              "404": 480
+            },
+            "content": {
+              "200": 480,
+              "206": 960
+            },
+            "head": {
+              "200": 480
+            },
+            "high_water_current": {
+              "200": 480
+            },
+            "quarantine": {
+              "404": 480
+            }
+          },
+          "byOperation": {
+            "caller_get_data_range": 960,
+            "caller_head_data_object": 480,
+            "control_get_object": 2880
+          },
+          "byOperationAndObjectClass": {
+            "caller_get_data_range": {
+              "content": 960
+            },
+            "caller_head_data_object": {
+              "content": 480
+            },
+            "control_get_object": {
+              "block_manifest": 480,
+              "block_manifest_page": 480,
+              "compaction_checkpoint": 480,
+              "head": 480,
+              "high_water_current": 480,
+              "quarantine": 480
+            }
+          },
+          "byStatus": {
+            "200": 2400,
+            "206": 960,
+            "404": 960
+          },
+          "clientRequestCount": 240,
+          "count": 4320,
+          "responseHeadersDuration": {
+            "count": 4320,
+            "maxDurationUs": 96786,
+            "p50DurationUs": 40871,
+            "p95DurationUs": 55143,
+            "p99DurationUs": 58881,
+            "totalDurationUs": 178069019
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {},
+          "count": 0,
+          "failures": 0,
+          "maxDurationUs": 0,
+          "p50DurationUs": 0,
+          "p95DurationUs": 0,
+          "p99DurationUs": 0,
+          "totalDurationUs": 0
+        }
+      },
+      "startedAt": "2026-08-19T21:23:03.346201Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:26:37.825699Z",
+      "id": "get_blob-16mib-c4",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 176029797.213,
+        "errorCount": 0,
+        "maxMs": 508.336,
+        "meanMs": 376.435,
+        "minMs": 258.025,
+        "operationsPerSecond": 10.492,
+        "p50Ms": 377.012,
+        "p90Ms": 399.379,
+        "p95Ms": 408.749,
+        "successCount": 240,
+        "wallSeconds": 22.874149
+      },
+      "operation": "get_blob",
+      "payload": "16mib",
+      "payloadBytes": 16777216,
+      "startedAt": "2026-08-19T21:26:14.951502Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:27:40.822567Z",
+      "id": "get_blob-16mib-c4",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 76656145.917,
+        "errorCount": 0,
+        "maxMs": 1530.521,
+        "meanMs": 871.821,
+        "minMs": 580.034,
+        "operationsPerSecond": 4.569,
+        "p50Ms": 848.273,
+        "p90Ms": 1131.307,
+        "p95Ms": 1205.005,
+        "successCount": 240,
+        "wallSeconds": 52.527189
+      },
+      "operation": "get_blob",
+      "payload": "16mib",
+      "payloadBytes": 16777216,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-b": 2640,
+            "storage-c": 1680
+          },
+          "byObjectClass": {
+            "block_manifest": 480,
+            "block_manifest_page": 480,
+            "compaction_checkpoint": 480,
+            "content": 1440,
+            "head": 480,
+            "high_water_current": 480,
+            "quarantine": 480
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "200": 480
+            },
+            "block_manifest_page": {
+              "200": 480
+            },
+            "compaction_checkpoint": {
+              "404": 480
+            },
+            "content": {
+              "200": 480,
+              "206": 960
+            },
+            "head": {
+              "200": 480
+            },
+            "high_water_current": {
+              "200": 480
+            },
+            "quarantine": {
+              "404": 480
+            }
+          },
+          "byOperation": {
+            "caller_get_data_range": 960,
+            "caller_head_data_object": 480,
+            "control_get_object": 2880
+          },
+          "byOperationAndObjectClass": {
+            "caller_get_data_range": {
+              "content": 960
+            },
+            "caller_head_data_object": {
+              "content": 480
+            },
+            "control_get_object": {
+              "block_manifest": 480,
+              "block_manifest_page": 480,
+              "compaction_checkpoint": 480,
+              "head": 480,
+              "high_water_current": 480,
+              "quarantine": 480
+            }
+          },
+          "byStatus": {
+            "200": 2400,
+            "206": 960,
+            "404": 960
+          },
+          "clientRequestCount": 240,
+          "count": 4320,
+          "responseHeadersDuration": {
+            "count": 4320,
+            "maxDurationUs": 102977,
+            "p50DurationUs": 40826,
+            "p95DurationUs": 55008,
+            "p99DurationUs": 62953,
+            "totalDurationUs": 178860835
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {},
+          "count": 0,
+          "failures": 0,
+          "maxDurationUs": 0,
+          "p50DurationUs": 0,
+          "p95DurationUs": 0,
+          "p99DurationUs": 0,
+          "totalDurationUs": 0
+        }
+      },
+      "startedAt": "2026-08-19T21:26:48.295329Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:28:07.741468Z",
+      "id": "get_blob-16mib-c16",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 158607667.719,
+        "errorCount": 0,
+        "maxMs": 2613.887,
+        "meanMs": 1665.267,
+        "minMs": 839.349,
+        "operationsPerSecond": 9.454,
+        "p50Ms": 1637.201,
+        "p90Ms": 1883.313,
+        "p95Ms": 2110.449,
+        "successCount": 240,
+        "wallSeconds": 25.386741
+      },
+      "operation": "get_blob",
+      "payload": "16mib",
+      "payloadBytes": 16777216,
+      "startedAt": "2026-08-19T21:27:42.354652Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:28:33.171933Z",
+      "id": "get_blob-16mib-c16",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 182163967.699,
+        "errorCount": 0,
+        "maxMs": 2636.311,
+        "meanMs": 1435.838,
+        "minMs": 715.43,
+        "operationsPerSecond": 10.858,
+        "p50Ms": 1402.588,
+        "p90Ms": 1662.414,
+        "p95Ms": 1860.697,
+        "successCount": 240,
+        "wallSeconds": 22.103887
+      },
+      "operation": "get_blob",
+      "payload": "16mib",
+      "payloadBytes": 16777216,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 1680,
+            "storage-c": 2640
+          },
+          "byObjectClass": {
+            "block_manifest": 480,
+            "block_manifest_page": 480,
+            "compaction_checkpoint": 480,
+            "content": 1440,
+            "head": 480,
+            "high_water_current": 480,
+            "quarantine": 480
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "200": 480
+            },
+            "block_manifest_page": {
+              "200": 480
+            },
+            "compaction_checkpoint": {
+              "404": 480
+            },
+            "content": {
+              "200": 480,
+              "206": 960
+            },
+            "head": {
+              "200": 480
+            },
+            "high_water_current": {
+              "200": 480
+            },
+            "quarantine": {
+              "404": 480
+            }
+          },
+          "byOperation": {
+            "caller_get_data_range": 960,
+            "caller_head_data_object": 480,
+            "control_get_object": 2880
+          },
+          "byOperationAndObjectClass": {
+            "caller_get_data_range": {
+              "content": 960
+            },
+            "caller_head_data_object": {
+              "content": 480
+            },
+            "control_get_object": {
+              "block_manifest": 480,
+              "block_manifest_page": 480,
+              "compaction_checkpoint": 480,
+              "head": 480,
+              "high_water_current": 480,
+              "quarantine": 480
+            }
+          },
+          "byStatus": {
+            "200": 2400,
+            "206": 960,
+            "404": 960
+          },
+          "clientRequestCount": 240,
+          "count": 4320,
+          "responseHeadersDuration": {
+            "count": 4320,
+            "maxDurationUs": 112531,
+            "p50DurationUs": 32113,
+            "p95DurationUs": 46628,
+            "p99DurationUs": 60011,
+            "totalDurationUs": 114332311
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {},
+          "count": 0,
+          "failures": 0,
+          "maxDurationUs": 0,
+          "p50DurationUs": 0,
+          "p95DurationUs": 0,
+          "p99DurationUs": 0,
+          "totalDurationUs": 0
+        }
+      },
+      "startedAt": "2026-08-19T21:28:11.067967Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:28:38.157093Z",
+      "id": "get_range-16mib-c1",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 64407718.057,
+        "errorCount": 0,
+        "maxMs": 37.017,
+        "meanMs": 16.251,
+        "minMs": 14.019,
+        "operationsPerSecond": 61.424,
+        "p50Ms": 15.742,
+        "p90Ms": 17.826,
+        "p95Ms": 20.015,
+        "successCount": 240,
+        "wallSeconds": 3.907268
+      },
+      "operation": "get_range",
+      "payload": "16mib",
+      "payloadBytes": 16777216,
+      "startedAt": "2026-08-19T21:28:34.249791Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:29:48.968455Z",
+      "id": "get_range-16mib-c1",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 3739826.306,
+        "errorCount": 0,
+        "maxMs": 440.066,
+        "meanMs": 280.343,
+        "minMs": 238.788,
+        "operationsPerSecond": 3.567,
+        "p50Ms": 276.782,
+        "p90Ms": 301.544,
+        "p95Ms": 322.728,
+        "successCount": 240,
+        "wallSeconds": 67.291425
+      },
+      "operation": "get_range",
+      "payload": "16mib",
+      "payloadBytes": 16777216,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-b": 1920,
+            "storage-c": 1680
+          },
+          "byObjectClass": {
+            "block_manifest": 480,
+            "block_manifest_page": 480,
+            "compaction_checkpoint": 480,
+            "content": 720,
+            "head": 480,
+            "high_water_current": 480,
+            "quarantine": 480
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "200": 480
+            },
+            "block_manifest_page": {
+              "200": 480
+            },
+            "compaction_checkpoint": {
+              "404": 480
+            },
+            "content": {
+              "200": 480,
+              "206": 240
+            },
+            "head": {
+              "200": 480
+            },
+            "high_water_current": {
+              "200": 480
+            },
+            "quarantine": {
+              "404": 480
+            }
+          },
+          "byOperation": {
+            "caller_get_data_range": 240,
+            "caller_head_data_object": 480,
+            "control_get_object": 2880
+          },
+          "byOperationAndObjectClass": {
+            "caller_get_data_range": {
+              "content": 240
+            },
+            "caller_head_data_object": {
+              "content": 480
+            },
+            "control_get_object": {
+              "block_manifest": 480,
+              "block_manifest_page": 480,
+              "compaction_checkpoint": 480,
+              "head": 480,
+              "high_water_current": 480,
+              "quarantine": 480
+            }
+          },
+          "byStatus": {
+            "200": 2400,
+            "206": 240,
+            "404": 960
+          },
+          "clientRequestCount": 240,
+          "count": 3600,
+          "responseHeadersDuration": {
+            "count": 3600,
+            "maxDurationUs": 68193,
+            "p50DurationUs": 40025,
+            "p95DurationUs": 52215,
+            "p99DurationUs": 55023,
+            "totalDurationUs": 138232187
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {},
+          "count": 0,
+          "failures": 0,
+          "maxDurationUs": 0,
+          "p50DurationUs": 0,
+          "p95DurationUs": 0,
+          "p99DurationUs": 0,
+          "totalDurationUs": 0
+        }
+      },
+      "startedAt": "2026-08-19T21:28:41.676993Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:29:52.215612Z",
+      "id": "get_range-16mib-c4",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 124379135.649,
+        "errorCount": 0,
+        "maxMs": 58.298,
+        "meanMs": 33.202,
+        "minMs": 22.61,
+        "operationsPerSecond": 118.617,
+        "p50Ms": 32.754,
+        "p90Ms": 39.232,
+        "p95Ms": 40.095,
+        "successCount": 240,
+        "wallSeconds": 2.023316
+      },
+      "operation": "get_range",
+      "payload": "16mib",
+      "payloadBytes": 16777216,
+      "startedAt": "2026-08-19T21:29:50.192256Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:30:06.522240Z",
+      "id": "get_range-16mib-c4",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 21635295.459,
+        "errorCount": 0,
+        "maxMs": 354.371,
+        "meanMs": 192.168,
+        "minMs": 150.744,
+        "operationsPerSecond": 20.633,
+        "p50Ms": 188.229,
+        "p90Ms": 218.028,
+        "p95Ms": 231.87,
+        "successCount": 240,
+        "wallSeconds": 11.631837
+      },
+      "operation": "get_range",
+      "payload": "16mib",
+      "payloadBytes": 16777216,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 1920,
+            "storage-c": 1680
+          },
+          "byObjectClass": {
+            "block_manifest": 480,
+            "block_manifest_page": 480,
+            "compaction_checkpoint": 480,
+            "content": 720,
+            "head": 480,
+            "high_water_current": 480,
+            "quarantine": 480
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "200": 480
+            },
+            "block_manifest_page": {
+              "200": 480
+            },
+            "compaction_checkpoint": {
+              "404": 480
+            },
+            "content": {
+              "200": 480,
+              "206": 240
+            },
+            "head": {
+              "200": 480
+            },
+            "high_water_current": {
+              "200": 480
+            },
+            "quarantine": {
+              "404": 480
+            }
+          },
+          "byOperation": {
+            "caller_get_data_range": 240,
+            "caller_head_data_object": 480,
+            "control_get_object": 2880
+          },
+          "byOperationAndObjectClass": {
+            "caller_get_data_range": {
+              "content": 240
+            },
+            "caller_head_data_object": {
+              "content": 480
+            },
+            "control_get_object": {
+              "block_manifest": 480,
+              "block_manifest_page": 480,
+              "compaction_checkpoint": 480,
+              "head": 480,
+              "high_water_current": 480,
+              "quarantine": 480
+            }
+          },
+          "byStatus": {
+            "200": 2400,
+            "206": 240,
+            "404": 960
+          },
+          "clientRequestCount": 240,
+          "count": 3600,
+          "responseHeadersDuration": {
+            "count": 3600,
+            "maxDurationUs": 135831,
+            "p50DurationUs": 20197,
+            "p95DurationUs": 35315,
+            "p99DurationUs": 39233,
+            "totalDurationUs": 72867334
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {},
+          "count": 0,
+          "failures": 0,
+          "maxDurationUs": 0,
+          "p50DurationUs": 0,
+          "p95DurationUs": 0,
+          "p99DurationUs": 0,
+          "totalDurationUs": 0
+        }
+      },
+      "startedAt": "2026-08-19T21:29:54.890361Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:30:09.705681Z",
+      "id": "get_range-16mib-c16",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 115505428.67,
+        "errorCount": 0,
+        "maxMs": 713.378,
+        "meanMs": 139.747,
+        "minMs": 44.9,
+        "operationsPerSecond": 110.155,
+        "p50Ms": 125.119,
+        "p90Ms": 190.619,
+        "p95Ms": 215.86,
+        "successCount": 240,
+        "wallSeconds": 2.178757
+      },
+      "operation": "get_range",
+      "payload": "16mib",
+      "payloadBytes": 16777216,
+      "startedAt": "2026-08-19T21:30:07.526855Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:30:26.473667Z",
+      "id": "get_range-16mib-c16",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 45623593.467,
+        "errorCount": 0,
+        "maxMs": 2748.015,
+        "meanMs": 354.794,
+        "minMs": 229.086,
+        "operationsPerSecond": 43.51,
+        "p50Ms": 281.911,
+        "p90Ms": 525.956,
+        "p95Ms": 674.889,
+        "successCount": 240,
+        "wallSeconds": 5.515967
+      },
+      "operation": "get_range",
+      "payload": "16mib",
+      "payloadBytes": 16777216,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-b": 1680,
+            "storage-c": 1920
+          },
+          "byObjectClass": {
+            "block_manifest": 480,
+            "block_manifest_page": 480,
+            "compaction_checkpoint": 480,
+            "content": 720,
+            "head": 480,
+            "high_water_current": 480,
+            "quarantine": 480
+          },
+          "byObjectClassAndStatus": {
+            "block_manifest": {
+              "200": 480
+            },
+            "block_manifest_page": {
+              "200": 480
+            },
+            "compaction_checkpoint": {
+              "404": 480
+            },
+            "content": {
+              "200": 480,
+              "206": 240
+            },
+            "head": {
+              "200": 480
+            },
+            "high_water_current": {
+              "200": 480
+            },
+            "quarantine": {
+              "404": 480
+            }
+          },
+          "byOperation": {
+            "caller_get_data_range": 240,
+            "caller_head_data_object": 480,
+            "control_get_object": 2880
+          },
+          "byOperationAndObjectClass": {
+            "caller_get_data_range": {
+              "content": 240
+            },
+            "caller_head_data_object": {
+              "content": 480
+            },
+            "control_get_object": {
+              "block_manifest": 480,
+              "block_manifest_page": 480,
+              "compaction_checkpoint": 480,
+              "head": 480,
+              "high_water_current": 480,
+              "quarantine": 480
+            }
+          },
+          "byStatus": {
+            "200": 2400,
+            "206": 240,
+            "404": 960
+          },
+          "clientRequestCount": 240,
+          "count": 3600,
+          "responseHeadersDuration": {
+            "count": 3600,
+            "maxDurationUs": 163828,
+            "p50DurationUs": 39948,
+            "p95DurationUs": 46840,
+            "p99DurationUs": 74801,
+            "totalDurationUs": 139577652
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {},
+          "count": 0,
+          "failures": 0,
+          "maxDurationUs": 0,
+          "p50DurationUs": 0,
+          "p95DurationUs": 0,
+          "p99DurationUs": 0,
+          "totalDurationUs": 0
+        }
+      },
+      "startedAt": "2026-08-19T21:30:20.957620Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:30:29.057854Z",
+      "id": "head_blob-1mib-c1",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 11.757,
+        "meanMs": 6.053,
+        "minMs": 4.95,
+        "operationsPerSecond": 164.524,
+        "p50Ms": 5.915,
+        "p90Ms": 6.759,
+        "p95Ms": 6.949,
+        "successCount": 240,
+        "wallSeconds": 1.458754
+      },
+      "operation": "head_blob",
+      "payload": "1mib",
+      "payloadBytes": 1048576,
+      "startedAt": "2026-08-19T21:30:27.599069Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:30:53.603380Z",
+      "id": "head_blob-1mib-c1",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 133.886,
+        "meanMs": 94.964,
+        "minMs": 89.212,
+        "operationsPerSecond": 10.526,
+        "p50Ms": 93.616,
+        "p90Ms": 98.29,
+        "p95Ms": 103.036,
+        "successCount": 240,
+        "wallSeconds": 22.800416
+      },
+      "operation": "head_blob",
+      "payload": "1mib",
+      "payloadBytes": 1048576,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 1200,
+            "storage-b": 1200
+          },
+          "byObjectClass": {
+            "compaction_checkpoint": 480,
+            "content": 480,
+            "head": 480,
+            "high_water_current": 480,
+            "quarantine": 480
+          },
+          "byObjectClassAndStatus": {
+            "compaction_checkpoint": {
+              "404": 480
+            },
+            "content": {
+              "200": 480
+            },
+            "head": {
+              "200": 480
+            },
+            "high_water_current": {
+              "200": 480
+            },
+            "quarantine": {
+              "404": 480
+            }
+          },
+          "byOperation": {
+            "caller_head_data_object": 480,
+            "control_get_object": 1920
+          },
+          "byOperationAndObjectClass": {
+            "caller_head_data_object": {
+              "content": 480
+            },
+            "control_get_object": {
+              "compaction_checkpoint": 480,
+              "head": 480,
+              "high_water_current": 480,
+              "quarantine": 480
+            }
+          },
+          "byStatus": {
+            "200": 1440,
+            "404": 960
+          },
+          "clientRequestCount": 240,
+          "count": 2400,
+          "responseHeadersDuration": {
+            "count": 2400,
+            "maxDurationUs": 83523,
+            "p50DurationUs": 39017,
+            "p95DurationUs": 43339,
+            "p99DurationUs": 47132,
+            "totalDurationUs": 58295590
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {},
+          "count": 0,
+          "failures": 0,
+          "maxDurationUs": 0,
+          "p50DurationUs": 0,
+          "p95DurationUs": 0,
+          "p99DurationUs": 0,
+          "totalDurationUs": 0
+        }
+      },
+      "startedAt": "2026-08-19T21:30:30.802931Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:30:55.315752Z",
+      "id": "head_blob-1mib-c16",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 389.235,
+        "meanMs": 40.466,
+        "minMs": 7.304,
+        "operationsPerSecond": 360.284,
+        "p50Ms": 30.334,
+        "p90Ms": 65.0,
+        "p95Ms": 78.523,
+        "successCount": 240,
+        "wallSeconds": 0.666141
+      },
+      "operation": "head_blob",
+      "payload": "1mib",
+      "payloadBytes": 1048576,
+      "startedAt": "2026-08-19T21:30:54.649551Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:30:58.121978Z",
+      "id": "head_blob-1mib-c16",
+      "iterations": 240,
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 376.614,
+        "meanMs": 90.963,
+        "minMs": 70.94,
+        "operationsPerSecond": 170.203,
+        "p50Ms": 77.907,
+        "p90Ms": 102.903,
+        "p95Ms": 127.735,
+        "successCount": 240,
+        "wallSeconds": 1.410083
+      },
+      "operation": "head_blob",
+      "payload": "1mib",
+      "payloadBytes": 1048576,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 1200,
+            "storage-c": 1200
+          },
+          "byObjectClass": {
+            "compaction_checkpoint": 480,
+            "content": 480,
+            "head": 480,
+            "high_water_current": 480,
+            "quarantine": 480
+          },
+          "byObjectClassAndStatus": {
+            "compaction_checkpoint": {
+              "404": 480
+            },
+            "content": {
+              "200": 480
+            },
+            "head": {
+              "200": 480
+            },
+            "high_water_current": {
+              "200": 480
+            },
+            "quarantine": {
+              "404": 480
+            }
+          },
+          "byOperation": {
+            "caller_head_data_object": 480,
+            "control_get_object": 1920
+          },
+          "byOperationAndObjectClass": {
+            "caller_head_data_object": {
+              "content": 480
+            },
+            "control_get_object": {
+              "compaction_checkpoint": 480,
+              "head": 480,
+              "high_water_current": 480,
+              "quarantine": 480
+            }
+          },
+          "byStatus": {
+            "200": 1440,
+            "404": 960
+          },
+          "clientRequestCount": 240,
+          "count": 2400,
+          "responseHeadersDuration": {
+            "count": 2400,
+            "maxDurationUs": 64316,
+            "p50DurationUs": 29778,
+            "p95DurationUs": 34998,
+            "p99DurationUs": 39373,
+            "totalDurationUs": 47544985
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {},
+          "count": 0,
+          "failures": 0,
+          "maxDurationUs": 0,
+          "p50DurationUs": 0,
+          "p95DurationUs": 0,
+          "p99DurationUs": 0,
+          "totalDurationUs": 0
+        }
+      },
+      "startedAt": "2026-08-19T21:30:56.711829Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:30:59.638979Z",
+      "id": "delete_blob-1kib-c1",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 31.215,
+        "meanMs": 10.347,
+        "minMs": 8.517,
+        "operationsPerSecond": 96.209,
+        "p50Ms": 9.521,
+        "p90Ms": 10.561,
+        "p95Ms": 11.923,
+        "successCount": 30,
+        "wallSeconds": 0.31182
+      },
+      "operation": "delete_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "startedAt": "2026-08-19T21:30:59.327127Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 1,
+      "finishedAt": "2026-08-19T21:32:10.581710Z",
+      "id": "delete_blob-1kib-c1",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 1088.078,
+        "meanMs": 962.616,
+        "minMs": 748.501,
+        "operationsPerSecond": 1.039,
+        "p50Ms": 1010.348,
+        "p90Ms": 1070.308,
+        "p95Ms": 1086.978,
+        "successCount": 30,
+        "wallSeconds": 28.879835
+      },
+      "operation": "delete_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 421,
+            "storage-b": 387,
+            "storage-c": 482
+          },
+          "byObjectClass": {
+            "catalogue": 180,
+            "compaction_checkpoint": 120,
+            "head": 180,
+            "high_water_current": 240,
+            "high_water_history": 60,
+            "lock": 90,
+            "logical_blob": 60,
+            "prepared_manifest": 180,
+            "quarantine": 60,
+            "terminal_manifest": 120
+          },
+          "byObjectClassAndStatus": {
+            "catalogue": {
+              "200": 120,
+              "201": 60
+            },
+            "compaction_checkpoint": {
+              "404": 120
+            },
+            "head": {
+              "200": 120,
+              "201": 60
+            },
+            "high_water_current": {
+              "200": 180,
+              "201": 60
+            },
+            "high_water_history": {
+              "201": 60
+            },
+            "lock": {
+              "200": 30,
+              "201": 30,
+              "409": 30
+            },
+            "logical_blob": {
+              "404": 60
+            },
+            "prepared_manifest": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "quarantine": {
+              "404": 60
+            },
+            "terminal_manifest": {
+              "201": 60,
+              "404": 60
+            }
+          },
+          "byOperation": {
+            "authorize_blob_delete": 60,
+            "control_acquire_lock": 30,
+            "control_get_object": 780,
+            "control_put_bytes": 390,
+            "control_release_lock": 30
+          },
+          "byOperationAndObjectClass": {
+            "authorize_blob_delete": {
+              "logical_blob": 60
+            },
+            "control_acquire_lock": {
+              "lock": 30
+            },
+            "control_get_object": {
+              "catalogue": 120,
+              "compaction_checkpoint": 120,
+              "head": 120,
+              "high_water_current": 180,
+              "prepared_manifest": 120,
+              "quarantine": 60,
+              "terminal_manifest": 60
+            },
+            "control_put_bytes": {
+              "catalogue": 60,
+              "head": 60,
+              "high_water_current": 60,
+              "high_water_history": 60,
+              "lock": 30,
+              "prepared_manifest": 60,
+              "terminal_manifest": 60
+            },
+            "control_release_lock": {
+              "lock": 30
+            }
+          },
+          "byStatus": {
+            "200": 510,
+            "201": 390,
+            "404": 360,
+            "409": 30
+          },
+          "clientRequestCount": 30,
+          "count": 1290,
+          "responseHeadersDuration": {
+            "count": 1290,
+            "maxDurationUs": 97937,
+            "p50DurationUs": 33651,
+            "p95DurationUs": 46292,
+            "p99DurationUs": 49050,
+            "totalDurationUs": 37085050
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "CommitManifest": 60
+          },
+          "count": 60,
+          "failures": 0,
+          "maxDurationUs": 155413,
+          "p50DurationUs": 41182,
+          "p95DurationUs": 66689,
+          "p99DurationUs": 155413,
+          "totalDurationUs": 2751357
+        }
+      },
+      "startedAt": "2026-08-19T21:31:41.701845Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:32:19.658555Z",
+      "id": "delete_blob-1kib-c4",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 22.414,
+        "meanMs": 11.89,
+        "minMs": 8.936,
+        "operationsPerSecond": 321.183,
+        "p50Ms": 11.137,
+        "p90Ms": 14.52,
+        "p95Ms": 18.428,
+        "successCount": 30,
+        "wallSeconds": 0.093405
+      },
+      "operation": "delete_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "startedAt": "2026-08-19T21:32:19.565118Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 4,
+      "finishedAt": "2026-08-19T21:33:09.276104Z",
+      "id": "delete_blob-1kib-c4",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 1155.412,
+        "meanMs": 1000.858,
+        "minMs": 779.118,
+        "operationsPerSecond": 3.792,
+        "p50Ms": 1005.615,
+        "p90Ms": 1098.486,
+        "p95Ms": 1130.319,
+        "successCount": 30,
+        "wallSeconds": 7.911288
+      },
+      "operation": "delete_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 361,
+            "storage-b": 493,
+            "storage-c": 436
+          },
+          "byObjectClass": {
+            "catalogue": 180,
+            "compaction_checkpoint": 120,
+            "head": 180,
+            "high_water_current": 240,
+            "high_water_history": 60,
+            "lock": 90,
+            "logical_blob": 60,
+            "prepared_manifest": 180,
+            "quarantine": 60,
+            "terminal_manifest": 120
+          },
+          "byObjectClassAndStatus": {
+            "catalogue": {
+              "200": 120,
+              "201": 60
+            },
+            "compaction_checkpoint": {
+              "404": 120
+            },
+            "head": {
+              "200": 120,
+              "201": 60
+            },
+            "high_water_current": {
+              "200": 180,
+              "201": 60
+            },
+            "high_water_history": {
+              "201": 60
+            },
+            "lock": {
+              "200": 30,
+              "201": 30,
+              "409": 30
+            },
+            "logical_blob": {
+              "404": 60
+            },
+            "prepared_manifest": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "quarantine": {
+              "404": 60
+            },
+            "terminal_manifest": {
+              "201": 60,
+              "404": 60
+            }
+          },
+          "byOperation": {
+            "authorize_blob_delete": 60,
+            "control_acquire_lock": 30,
+            "control_get_object": 780,
+            "control_put_bytes": 390,
+            "control_release_lock": 30
+          },
+          "byOperationAndObjectClass": {
+            "authorize_blob_delete": {
+              "logical_blob": 60
+            },
+            "control_acquire_lock": {
+              "lock": 30
+            },
+            "control_get_object": {
+              "catalogue": 120,
+              "compaction_checkpoint": 120,
+              "head": 120,
+              "high_water_current": 180,
+              "prepared_manifest": 120,
+              "quarantine": 60,
+              "terminal_manifest": 60
+            },
+            "control_put_bytes": {
+              "catalogue": 60,
+              "head": 60,
+              "high_water_current": 60,
+              "high_water_history": 60,
+              "lock": 30,
+              "prepared_manifest": 60,
+              "terminal_manifest": 60
+            },
+            "control_release_lock": {
+              "lock": 30
+            }
+          },
+          "byStatus": {
+            "200": 510,
+            "201": 390,
+            "404": 360,
+            "409": 30
+          },
+          "clientRequestCount": 30,
+          "count": 1290,
+          "responseHeadersDuration": {
+            "count": 1290,
+            "maxDurationUs": 101829,
+            "p50DurationUs": 34966,
+            "p95DurationUs": 46715,
+            "p99DurationUs": 57832,
+            "totalDurationUs": 39615478
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "CommitManifest": 60
+          },
+          "count": 60,
+          "failures": 0,
+          "maxDurationUs": 120009,
+          "p50DurationUs": 39573,
+          "p95DurationUs": 70877,
+          "p99DurationUs": 120009,
+          "totalDurationUs": 2662567
+        }
+      },
+      "startedAt": "2026-08-19T21:33:01.364753Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:33:18.542402Z",
+      "id": "delete_blob-1kib-c16",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 166.093,
+        "meanMs": 39.632,
+        "minMs": 11.898,
+        "operationsPerSecond": 165.553,
+        "p50Ms": 20.505,
+        "p90Ms": 158.956,
+        "p95Ms": 162.204,
+        "successCount": 30,
+        "wallSeconds": 0.18121
+      },
+      "operation": "delete_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "startedAt": "2026-08-19T21:33:18.361135Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "warmupIterations": 3
+    },
+    {
+      "concurrency": 16,
+      "finishedAt": "2026-08-19T21:34:02.165524Z",
+      "id": "delete_blob-1kib-c16",
+      "iterations": 30,
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 1537.253,
+        "meanMs": 1125.888,
+        "minMs": 785.849,
+        "operationsPerSecond": 11.642,
+        "p50Ms": 1031.068,
+        "p90Ms": 1476.506,
+        "p95Ms": 1536.344,
+        "successCount": 30,
+        "wallSeconds": 2.576869
+      },
+      "operation": "delete_blob",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 470,
+            "storage-b": 450,
+            "storage-c": 370
+          },
+          "byObjectClass": {
+            "catalogue": 180,
+            "compaction_checkpoint": 120,
+            "head": 180,
+            "high_water_current": 240,
+            "high_water_history": 60,
+            "lock": 90,
+            "logical_blob": 60,
+            "prepared_manifest": 180,
+            "quarantine": 60,
+            "terminal_manifest": 120
+          },
+          "byObjectClassAndStatus": {
+            "catalogue": {
+              "200": 120,
+              "201": 60
+            },
+            "compaction_checkpoint": {
+              "404": 120
+            },
+            "head": {
+              "200": 120,
+              "201": 60
+            },
+            "high_water_current": {
+              "200": 180,
+              "201": 60
+            },
+            "high_water_history": {
+              "201": 60
+            },
+            "lock": {
+              "200": 30,
+              "201": 30,
+              "409": 30
+            },
+            "logical_blob": {
+              "404": 60
+            },
+            "prepared_manifest": {
+              "200": 60,
+              "201": 60,
+              "404": 60
+            },
+            "quarantine": {
+              "404": 60
+            },
+            "terminal_manifest": {
+              "201": 60,
+              "404": 60
+            }
+          },
+          "byOperation": {
+            "authorize_blob_delete": 60,
+            "control_acquire_lock": 30,
+            "control_get_object": 780,
+            "control_put_bytes": 390,
+            "control_release_lock": 30
+          },
+          "byOperationAndObjectClass": {
+            "authorize_blob_delete": {
+              "logical_blob": 60
+            },
+            "control_acquire_lock": {
+              "lock": 30
+            },
+            "control_get_object": {
+              "catalogue": 120,
+              "compaction_checkpoint": 120,
+              "head": 120,
+              "high_water_current": 180,
+              "prepared_manifest": 120,
+              "quarantine": 60,
+              "terminal_manifest": 60
+            },
+            "control_put_bytes": {
+              "catalogue": 60,
+              "head": 60,
+              "high_water_current": 60,
+              "high_water_history": 60,
+              "lock": 30,
+              "prepared_manifest": 60,
+              "terminal_manifest": 60
+            },
+            "control_release_lock": {
+              "lock": 30
+            }
+          },
+          "byStatus": {
+            "200": 510,
+            "201": 390,
+            "404": 360,
+            "409": 30
+          },
+          "clientRequestCount": 30,
+          "count": 1290,
+          "responseHeadersDuration": {
+            "count": 1290,
+            "maxDurationUs": 85063,
+            "p50DurationUs": 33739,
+            "p95DurationUs": 45976,
+            "p99DurationUs": 57761,
+            "totalDurationUs": 36177308
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "CommitManifest": 60
+          },
+          "count": 60,
+          "failures": 0,
+          "maxDurationUs": 83530,
+          "p50DurationUs": 38014,
+          "p95DurationUs": 70426,
+          "p99DurationUs": 83530,
+          "totalDurationUs": 2543906
+        }
+      },
+      "startedAt": "2026-08-19T21:33:59.588591Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "warmupIterations": 3
+    }
+  ],
+  "comparisons": [
+    {
+      "case": "put_blob-1kib-c1",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 138.2542,
+        "p90Ms": 150.149,
+        "p95Ms": 152.6824
+      },
+      "gatewayToDirectThroughputRatio": 0.0073
+    },
+    {
+      "case": "put_blob-1kib-c4",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 116.361,
+        "p90Ms": 81.9036,
+        "p95Ms": 67.1824
+      },
+      "gatewayToDirectThroughputRatio": 0.0131
+    },
+    {
+      "case": "put_blob-1kib-c16",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 24.7706,
+        "p90Ms": 4.1682,
+        "p95Ms": 4.1673
+      },
+      "gatewayToDirectThroughputRatio": 0.1487
+    },
+    {
+      "case": "put_blob-1mib-c1",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 68.7792,
+        "p90Ms": 56.0533,
+        "p95Ms": 53.3713
+      },
+      "gatewayToDirectThroughputRatio": 0.0157
+    },
+    {
+      "case": "put_blob-1mib-c4",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 62.2359,
+        "p90Ms": 61.5233,
+        "p95Ms": 59.8551
+      },
+      "gatewayToDirectThroughputRatio": 0.016
+    },
+    {
+      "case": "put_blob-1mib-c16",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 36.3146,
+        "p90Ms": 34.5013,
+        "p95Ms": 9.6923
+      },
+      "gatewayToDirectThroughputRatio": 0.0766
+    },
+    {
+      "case": "put_blob-16mib-c1",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 21.0979,
+        "p90Ms": 23.9157,
+        "p95Ms": 29.3518
+      },
+      "gatewayToDirectThroughputRatio": 0.0463
+    },
+    {
+      "case": "put_blob-16mib-c4",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 5.3495,
+        "p90Ms": 4.6281,
+        "p95Ms": 5.29
+      },
+      "gatewayToDirectThroughputRatio": 0.166
+    },
+    {
+      "case": "overwrite_blob-1kib-c1",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 124.9908,
+        "p90Ms": 122.2144,
+        "p95Ms": 114.2763
+      },
+      "gatewayToDirectThroughputRatio": 0.0085
+    },
+    {
+      "case": "overwrite_blob-1kib-c4",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 116.1683,
+        "p90Ms": 88.5847,
+        "p95Ms": 92.8182
+      },
+      "gatewayToDirectThroughputRatio": 0.0098
+    },
+    {
+      "case": "overwrite_blob-1kib-c16",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 31.7585,
+        "p90Ms": 4.2946,
+        "p95Ms": 4.4406
+      },
+      "gatewayToDirectThroughputRatio": 0.1471
+    },
+    {
+      "case": "get_blob-1kib-c1",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 24.4647,
+        "p90Ms": 23.2264,
+        "p95Ms": 24.9156
+      },
+      "gatewayToDirectThroughputRatio": 0.0413
+    },
+    {
+      "case": "get_blob-1kib-c4",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 20.5804,
+        "p90Ms": 18.622,
+        "p95Ms": 19.622
+      },
+      "gatewayToDirectThroughputRatio": 0.0481
+    },
+    {
+      "case": "get_blob-1kib-c16",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 5.2494,
+        "p90Ms": 3.0652,
+        "p95Ms": 2.7448
+      },
+      "gatewayToDirectThroughputRatio": 0.2226
+    },
+    {
+      "case": "get_blob-1mib-c1",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 14.9839,
+        "p90Ms": 18.5572,
+        "p95Ms": 17.1811
+      },
+      "gatewayToDirectThroughputRatio": 0.0662
+    },
+    {
+      "case": "get_blob-1mib-c4",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 7.364,
+        "p90Ms": 10.96,
+        "p95Ms": 11.2636
+      },
+      "gatewayToDirectThroughputRatio": 0.115
+    },
+    {
+      "case": "get_blob-1mib-c16",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 1.8202,
+        "p90Ms": 2.2813,
+        "p95Ms": 2.6079
+      },
+      "gatewayToDirectThroughputRatio": 0.5055
+    },
+    {
+      "case": "get_blob-16mib-c1",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 7.3916,
+        "p90Ms": 8.7773,
+        "p95Ms": 8.7983
+      },
+      "gatewayToDirectThroughputRatio": 0.1429
+    },
+    {
+      "case": "get_blob-16mib-c4",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 2.25,
+        "p90Ms": 2.8327,
+        "p95Ms": 2.948
+      },
+      "gatewayToDirectThroughputRatio": 0.4355
+    },
+    {
+      "case": "get_blob-16mib-c16",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 0.8567,
+        "p90Ms": 0.8827,
+        "p95Ms": 0.8817
+      },
+      "gatewayToDirectThroughputRatio": 1.1485
+    },
+    {
+      "case": "get_range-16mib-c1",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 17.5824,
+        "p90Ms": 16.916,
+        "p95Ms": 16.1243
+      },
+      "gatewayToDirectThroughputRatio": 0.0581
+    },
+    {
+      "case": "get_range-16mib-c4",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 5.7467,
+        "p90Ms": 5.5574,
+        "p95Ms": 5.783
+      },
+      "gatewayToDirectThroughputRatio": 0.1739
+    },
+    {
+      "case": "get_range-16mib-c16",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 2.2531,
+        "p90Ms": 2.7592,
+        "p95Ms": 3.1265
+      },
+      "gatewayToDirectThroughputRatio": 0.395
+    },
+    {
+      "case": "head_blob-1mib-c1",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 15.8269,
+        "p90Ms": 14.5421,
+        "p95Ms": 14.8275
+      },
+      "gatewayToDirectThroughputRatio": 0.064
+    },
+    {
+      "case": "head_blob-1mib-c16",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 2.5683,
+        "p90Ms": 1.5831,
+        "p95Ms": 1.6267
+      },
+      "gatewayToDirectThroughputRatio": 0.4724
+    },
+    {
+      "case": "delete_blob-1kib-c1",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 106.1178,
+        "p90Ms": 101.3453,
+        "p95Ms": 91.1665
+      },
+      "gatewayToDirectThroughputRatio": 0.0108
+    },
+    {
+      "case": "delete_blob-1kib-c4",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 90.295,
+        "p90Ms": 75.6533,
+        "p95Ms": 61.337
+      },
+      "gatewayToDirectThroughputRatio": 0.0118
+    },
+    {
+      "case": "delete_blob-1kib-c16",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 50.2837,
+        "p90Ms": 9.2888,
+        "p95Ms": 9.4717
+      },
+      "gatewayToDirectThroughputRatio": 0.0703
+    }
+  ],
+  "contract": {
+    "id": "live-v3",
+    "nonRegression": {
+      "backendRequestsPerOperation": "blocking",
+      "p50Latency": "signal",
+      "p95Latency": "informational"
+    },
+    "schemaVersion": 3,
+    "sha256": "0d6a3d2aaed25e25a155859b657489c3452799b8cead8665e2224f00174273d4"
+  },
+  "generatedAt": "2026-08-19T21:41:40Z",
+  "historicalComparison": {
+    "apiVersion": "performance.overmesh.io/comparison/v1",
+    "contractSha256": "0d6a3d2aaed25e25a155859b657489c3452799b8cead8665e2224f00174273d4",
+    "current": {
+      "commit": "0b1d265e1a70e18d820f964c6dc4279e344d3ea0",
+      "runId": "20260819T210647Z"
+    },
+    "nonRegression": {
+      "blockingRegressions": [],
+      "gateStatus": "baseline-established",
+      "policy": {
+        "backendRequestsPerOperation": "blocking",
+        "p50Latency": "signal",
+        "p95Latency": "informational"
+      }
+    },
+    "status": "baseline-established"
+  },
+  "redaction": {
+    "algorithm": "sha256-truncated-16",
+    "apiVersion": "evidence.overmesh.io/redaction/v1",
+    "canonicalForm": "redacted-before-signing",
+    "rawBundleSha256": "53f1069f9b6f1e96290388932981a3c67b4edf08d77e084a1645c8e9494676c4"
+  },
+  "toolVersions": {
+    "azureCli": "2.76.0",
+    "azureIdentity": "1.17.1",
+    "azureStorageBlob": "12.22.0",
+    "logAnalyticsExtension": "1.0.0b1",
+    "python": "3.12.3"
+  }
+}

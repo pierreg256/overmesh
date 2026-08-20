@@ -165,11 +165,16 @@ def main() -> None:
     )
     if not isinstance(bundle, dict):
         raise SystemExit("the raw bundle must contain a JSON object")
-    gates = bundle.setdefault("gates", {})
-    if not isinstance(gates, dict):
+    gates = bundle.get("gates")
+    if gates is not None and not isinstance(gates, dict):
         raise SystemExit("the raw bundle gates field must contain an object")
+    if arguments.source and gates is None:
+        gates = {}
+        bundle["gates"] = gates
 
     for gate, source in arguments.source:
+        if not isinstance(gates, dict):
+            raise SystemExit("evidence sources require a gates object")
         destination = output / source.name
         redact_file(source, destination)
         gate_evidence = gates.setdefault(gate, {})

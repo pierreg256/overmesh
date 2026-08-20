@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use async_trait::async_trait;
@@ -19,8 +19,9 @@ use p256::pkcs8::DecodePublicKey;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use tracing::info;
 
-use crate::identity::CallerIdentity;
+use crate::{identity::CallerIdentity, request_context::current_client_request_fingerprint};
 
 const BLOCK_MANIFEST_DOMAIN: &[u8] = b"overmesh:block-manifest:v1\0";
 const COMMIT_MANIFEST_DOMAIN: &[u8] = b"overmesh:commit-manifest:v1\0";
@@ -540,6 +541,7 @@ impl ManifestSigner for KeyVaultManifestSigner {
             key_version: Some(self.key_version.clone()),
             ..Default::default()
         };
+        let started = Instant::now();
         let result = self
             .client
             .sign(
@@ -549,7 +551,19 @@ impl ManifestSigner for KeyVaultManifestSigner {
                 })?,
                 Some(options),
             )
-            .await
+            .await;
+        let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let client_request_fingerprint = current_client_request_fingerprint();
+        info!(
+            event = "overmesh_manifest_sign",
+            client_request_fingerprint = %client_request_fingerprint,
+            provider = "azure_key_vault",
+            domain = ?domain,
+            duration_us,
+            success = result.is_ok(),
+            "Overmesh manifest signing request completed"
+        );
+        let result = result
             .map_err(|error| ManifestError::Signing(error.to_string()))?
             .into_model()
             .map_err(|error| ManifestError::Signing(error.to_string()))?;

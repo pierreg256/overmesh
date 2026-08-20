@@ -1,4 +1,8 @@
-use std::{path::Path, sync::Arc, time::SystemTime};
+use std::{
+    path::Path,
+    sync::Arc,
+    time::{Instant, SystemTime},
+};
 
 use async_trait::async_trait;
 use http::StatusCode;
@@ -11,11 +15,13 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::fs::File;
 use tokio_util::io::ReaderStream;
+use tracing::info;
 use uuid::Uuid;
 
 use crate::app::SUPPORTED_STORAGE_VERSION;
 use crate::{
     identity::{CallerToken, ControlToken},
+    request_context::current_client_request_fingerprint,
     resource::{LogicalBlobId, encode_blob_path, encode_path_component},
 };
 
@@ -350,6 +356,43 @@ impl HttpBlobBackend {
             .header("x-ms-date", httpdate::fmt_http_date(SystemTime::now()))
     }
 
+    async fn send(
+        &self,
+        operation: &'static str,
+        object_class: &'static str,
+        request: RequestBuilder,
+    ) -> Result<reqwest::Response, BackendError> {
+        let started = Instant::now();
+        let response = request.send().await;
+        let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+        let client_request_fingerprint = current_client_request_fingerprint();
+        match &response {
+            Ok(response) => info!(
+                event = "overmesh_backend_request",
+                client_request_fingerprint = %client_request_fingerprint,
+                backend_id = %self.id,
+                operation,
+                object_class,
+                status = response.status().as_u16(),
+                response_headers_duration_us = duration_us,
+                transport_success = true,
+                "Overmesh backend request completed"
+            ),
+            Err(_) => info!(
+                event = "overmesh_backend_request",
+                client_request_fingerprint = %client_request_fingerprint,
+                backend_id = %self.id,
+                operation,
+                object_class,
+                status = 0_u16,
+                response_headers_duration_us = duration_us,
+                transport_success = false,
+                "Overmesh backend request failed"
+            ),
+        }
+        response.map_err(BackendError::Transport)
+    }
+
     async fn finish_put(response: reqwest::Response) -> Result<PutResult, BackendError> {
         if response.status().is_success() {
             return Ok(PutResult {
@@ -374,13 +417,13 @@ impl ReplicaBackend for HttpBlobBackend {
         &self,
         control_token: &ControlToken,
     ) -> Result<(), BackendError> {
+        let request = self.authorized(
+            self.client
+                .head(format!("{}?restype=container", self.container_url())),
+            control_token.expose(),
+        );
         let response = self
-            .authorized(
-                self.client
-                    .head(format!("{}?restype=container", self.container_url())),
-                control_token.expose(),
-            )
-            .send()
+            .send("validate_control_container", "system_container", request)
             .await?;
         if response.status().is_success() {
             return Ok(());
@@ -406,7 +449,15 @@ impl ReplicaBackend for HttpBlobBackend {
             .header(CONTENT_TYPE, content_type)
             .header(CONTENT_LENGTH, length)
             .body(bytes);
-        Self::finish_put(apply_condition(request, condition).send().await?).await
+        Self::finish_put(
+            self.send(
+                "control_put_bytes",
+                control_object_class(object_key),
+                apply_condition(request, condition),
+            )
+            .await?,
+        )
+        .await
     }
 
     async fn authorize_blob_read(
@@ -414,13 +465,13 @@ impl ReplicaBackend for HttpBlobBackend {
         blob: &LogicalBlobId,
         caller_token: &CallerToken,
     ) -> Result<(), BackendError> {
+        let request = self.authorized(
+            self.client
+                .head(self.data_object_url(blob.container(), blob.blob())),
+            caller_token.expose(),
+        );
         let response = self
-            .authorized(
-                self.client
-                    .head(self.data_object_url(blob.container(), blob.blob())),
-                caller_token.expose(),
-            )
-            .send()
+            .send("authorize_blob_read", "logical_blob", request)
             .await?;
         if response.status().is_success() || response.status() == StatusCode::NOT_FOUND {
             Ok(())
@@ -435,7 +486,7 @@ impl ReplicaBackend for HttpBlobBackend {
         object_key: &str,
         caller_token: &CallerToken,
     ) -> Result<(), BackendError> {
-        let response = self
+        let request = self
             .authorized(
                 self.client.put(self.data_object_url(container, object_key)),
                 caller_token.expose(),
@@ -443,8 +494,9 @@ impl ReplicaBackend for HttpBlobBackend {
             .header("x-ms-blob-type", "BlockBlob")
             .header(CONTENT_LENGTH, 0)
             .header(IF_NONE_MATCH, "*")
-            .body(Vec::new())
-            .send()
+            .body(Vec::new());
+        let response = self
+            .send("authorize_existing_blob_write", "content", request)
             .await?;
         if matches!(
             response.status(),
@@ -456,14 +508,14 @@ impl ReplicaBackend for HttpBlobBackend {
     }
 
     async fn authorize_account_list(&self, caller_token: &CallerToken) -> Result<(), BackendError> {
+        let request = self.authorized(
+            self.client
+                .get(&self.endpoint)
+                .query(&[("comp", "list"), ("maxresults", "1")]),
+            caller_token.expose(),
+        );
         let response = self
-            .authorized(
-                self.client
-                    .get(&self.endpoint)
-                    .query(&[("comp", "list"), ("maxresults", "1")]),
-                caller_token.expose(),
-            )
-            .send()
+            .send("authorize_account_list", "account", request)
             .await?;
         if response.status().is_success() {
             Ok(())
@@ -477,22 +529,22 @@ impl ReplicaBackend for HttpBlobBackend {
         container: &str,
         caller_token: &CallerToken,
     ) -> Result<(), BackendError> {
+        let request = self.authorized(
+            self.client
+                .get(format!(
+                    "{}/{}",
+                    self.endpoint,
+                    encode_path_component(container)
+                ))
+                .query(&[
+                    ("restype", "container"),
+                    ("comp", "list"),
+                    ("maxresults", "1"),
+                ]),
+            caller_token.expose(),
+        );
         let response = self
-            .authorized(
-                self.client
-                    .get(format!(
-                        "{}/{}",
-                        self.endpoint,
-                        encode_path_component(container)
-                    ))
-                    .query(&[
-                        ("restype", "container"),
-                        ("comp", "list"),
-                        ("maxresults", "1"),
-                    ]),
-                caller_token.expose(),
-            )
-            .send()
+            .send("authorize_container_list", "container", request)
             .await?;
         if response.status().is_success() {
             Ok(())
@@ -520,7 +572,9 @@ impl ReplicaBackend for HttpBlobBackend {
         if let Some(value) = cursor {
             request = request.query(&[("marker", value)]);
         }
-        let response = request.send().await?;
+        let response = self
+            .send("caller_list_containers_page", "account", request)
+            .await?;
         if !response.status().is_success() {
             return Err(response_error(response).await);
         }
@@ -562,14 +616,15 @@ impl ReplicaBackend for HttpBlobBackend {
         blob: &LogicalBlobId,
         caller_token: &CallerToken,
     ) -> Result<(), BackendError> {
-        let response = self
+        let request = self
             .authorized(
                 self.client
                     .delete(self.data_object_url(blob.container(), blob.blob())),
                 caller_token.expose(),
             )
-            .query(&[("snapshot", "2000-01-01T00:00:00.0000000Z")])
-            .send()
+            .query(&[("snapshot", "2000-01-01T00:00:00.0000000Z")]);
+        let response = self
+            .send("authorize_blob_delete", "logical_blob", request)
             .await?;
         match delete_authorization_probe_outcome(response.status()) {
             AuthorizationProbeOutcome::Authorized => Ok(()),
@@ -589,13 +644,13 @@ impl ReplicaBackend for HttpBlobBackend {
         object_key: &str,
         caller_token: &CallerToken,
     ) -> Result<Option<DataObjectProperties>, BackendError> {
+        let request = self.authorized(
+            self.client
+                .head(self.data_object_url(container, object_key)),
+            caller_token.expose(),
+        );
         let response = self
-            .authorized(
-                self.client
-                    .head(self.data_object_url(container, object_key)),
-                caller_token.expose(),
-            )
-            .send()
+            .send("caller_head_data_object", "content", request)
             .await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
@@ -628,7 +683,9 @@ impl ReplicaBackend for HttpBlobBackend {
         if let Some((start, end)) = range {
             request = request.header(RANGE, format!("bytes={start}-{end}"));
         }
-        let response = request.send().await?;
+        let response = self
+            .send("caller_get_data_range", "content", request)
+            .await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -663,7 +720,15 @@ impl ReplicaBackend for HttpBlobBackend {
             .header(CONTENT_TYPE, "application/octet-stream")
             .header(CONTENT_LENGTH, length)
             .body(body);
-        Self::finish_put(apply_condition(request, condition).send().await?).await
+        Self::finish_put(
+            self.send(
+                "caller_put_data_file",
+                "content",
+                apply_condition(request, condition),
+            )
+            .await?,
+        )
+        .await
     }
 
     async fn caller_digest_data_object(
@@ -672,12 +737,12 @@ impl ReplicaBackend for HttpBlobBackend {
         object_key: &str,
         caller_token: &CallerToken,
     ) -> Result<Option<ObjectDigest>, BackendError> {
+        let request = self.authorized(
+            self.client.get(self.data_object_url(container, object_key)),
+            caller_token.expose(),
+        );
         let response = self
-            .authorized(
-                self.client.get(self.data_object_url(container, object_key)),
-                caller_token.expose(),
-            )
-            .send()
+            .send("caller_digest_data_object", "content", request)
             .await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
@@ -710,12 +775,16 @@ impl ReplicaBackend for HttpBlobBackend {
         object_key: &str,
         control_token: &ControlToken,
     ) -> Result<Option<ObjectValue>, BackendError> {
+        let request = self.authorized(
+            self.client.get(self.object_url(object_key)),
+            control_token.expose(),
+        );
         let response = self
-            .authorized(
-                self.client.get(self.object_url(object_key)),
-                control_token.expose(),
+            .send(
+                "control_get_object",
+                control_object_class(object_key),
+                request,
             )
-            .send()
             .await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
@@ -772,7 +841,13 @@ impl ReplicaBackend for HttpBlobBackend {
         if let Some(value) = cursor {
             request = request.query(&[("marker", value)]);
         }
-        let response = request.send().await?;
+        let response = self
+            .send(
+                "control_list_objects_page",
+                control_object_class(prefix),
+                request,
+            )
+            .await?;
         if !response.status().is_success() {
             return Err(response_error(response).await);
         }
@@ -803,7 +878,13 @@ impl ReplicaBackend for HttpBlobBackend {
         if let Some(etag) = expected_etag {
             request = request.header(IF_MATCH, etag);
         }
-        let response = request.send().await?;
+        let response = self
+            .send(
+                "control_delete_object",
+                control_object_class(object_key),
+                request,
+            )
+            .await?;
         if response.status().is_success() || response.status() == StatusCode::NOT_FOUND {
             Ok(())
         } else {
@@ -831,7 +912,7 @@ impl ReplicaBackend for HttpBlobBackend {
         }
 
         let proposed_lease_id = Uuid::new_v4().to_string();
-        let response = self
+        let request = self
             .authorized(
                 self.client
                     .put(format!("{}?comp=lease", self.object_url(object_key))),
@@ -840,8 +921,13 @@ impl ReplicaBackend for HttpBlobBackend {
             .header("x-ms-lease-action", "acquire")
             .header("x-ms-lease-duration", "60")
             .header("x-ms-proposed-lease-id", &proposed_lease_id)
-            .header(CONTENT_LENGTH, 0)
-            .send()
+            .header(CONTENT_LENGTH, 0);
+        let response = self
+            .send(
+                "control_acquire_lock",
+                control_object_class(object_key),
+                request,
+            )
             .await?;
         if response.status().is_success() {
             let lease_id = response
@@ -866,7 +952,7 @@ impl ReplicaBackend for HttpBlobBackend {
         lease: &BackendLease,
         control_token: &ControlToken,
     ) -> Result<(), BackendError> {
-        let response = self
+        let request = self
             .authorized(
                 self.client
                     .put(format!("{}?comp=lease", self.object_url(&lease.object_key))),
@@ -874,8 +960,13 @@ impl ReplicaBackend for HttpBlobBackend {
             )
             .header("x-ms-lease-action", "release")
             .header("x-ms-lease-id", &lease.lease_id)
-            .header(CONTENT_LENGTH, 0)
-            .send()
+            .header(CONTENT_LENGTH, 0);
+        let response = self
+            .send(
+                "control_release_lock",
+                control_object_class(&lease.object_key),
+                request,
+            )
             .await?;
         if response.status().is_success() {
             Ok(())
@@ -889,7 +980,7 @@ impl ReplicaBackend for HttpBlobBackend {
         lease: &BackendLease,
         control_token: &ControlToken,
     ) -> Result<(), BackendError> {
-        let response = self
+        let request = self
             .authorized(
                 self.client
                     .put(format!("{}?comp=lease", self.object_url(&lease.object_key))),
@@ -897,8 +988,13 @@ impl ReplicaBackend for HttpBlobBackend {
             )
             .header("x-ms-lease-action", "renew")
             .header("x-ms-lease-id", &lease.lease_id)
-            .header(CONTENT_LENGTH, 0)
-            .send()
+            .header(CONTENT_LENGTH, 0);
+        let response = self
+            .send(
+                "control_renew_lock",
+                control_object_class(&lease.object_key),
+                request,
+            )
             .await?;
         if response.status().is_success() {
             Ok(())
@@ -913,12 +1009,12 @@ impl ReplicaBackend for HttpBlobBackend {
         object_key: &str,
         control_token: &ControlToken,
     ) -> Result<Option<ObjectValue>, BackendError> {
+        let request = self.authorized(
+            self.client.get(self.data_object_url(container, object_key)),
+            control_token.expose(),
+        );
         let response = self
-            .authorized(
-                self.client.get(self.data_object_url(container, object_key)),
-                control_token.expose(),
-            )
-            .send()
+            .send("service_get_data_object", "content", request)
             .await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
@@ -942,12 +1038,12 @@ impl ReplicaBackend for HttpBlobBackend {
         block_lengths: &[u64],
         control_token: &ControlToken,
     ) -> Result<Option<DataObjectValidation>, BackendError> {
+        let request = self.authorized(
+            self.client.get(self.data_object_url(container, object_key)),
+            control_token.expose(),
+        );
         let response = self
-            .authorized(
-                self.client.get(self.data_object_url(container, object_key)),
-                control_token.expose(),
-            )
-            .send()
+            .send("service_validate_data_object", "content", request)
             .await?;
         if response.status() == StatusCode::NOT_FOUND {
             return Ok(None);
@@ -1051,7 +1147,15 @@ impl ReplicaBackend for HttpBlobBackend {
             .header(CONTENT_TYPE, "application/octet-stream")
             .header(CONTENT_LENGTH, bytes.len())
             .body(bytes);
-        Self::finish_put(apply_condition(request, condition).send().await?).await
+        Self::finish_put(
+            self.send(
+                "service_put_data_bytes",
+                "content",
+                apply_condition(request, condition),
+            )
+            .await?,
+        )
+        .await
     }
 
     async fn service_delete_data_object(
@@ -1069,7 +1173,9 @@ impl ReplicaBackend for HttpBlobBackend {
         if let Some(etag) = expected_etag {
             request = request.header(IF_MATCH, etag);
         }
-        let response = request.send().await?;
+        let response = self
+            .send("service_delete_data_object", "content", request)
+            .await?;
         if response.status().is_success() || response.status() == StatusCode::NOT_FOUND {
             Ok(())
         } else {
@@ -1083,6 +1189,38 @@ fn apply_condition(request: RequestBuilder, condition: PutCondition) -> RequestB
         PutCondition::None => request,
         PutCondition::IfAbsent => request.header(IF_NONE_MATCH, "*"),
         PutCondition::IfMatch(etag) => request.header(IF_MATCH, etag),
+    }
+}
+
+pub(crate) fn control_object_class(object_key: &str) -> &'static str {
+    if object_key.starts_with("quarantine/") {
+        "quarantine"
+    } else if object_key.starts_with("heads/") {
+        "head"
+    } else if object_key.starts_with("locks/") {
+        "lock"
+    } else if object_key.starts_with("catalog/v1/") {
+        "catalogue"
+    } else if object_key.starts_with("high-water/") && object_key.contains("/compaction/") {
+        "compaction_checkpoint"
+    } else if object_key.starts_with("high-water/") && object_key.ends_with("/current.json") {
+        "high_water_current"
+    } else if object_key.starts_with("high-water/") {
+        "high_water_history"
+    } else if object_key.starts_with("staged-blocks/") {
+        "staged_block"
+    } else if object_key.starts_with("staged-uploads/") {
+        "staged_upload"
+    } else if object_key.contains("/block-pages/") {
+        "block_manifest_page"
+    } else if object_key.ends_with("/block-manifest.json") {
+        "block_manifest"
+    } else if object_key.ends_with("/prepared.json") {
+        "prepared_manifest"
+    } else if object_key.ends_with("/committed.json") {
+        "terminal_manifest"
+    } else {
+        "control_other"
     }
 }
 
@@ -1173,7 +1311,37 @@ struct ContainerProperties {
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{self, Write},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    use axum::Router;
+    use tracing::instrument::WithSubscriber;
+
     use super::*;
+
+    #[derive(Clone, Default)]
+    struct SharedWriter {
+        bytes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for SharedWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            self.bytes
+                .lock()
+                .expect("telemetry buffer")
+                .extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn delete_authorization_probe_statuses_fail_closed() {
@@ -1193,5 +1361,107 @@ mod tests {
             delete_authorization_probe_outcome(StatusCode::ACCEPTED),
             AuthorizationProbeOutcome::UnexpectedStatus
         );
+    }
+
+    #[test]
+    fn control_object_classes_are_stable_for_performance_budgets() {
+        let cases = [
+            ("quarantine/path.json", "quarantine"),
+            ("heads/path.json", "head"),
+            ("locks/path", "lock"),
+            ("catalog/v1/container/blob.json", "catalogue"),
+            (
+                "high-water/path/compaction/current.json",
+                "compaction_checkpoint",
+            ),
+            ("high-water/path/current.json", "high_water_current"),
+            (
+                "high-water/path/history/0001-write.json",
+                "high_water_history",
+            ),
+            ("staged-blocks/path/block.json", "staged_block"),
+            ("staged-uploads/path/upload.json", "staged_upload"),
+            (
+                "objects/path/versions/write/digest/block-pages/00000000.json",
+                "block_manifest_page",
+            ),
+            (
+                "objects/path/versions/write/digest/block-manifest.json",
+                "block_manifest",
+            ),
+            (
+                "objects/path/versions/write/digest/prepared.json",
+                "prepared_manifest",
+            ),
+            (
+                "objects/path/versions/write/digest/committed.json",
+                "terminal_manifest",
+            ),
+        ];
+        for (object_key, expected) in cases {
+            assert_eq!(control_object_class(object_key), expected);
+        }
+    }
+
+    #[test]
+    fn outbound_http_has_one_instrumented_transport_boundary() {
+        // This guard covers HttpBlobBackend; any new HTTP client module needs its own boundary test.
+        let source = include_str!("backend.rs");
+        let direct_send = [".send()", ".await"].concat();
+        assert_eq!(source.matches(&direct_send).count(), 1);
+    }
+
+    #[tokio::test]
+    async fn every_emitted_http_request_produces_one_backend_event() {
+        let received = Arc::new(AtomicUsize::new(0));
+        let app = Router::new().fallback({
+            let received = Arc::clone(&received);
+            move || {
+                let received = Arc::clone(&received);
+                async move {
+                    received.fetch_add(1, Ordering::SeqCst);
+                    StatusCode::NOT_FOUND
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener");
+        let endpoint = format!(
+            "http://{}",
+            listener.local_addr().expect("listener address")
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("test server");
+        });
+        let writer = SharedWriter::default();
+        let telemetry_writer = writer.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || telemetry_writer.clone())
+            .finish();
+        let backend = HttpBlobBackend::new("storage-a", endpoint, false).expect("backend");
+
+        let result = crate::request_context::scope(
+            "performance-request".to_owned(),
+            backend
+                .control_get_object(
+                    "heads/path.json",
+                    &ControlToken::new("control-token".to_owned()),
+                )
+                .with_subscriber(subscriber),
+        )
+        .await
+        .expect("request");
+        server.abort();
+
+        assert!(result.is_none());
+        assert_eq!(received.load(Ordering::SeqCst), 1);
+        let telemetry = String::from_utf8(writer.bytes.lock().expect("telemetry buffer").clone())
+            .expect("UTF-8 telemetry");
+        assert_eq!(telemetry.matches("overmesh_backend_request").count(), 1);
+        assert!(telemetry.contains("object_class=\"head\""));
+        assert!(telemetry.contains("client_request_fingerprint=performance-request"));
     }
 }

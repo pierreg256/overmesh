@@ -26,6 +26,8 @@ An ADR explains a choice; it does not define behaviour.
 | [0007](0007-canonical-logical-resource-identity.md) | Canonical logical resource identity | accepted | 0.5.0 → 0.8.0 | yes |
 | [0008](0008-listing-from-a-signed-catalogue.md) | Listing from a signed catalogue | accepted | 0.8.0 | partial |
 | [0009](0009-redaction-policy-for-retained-live-evidence.md) | Redaction policy for retained live evidence | accepted | 0.9.0 → 0.9.1 | yes |
+| [0010](0010-keep-reconciler-safety-state-on-the-read-path.md) | Keep Reconciler safety state on the read path | accepted | 0.10.1 | yes |
+| [0011](0011-use-physical-content-heads-for-read-authorization.md) | Use physical content HEADs for read authorization | accepted | 0.10.1 | yes |
 
 ## Implementation status
 
@@ -51,6 +53,11 @@ pagination silently.
 before signing, the detached signature covers those published bytes, the raw
 archive is privately retained and replicated three ways, and `doc-check` R8
 rejects unredacted Azure identifiers under `harness/artifacts/`.
+
+0010 keeps quarantine and compaction floors as explicit replicated read-path
+controls until a replacement protocol defines identity ownership and freshness.
+0011 removes the redundant logical read probes from `HEAD` and `GET`; the
+caller-authorized physical content `HEAD` now also carries the Azure RBAC check.
 
 Two items are scheduled rather than pending. Parity with Azure on blob-name
 length is to be reopened **before 1.0**; if the encoding changes, the derived

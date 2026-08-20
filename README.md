@@ -119,10 +119,11 @@ records are never client-visible. Container listing filters catalog-derived
 candidates with caller-authorized container probes, avoiding account-scoped
 caller RBAC and keeping the system container inaccessible.
 
-Before V1 stabilization, milestone `0.10.0` will establish signed live
-performance baselines against direct Azure Storage and Overmesh paths.
-Milestone `0.11.0` will apply and remeasure only optimizations justified by
-those historical results.
+Milestone `0.10.0` established signed live performance baselines against
+direct Azure Storage and Overmesh paths. Milestone `0.10.1` adds complete
+request attribution, object-class budgets, overwrite workloads, and the first
+blocking backend-request baseline. Milestone `0.11.0` will apply and remeasure
+only optimizations justified by those historical results.
 
 Milestone `0.9.0` deploys the Gateway and Reconciler on private Azure Container
 Apps with managed identities and exposes them through Azure Front Door Premium

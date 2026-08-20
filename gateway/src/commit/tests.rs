@@ -13,7 +13,9 @@ use http::StatusCode;
 
 use super::*;
 use crate::{
-    backend::{BackendLease, DataObjectProperties, ObjectListPage, PutResult},
+    backend::{
+        BackendLease, DataObjectProperties, ObjectListPage, PutResult, control_object_class,
+    },
     identity::{CallerToken, ControlToken, ControlTokenProvider},
     manifest::LocalTestManifestSigner,
     read::{ReadError, ReadService},
@@ -41,8 +43,10 @@ struct MemoryState {
     control_page_calls: AtomicU64,
     max_control_page_limit: AtomicU64,
     blob_read_auth_calls: AtomicU64,
+    caller_head_calls: AtomicU64,
     blob_write_auth_calls: AtomicU64,
     caller_data_write_calls: AtomicU64,
+    caller_range_fingerprints: Mutex<Vec<String>>,
     deny_blob_write: AtomicBool,
     deny_caller_data_write: AtomicBool,
     containers: Mutex<BTreeMap<String, u64>>,
@@ -118,6 +122,16 @@ impl MemoryBackend {
             .get(key)
             .copied()
             .unwrap_or(0)
+    }
+
+    fn control_get_snapshot(&self) -> BTreeMap<String, u64> {
+        self.state
+            .control_get_calls
+            .lock()
+            .expect("control get call lock")
+            .iter()
+            .map(|(key, count)| (key.clone(), *count))
+            .collect()
     }
 
     fn maybe_fail(&self, key: &str) -> Result<(), BackendError> {
@@ -301,6 +315,7 @@ impl ReplicaBackend for MemoryBackend {
         object_key: &str,
         _caller_token: &CallerToken,
     ) -> Result<Option<DataObjectProperties>, BackendError> {
+        self.state.caller_head_calls.fetch_add(1, Ordering::SeqCst);
         let key = format!("data/{container}/{object_key}");
         self.maybe_fail(&key)?;
         Ok(self.object(&key).map(|value| DataObjectProperties {
@@ -315,6 +330,11 @@ impl ReplicaBackend for MemoryBackend {
         range: Option<(u64, u64)>,
         _caller_token: &CallerToken,
     ) -> Result<Option<Vec<u8>>, BackendError> {
+        self.state
+            .caller_range_fingerprints
+            .lock()
+            .expect("fingerprint lock")
+            .push(crate::request_context::current_client_request_fingerprint());
         let key = format!("data/{container}/{object_key}");
         self.maybe_fail(&key)?;
         let Some(value) = self.object(&key) else {
@@ -852,6 +872,55 @@ async fn commits_signed_tombstone_to_both_replicas() {
             .await,
         Err(ReadError::NotFound)
     ));
+}
+
+#[tokio::test]
+async fn first_put_control_reads_have_a_closed_object_level_budget() {
+    let path = "/container/read-budget";
+    let (coordinator, _, primary, secondary) = read_fixture(path);
+    let content = spool_body(Body::from("hello"), 4).await.expect("content");
+
+    commit(
+        &coordinator,
+        path,
+        "write-budget",
+        &content,
+        LogicalCondition::None,
+    )
+    .await
+    .expect("commit");
+
+    let primary_reads = primary.control_get_snapshot();
+    let secondary_reads = secondary.control_get_snapshot();
+    assert_eq!(
+        primary_reads.values().sum::<u64>(),
+        14,
+        "{primary_reads:#?}"
+    );
+    assert_eq!(
+        secondary_reads.values().sum::<u64>(),
+        14,
+        "{secondary_reads:#?}"
+    );
+    let mut by_object_class = BTreeMap::<&str, u64>::new();
+    for (object_key, count) in primary_reads.iter().chain(&secondary_reads) {
+        *by_object_class
+            .entry(control_object_class(object_key))
+            .or_default() += count;
+    }
+    assert_eq!(
+        by_object_class,
+        BTreeMap::from([
+            ("block_manifest", 2),
+            ("catalogue", 4),
+            ("compaction_checkpoint", 4),
+            ("head", 4),
+            ("high_water_current", 6),
+            ("prepared_manifest", 4),
+            ("quarantine", 2),
+            ("terminal_manifest", 2),
+        ])
+    );
 }
 
 #[tokio::test]
@@ -2994,7 +3063,7 @@ async fn commits_identical_heads_to_both_replicas() {
 #[tokio::test]
 async fn reads_validated_heads_and_ranges_across_block_boundaries() {
     let path = "/container/ranged";
-    let (coordinator, read_service, _, _) = read_fixture(path);
+    let (coordinator, read_service, primary, secondary) = read_fixture(path);
     let content = spool_body(Body::from("abcdefghij"), 4)
         .await
         .expect("content");
@@ -3015,10 +3084,12 @@ async fn reads_validated_heads_and_ranges_across_block_boundaries() {
     assert_eq!(metadata.logical_etag, committed.logical_etag);
     assert_eq!(metadata.content_length, 10);
 
-    let read = read_service
-        .get_blob(&blob(path), &principal(), Some("bytes=3-8"))
-        .await
-        .expect("GET range");
+    let read = crate::request_context::scope(
+        "stream-request".to_owned(),
+        read_service.get_blob(&blob(path), &principal(), Some("bytes=3-8")),
+    )
+    .await
+    .expect("GET range");
     assert_eq!(
         read.range,
         Some(crate::read::ResolvedRange {
@@ -3028,6 +3099,17 @@ async fn reads_validated_heads_and_ranges_across_block_boundaries() {
         })
     );
     assert_eq!(to_bytes(read.body, 64).await.expect("range body"), "defghi");
+    for backend in [primary, secondary] {
+        assert!(
+            backend
+                .state
+                .caller_range_fingerprints
+                .lock()
+                .expect("fingerprint lock")
+                .iter()
+                .all(|fingerprint| fingerprint == "stream-request")
+        );
+    }
 }
 
 #[tokio::test]
@@ -3059,6 +3141,13 @@ async fn head_does_not_load_block_integrity_metadata() {
         .await
         .expect("HEAD");
 
+    assert_eq!(primary.state.blob_read_auth_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        secondary.state.blob_read_auth_calls.load(Ordering::SeqCst),
+        0
+    );
+    assert_eq!(primary.state.caller_head_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(secondary.state.caller_head_calls.load(Ordering::SeqCst), 1);
     assert_eq!(primary.control_get_count(&root_key), before_primary);
     assert_eq!(secondary.control_get_count(&root_key), before_secondary);
 }

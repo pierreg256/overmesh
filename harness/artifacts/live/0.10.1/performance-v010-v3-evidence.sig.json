@@ -1,0 +1,8 @@
+{
+  "algorithm": "ES256",
+  "apiVersion": "evidence.overmesh.io/detached-signature/v1",
+  "keyId": "https://kv-49f8b0a35849a604/keys/overmesh-manifests/b884798fce0540239155af35ab55cc0c",
+  "sha256": "ec91dd209624839d79c024746f27067c3ab99dd8c8b39415dfc22537271a05f2",
+  "signature": "wDntsBVv_pE8LXcbUV6dKu4UNVTZRiiC8oqqPeuPFtjsueOMHS6remVcnTgYGyk9A-H5KvT35gVByXOeieOYZw",
+  "verifiedByKeyVault": true
+}

@@ -5,6 +5,7 @@
 - **Milestone:** 0.5.0 → 0.8.0
 - **Supersedes:** —
 - **Superseded by:** —
+- **Amended by:** ADR-0011
 
 > **Corrections, 2026-08-17.** This record was reviewed twice against the code
 > and was wrong twice. Both errors are recorded rather than edited away.
@@ -92,6 +93,12 @@ because it is the only target known to exist and therefore the only one a
 conditional create can test without writing. That exception is what the
 *Authorization granularity* section below is about. Probes are fail-closed:
 only explicitly documented terminal statuses count as authorization.
+
+> **Amendment, 2026-08-19.** ADR-0011 replaces the logical `HEAD` probes for
+> `Get Blob` and `HEAD` with the caller-authorized physical content `HEAD`
+> requests that those paths already perform after preparation. The table below
+> records this decision's original state. `Get Block List` retains its logical
+> probe because it does not validate a physical content object.
 
 | Operation | `DataAction` | Caller reaches Azure via | Probe |
 | --- | --- | --- | --- |

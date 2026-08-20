@@ -20,7 +20,7 @@ PAGEFIND ?= npx --yes pagefind@$(PAGEFIND_VERSION)
 SITE_SERVE_HOST ?= 127.0.0.1
 SITE_SERVE_PORT ?= 1111
 
-.PHONY: harness-certs dev-up dev-down dev-reset fault-reset gateway-smoke placement-smoke reconciler-smoke validate-system harness-list harness-run-all version-check doc-check site-content site-tool-check site-build site-serve infra-build test-pr test-main test-nightly test-pre-pr-live test-live-azure test-live-azure-storage test-live-azure-posture test-live-azure-gateway test-live-azure-client-compat test-live-azure-placement test-live-azure-reconciliation test-release
+.PHONY: harness-certs dev-up dev-down dev-reset fault-reset gateway-smoke placement-smoke reconciler-smoke validate-system harness-list harness-run-all version-check doc-check performance-contract-check site-content site-tool-check site-build site-serve infra-build test-pr test-main test-nightly test-pre-pr-live test-live-azure test-live-azure-storage test-live-azure-posture test-live-azure-gateway test-live-azure-client-compat test-live-azure-placement test-live-azure-reconciliation test-live-azure-performance test-release
 
 HARNESS_CERT_DIR := .harness/certs
 HARNESS_CERT := $(HARNESS_CERT_DIR)/azurite.pem
@@ -76,6 +76,15 @@ version-check:
 doc-check:
 	$(HARNESS) doc-check
 
+performance-contract-check:
+	python3 harness/environments/azure/performance/overmesh_live_performance.py \
+		--contract harness/performance/live-v3.toml \
+		--plan >/dev/null
+	PYTHONPATH=harness/environments/azure/performance \
+		python3 -m unittest discover \
+		-s harness/environments/azure/performance \
+		-p 'test_*.py'
+
 site-content:
 	$(HARNESS) site-content
 
@@ -99,7 +108,7 @@ site-serve: site-content site-tool-check
 infra-build:
 	az bicep build --file infra/main.bicep --stdout >/dev/null
 
-test-pr: version-check doc-check
+test-pr: version-check doc-check performance-contract-check
 	cargo fmt --all --check
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo test --workspace
@@ -129,9 +138,12 @@ test-live-azure-placement:
 test-live-azure-reconciliation:
 	./harness/environments/azure/validate-live-reconciliation.sh
 
+test-live-azure-performance:
+	./harness/environments/azure/validate-live-performance.sh
+
 test-live-azure:
 	$${HARNESS_LIVE_AZURE_COMMAND:-./harness/environments/azure/validate-live-azure.sh}
 
 test-pre-pr-live: test-live-azure
 
-test-release: test-main test-live-azure
+test-release: test-main test-live-azure test-live-azure-performance

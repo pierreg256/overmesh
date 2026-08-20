@@ -26,6 +26,7 @@ use crate::{
     error::StorageError,
     listing::{ListRequest, ListingError},
     read::{BlobMetadata, ReadError, ReadService},
+    request_context::{client_request_fingerprint, scope},
     resource::LogicalBlobId,
     ring::SignedRing,
     upload::{DEFAULT_BLOCK_SIZE, SpoolBodyError, spool_body, spool_body_limited},
@@ -68,6 +69,16 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
 }
 
 async fn blob_request(State(state): State<AppState>, request: Request<Body>) -> Response {
+    let fingerprint = request
+        .headers()
+        .get("x-ms-client-request-id")
+        .and_then(|value| value.to_str().ok())
+        .map(client_request_fingerprint)
+        .unwrap_or_else(|| "missing".to_owned());
+    scope(fingerprint, blob_request_scoped(state, request)).await
+}
+
+async fn blob_request_scoped(state: AppState, request: Request<Body>) -> Response {
     let principal = match state
         .authenticator
         .authenticate(request.headers(), request.uri())

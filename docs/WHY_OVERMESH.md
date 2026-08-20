@@ -5,15 +5,12 @@
 
 ---
 
-**Status: work in progress — not an input to development.**
+**Status: measured prototype rationale.**
 
-This document is a draft. Its arguments are still being formed, several of its
-figures are estimated rather than measured, and its conclusions may change.
-
-It records current thinking about why the project exists. It is **not** a
-specification, **not** a commitment, and **not** a source of requirements. It
-must not be used to justify, prioritise, or constrain design and implementation
-decisions at this stage.
+This document explains the current system and its measured tradeoffs. It is
+descriptive rather than normative: specifications define behaviour and
+accepted decision records constrain implementation. Performance figures below
+come from retained signed evidence rather than estimates.
 
 The references are
 [`OVERMESH_V1_SPECIFICATION.md`](../OVERMESH_V1_SPECIFICATION.md) and
@@ -256,8 +253,8 @@ Nothing here is hidden. Each line states whether it is inherent or scheduled.
 | Cost | Magnitude | Status |
 | --- | --- | --- |
 | Storage | 2×, plus uncollected generations | Inherent to RF=2 |
-| Write latency | ~35 backend round trips and 4 Key Vault signatures per PUT | Being reduced |
-| Read latency | ~12 round trips before the first byte, including for `HEAD` | Being reduced |
+| Write latency | 49 backend requests and 3 Key Vault signatures per first PUT | Measured; request-budgeted |
+| Read latency | 10 requests for `HEAD`, 15 for nominal `GET` and range reads | Measured after ADR-0011 |
 | Listing | ~20,000 backend reads for a 5,000-entry page | Reduced 2.5× in 0.8; going further is a trade, not a fix |
 | Write availability | Writes stop while either region is unavailable | Hinted handoff, post-V1 |
 | Reconciliation | O(dataset) per cycle | Merkle trees in V2 |
@@ -271,6 +268,46 @@ either region is unavailable. That is a deliberate exchange — cross-region
 durability and a provable consistency state, at the price of write
 availability — and hinted handoff is the planned way to buy the availability
 back without giving up the guarantee.
+
+### The measured performance price
+
+The final signed 0.10.1 campaign ran the same Azure SDK operations directly
+against Storage and through Overmesh from an isolated France Central VM.
+Writes use 30 measured operations per case; reads use 240 so their percentiles
+are useful signals. There were zero client errors, zero backend transport
+failures, and zero unattributed requests in every case. Front Door selected the
+France Container App for the entire run, so these figures describe a France
+client and its lowest-latency healthy origin, not balanced multi-origin traffic.
+
+| Operation | Direct p50 | Overmesh p50 | Overmesh requests |
+| --- | ---: | ---: | ---: |
+| `Put Blob`, 1 KiB, c1 | 9.08 ms | 1,255.49 ms | 49 |
+| `Put Blob`, 1 MiB, c1 | 20.06 ms | 1,379.71 ms | 49 |
+| `Put Blob`, 16 MiB, c1 | 141.54 ms | 2,986.14 ms | 49 |
+| `Delete Blob`, 1 KiB, c1 | 9.52 ms | 1,010.35 ms | 43 |
+| `Get Blob`, 1 MiB, c1 | 15.36 ms | 230.09 ms | 15 |
+| `Get Blob`, 16 MiB, c1 | 110.11 ms | 813.86 ms | 18 |
+| `Range Get`, 1 MiB of 16 MiB, c1 | 15.74 ms | 276.78 ms | 15 |
+| `Head Blob`, 1 MiB, c1 | 5.92 ms | 93.62 ms | 10 |
+
+The 1 KiB and 1 MiB writes cost nearly the same despite a thousand-fold payload
+difference, and DELETE pays the same order of latency while carrying no body.
+The dominant cost is therefore fixed backend-request amplification, not CPU or
+bulk throughput. Overmesh buys synchronous cross-region durability, signed
+state validation and repairability at a severe small-operation latency price:
+about 130× direct Storage for the measured 1 KiB PUT.
+
+The deterministic request counts are the blocking non-regression measure for
+0.11. Latency remains a signal because geography, Azure scheduling and network
+variance are outside the code's control.
+
+The added overwrite cases also close the locking question. A first `PUT` and an
+established overwrite both cost 49 requests today, including three lock
+requests. The difference is the conditional create result: `201` for the new
+lock object, `409` when it already exists. Trying the lease first would reduce
+the established path from three lock requests to two but raise the first-write
+path to four. It is therefore a workload-policy decision for 0.11, not a global
+optimization.
 
 The listing line is the largest number in this table and deserves a word,
 because it is not simply unfinished work. Each listed entry is validated across
@@ -331,7 +368,7 @@ fixed two-replica commit protocol and says so.
 
 ## 10. Status
 
-Overmesh is an advanced prototype in milestone 0.10.0 of a V1 plan that reaches
+Overmesh is an advanced prototype in milestone 0.10.1 of a V1 plan that reaches
 1.0.
 
 **Implemented and tested:** the signed Ring with rollback and predecessor
@@ -346,7 +383,7 @@ block staging APIs with their own retention and collection, reconciliation with
 repair and quarantine, and continuous RBAC posture auditing against Azure
 Resource Manager.
 
-**How it is validated:** 186 unit and integration tests, 23 declarative
+**How it is validated:** 192 unit and integration tests, 23 declarative
 scenarios against an independent reference model, three process-level suites
 and a Rust system validator running against Azurite backends behind a fault
 proxy, and a live Azure gate that verifies account posture, authorization
@@ -405,24 +442,27 @@ Runtime commit  26449d7e5775ac9d28dea38182f509c7528c57c3
 Bundle SHA-256  547172399a2bc24ab494b41c9dd37e9b2ceaa054e6e37a17960e1c7e5e244bc9
 ```
 
-A measured performance baseline remains the next live gate in 0.10, followed
-by optimisation in 0.11.
+A signed 0.10.1 performance baseline now measures the fixed request
+amplification described in section 8, with attributed object-class budgets and
+the read-stabilized blocking `live-v3` reference used by 0.11.
 
 ## 11. Where to start if you want to fork it
 
 The three highest-value contributions, in order:
 
-1. **Establishing the performance baseline.** Measure direct Azure Storage and
-   Overmesh with the same payloads, concurrency and identity posture before
-   changing the design.
-2. **Listing throughput.** Four backend reads per entry, twenty thousand for a
+1. **Listing throughput.** Four backend reads per entry, twenty thousand for a
    default page. The two candidate reductions each buy a class of incorrect
    result rather than costing only engineering, so the work is to decide what a
    listing must prove — as opposed to what `GET`, `HEAD` and the reconciler
    already prove — and then to measure it. See ADR-0008.
-3. **Write-path latency.** Thirty-five round trips and four Key Vault
-   signatures per write is the number that will decide whether this is usable.
-   It is also the most tractable engineering problem in the repository.
+2. **Catalogue correctness and name parity.** Reject names that cannot be
+   catalogued before writing content, bring catalogue publication into the
+   conditional commit sequence, and add randomised order-preservation tests
+   before changing the encoding. See ADR-0004 and ADR-0008.
+3. **Write-path latency.** Forty-nine backend requests and three Key Vault
+   signatures per first write is the measured number that will decide whether
+   this is usable. It is also the most tractable engineering problem in the
+   repository.
 
 ## Sources
 

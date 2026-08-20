@@ -52,6 +52,7 @@ make test-live-azure-gateway
 make test-live-azure-client-compat
 make test-live-azure-placement
 make test-live-azure-reconciliation
+make test-live-azure-performance
 ```
 
 It requires:
@@ -184,3 +185,94 @@ OVERMESH_LIVE_CUSTOMER_CONTAINER="customer-data" \
 OVERMESH_LIVE_ALLOWED_MANAGED_IDENTITY_CLIENT_ID="00000000-0000-0000-0000-000000000000" \
 make test-live-azure-client-compat
 ```
+
+## Performance baseline
+
+`make test-live-azure-performance` executes the versioned matrix in
+`harness/performance/live-v3.toml`. It keeps 30 measured write operations and
+uses 240 for each read workload so latency percentiles are useful as signals.
+The retained 0.10.0 baseline remains bound to `live-v1.toml`; v2 is retained as
+the first request-attributed campaign contract. The runner alternates each case between one
+direct Storage Account and the live Overmesh endpoint, using the same managed
+identity, Azure SDK versions, validation host, payload bytes, operation count,
+and concurrency.
+
+The performance gate is intentionally excluded from `test-pre-pr-live` because
+it is long-running and retains signed release evidence. `make test-release`
+includes it.
+
+The current contract covers first `Put Blob`, overwrite, full `Get Blob`,
+ranged reads, `Head Blob`, and established-blob `Delete Blob` at 1 KiB, 1 MiB,
+and 16 MiB where applicable, with concurrency levels 1, 4, and 16. Deliberate
+matrix exclusions carry reasons in the contract. Warm-up samples are excluded.
+Retained measurements include min, mean, p50, p90, p95, max, operations per
+second, bytes per second, successful and failed operation counts, and
+gateway-to-direct ratios. Thirty samples do not support a distinct p99, so the
+contract does not publish one.
+
+The v2 non-regression policy separates controlled and observed quantities.
+Backend requests per operation are deterministic and blocking: a compared
+campaign stops before signing if any case increases them. p50 latency is a
+signal and p95 is informational; neither fails the gate because geography,
+service scheduling and network variance are outside the code's control. The
+first v2 campaign establishes these request-count baselines.
+
+Additional required environment:
+
+- `OVERMESH_LIVE_PERFORMANCE_RING_VERSION`;
+- `OVERMESH_LIVE_PERFORMANCE_RING_HASH`;
+- `OVERMESH_LIVE_PERFORMANCE_DEPLOYMENT`;
+- `OVERMESH_LIVE_PERFORMANCE_ENVIRONMENT`;
+- `OVERMESH_LIVE_PERFORMANCE_ISOLATED_ENVIRONMENT=true`;
+- `OVERMESH_LIVE_PERFORMANCE_PUBLIC_KEY`;
+- `OVERMESH_LIVE_PERFORMANCE_WORKSPACE_ID` (the workspace customer GUID);
+- `OVERMESH_LIVE_PERFORMANCE_GATEWAY_APP_NAME`, as a comma-separated list
+  when Front Door can route to multiple Gateway Container Apps;
+- `OVERMESH_LIVE_PERFORMANCE_GATEWAY_RESOURCE_ID`, in the same order and as a
+  comma-separated list when multiple Gateway resources serve the endpoint;
+- `OVERMESH_LIVE_EVIDENCE_KEY_ID`;
+- `OVERMESH_LIVE_EVIDENCE_SIGNING_CLIENT_ID`.
+
+The default raw result is
+`.harness/live-performance/<run-id>/raw-performance.json`. It is local input,
+not retained evidence. The gate then deterministically redacts the result,
+copies the public verification key, signs the canonical JSON through Key
+Vault, verifies the signature through Key Vault, and writes `SHA256SUMS` under
+`.harness/live-performance/<run-id>/signed/`. The endpoint itself is not
+written to evidence; only a deterministic hostname fingerprint is retained.
+The runner records the commit, project version, Ring provenance, immutable
+deployment identifier, logical environment identifier, selected Storage API
+version, matrix hash, and pinned SDK versions.
+
+The gate installs the pinned Log Analytics Azure CLI extension `1.0.0b1` under
+`$OVERMESH_LIVE_PERFORMANCE_ROOT/az-extensions`, not in the operator's global
+Azure CLI extension directory.
+
+`OVERMESH_LIVE_PERFORMANCE_BASELINE_EVIDENCE` optionally points to an earlier
+canonical performance evidence file. The gate rejects a different contract or
+case set, then records changes in Gateway-to-direct latency and throughput
+ratios, backend requests per operation, signing p95, campaign peak CPU, and
+campaign peak memory.
+Without a predecessor, the signed result explicitly records
+`baseline-established`.
+
+The client-side baseline deliberately does not infer server behavior. Gateway
+logs emit one structured `overmesh_backend_request` event per Storage request
+and one `overmesh_manifest_sign` event per Key Vault signing request, including
+duration, success, backend operation and object class. Evidence publishes
+object-class totals and operation/object-class decompositions so generic
+`control_get_object` traffic becomes a checkable budget. Before signing, the
+live gate queries those events per case across every Gateway origin and waits
+for the Azure Monitor event count to stabilize before accepting the result.
+Every backend and signing event carries a SHA-256 fingerprint of the incoming
+`x-ms-client-request-id`; setup, warm-up, measured, and cleanup operations use
+distinct identifiers. The collector requires all measured request fingerprints
+and retains only their count, never the identifiers themselves. It also sums
+Container Apps `UsageNanoCores`, `WorkingSetBytes`, and replica metrics across
+the configured Gateway resources once for the campaign. The gate requires an
+explicit isolated-environment assertion so other client traffic cannot
+contaminate backend request counts. Backend timings explicitly measure time to
+response headers, not full response-body transfer. Azure Monitor exposes
+resource metrics at one-minute granularity, so they are not attributed to
+individual sub-minute cases. Raw logs and Azure resource identifiers are not
+retained.
