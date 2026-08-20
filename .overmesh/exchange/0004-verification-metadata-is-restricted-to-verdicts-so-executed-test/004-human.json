@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 2,
+  "thread": "0004-verification-metadata-is-restricted-to-verdicts-so-executed-test",
+  "seq": 4,
+  "author": "human",
+  "kind": "approval",
+  "createdAt": "2026-08-20T16:06:43.654Z",
+  "subject": "approved: Thread verdict",
+  "body": "Approved by operator.",
+  "repliesTo": 3,
+  "refs": [],
+  "answeredBy": null,
+  "outcome": "approved"
+}
