@@ -76,6 +76,9 @@ var tags = {
   lifecycle: 'retained'
   autoDelete: 'false'
 }
+var performanceFixtureContainerNames = [
+  for index in range(0, 20): 'omv5fixture-${padLeft(string(index), 2, '0')}'
+]
 
 resource gatewayIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
   name: gatewayIdentityName
@@ -102,6 +105,7 @@ module data './modules/data-v090.bicep' = {
     retainedCustomerContainerNames: [
       'live-v050'
     ]
+    performanceFixtureContainerNames: performanceFixtureContainerNames
     tags: tags
   }
 }
@@ -248,6 +252,7 @@ module rbac './modules/rbac-v090.bicep' = {
     retainedCustomerContainerNames: [
       'live-v050'
     ]
+    performanceFixtureContainerNames: performanceFixtureContainerNames
   }
 }
 

@@ -31,7 +31,19 @@
         "deployment",
         "environment",
         "isolatedEnvironment"
-      ]
+      ],
+      "properties": {
+        "fixtureSetup": {
+          "type": "object",
+          "required": [
+            "startedAt",
+            "finishedAt",
+            "wallSeconds",
+            "fixtures",
+            "backendRequests"
+          ]
+        }
+      }
     },
     "contract": {
       "type": "object",
@@ -64,6 +76,10 @@
           "minimum": 1
         },
         "writeP50SpreadRatioMax": {
+          "type": "number",
+          "minimum": 1
+        },
+        "listingP50SpreadRatioMax": {
           "type": "number",
           "minimum": 1
         },
@@ -138,6 +154,14 @@
                   "minimum": 1
                 }
               },
+              "requestsPerEntryScannedPerRun": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              },
               "p50Classification": {
                 "enum": ["blocking", "signal"]
               }
@@ -167,6 +191,39 @@
                   "type": "integer",
                   "minimum": 1
                 }
+              }
+            },
+            "additionalProperties": false
+          },
+          "listingBudget": {
+            "type": "object",
+            "required": [
+              "entriesReturned",
+              "entriesScanned",
+              "backendRequests",
+              "requestsPerEntryReturned",
+              "requestsPerEntryScanned"
+            ],
+            "properties": {
+              "entriesReturned": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "entriesScanned": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "backendRequests": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "requestsPerEntryReturned": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "requestsPerEntryScanned": {
+                "type": "number",
+                "exclusiveMinimum": 0
               }
             },
             "additionalProperties": false
@@ -215,7 +272,7 @@
           "contract": {
             "properties": {
               "schemaVersion": {
-                "const": 4
+                "enum": [4, 5]
               }
             },
             "required": ["schemaVersion"]
@@ -227,6 +284,30 @@
         "properties": {
           "campaign": {
             "required": ["releaseTag"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "contract": {
+            "properties": {
+              "schemaVersion": {
+                "const": 5
+              }
+            },
+            "required": ["schemaVersion"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "campaign": {
+            "required": ["fixtureSetup"]
+          },
+          "resolution": {
+            "required": ["listingP50SpreadRatioMax"]
           }
         }
       }

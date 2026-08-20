@@ -24,6 +24,9 @@ param customerContainerName string
 @description('Retained customer containers copied to the new replica before reconciliation.')
 param retainedCustomerContainerNames array
 
+@description('Persistent performance fixture containers created on every replica.')
+param performanceFixtureContainerNames array
+
 @description('Common resource tags.')
 param tags object
 
@@ -64,6 +67,26 @@ resource customerContainerB 'Microsoft.Storage/storageAccounts/blobServices/cont
     publicAccess: 'None'
   }
 }
+
+resource performanceFixtureContainersA 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = [
+  for containerName in performanceFixtureContainerNames: {
+    parent: blobServiceA
+    name: containerName
+    properties: {
+      publicAccess: 'None'
+    }
+  }
+]
+
+resource performanceFixtureContainersB 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = [
+  for containerName in performanceFixtureContainerNames: {
+    parent: blobServiceB
+    name: containerName
+    properties: {
+      publicAccess: 'None'
+    }
+  }
+]
 
 resource storageC 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: storageAccountCName
@@ -121,6 +144,16 @@ resource customerContainerC 'Microsoft.Storage/storageAccounts/blobServices/cont
     publicAccess: 'None'
   }
 }
+
+resource performanceFixtureContainersC 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = [
+  for containerName in performanceFixtureContainerNames: {
+    parent: blobServiceC
+    name: containerName
+    properties: {
+      publicAccess: 'None'
+    }
+  }
+]
 
 resource retainedCustomerContainersC 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = [
   for containerName in retainedCustomerContainerNames: {

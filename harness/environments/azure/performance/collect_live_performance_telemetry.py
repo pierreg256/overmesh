@@ -158,7 +158,7 @@ union isfuzzy=true ContainerAppConsoleLogs, ContainerAppConsoleLogs_CL
 | extend Message = tostring(column_ifexists("Log", column_ifexists("Log_s", "")))
 | where AppName in ({escaped_names})
 | where TimeGenerated between (datetime({started_at}) .. datetime({finished_at}))
-| where Message has "overmesh_backend_request" or Message has "overmesh_manifest_sign"
+| where Message has "overmesh_backend_request" or Message has "overmesh_manifest_sign" or Message has "overmesh_listing_scan"
 | project TimeGenerated, Message
 | order by TimeGenerated asc
 """
@@ -179,6 +179,365 @@ union isfuzzy=true ContainerAppConsoleLogs, ContainerAppConsoleLogs_CL
         ]
     )
     return log_rows(response)
+
+
+def query_backend_request_count(
+    workspace: str,
+    app_names: str | list[str],
+    started_at: str,
+    finished_at: str,
+) -> int:
+    escaped_names = ", ".join(
+        f"'{name.replace(chr(39), chr(39) * 2)}'"
+        for name in comma_separated_values(app_names)
+    )
+    query = f"""
+union isfuzzy=true ContainerAppConsoleLogs, ContainerAppConsoleLogs_CL
+| extend AppName = tostring(column_ifexists("ContainerAppName", column_ifexists("ContainerAppName_s", "")))
+| extend Message = tostring(column_ifexists("Log", column_ifexists("Log_s", "")))
+| where AppName in ({escaped_names})
+| where TimeGenerated between (datetime({started_at}) .. datetime({finished_at}))
+| where Message has "overmesh_backend_request"
+| summarize Count=count()
+"""
+    response = run_json(
+        [
+            "az",
+            "monitor",
+            "log-analytics",
+            "query",
+            "--workspace",
+            workspace,
+            "--analytics-query",
+            query,
+            "--timespan",
+            f"{started_at}/{finished_at}",
+            "--output",
+            "json",
+        ]
+    )
+    if isinstance(response, list) and response:
+        return int(response[0].get("Count", 0))
+    if isinstance(response, dict) and response.get("tables"):
+        table = response["tables"][0]
+        columns = [column["name"] for column in table.get("columns", [])]
+        if table.get("rows") and "Count" in columns:
+            return int(table["rows"][0][columns.index("Count")])
+    raise RuntimeError("fixture setup backend count query returned no row")
+
+
+def repeated_scopes(
+    gateway_cases: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "key": f"{benchmark_case['id']}::repeat-{run['repeat']}",
+            "case": benchmark_case["id"],
+            "repeat": run["repeat"],
+            "startedAt": run["startedAt"],
+            "finishedAt": run["finishedAt"],
+        }
+        for benchmark_case in gateway_cases
+        for run in benchmark_case.get("runs", [])
+    ]
+
+
+def kusto_case_expression(
+    scopes: list[dict[str, Any]],
+    value_key: str,
+) -> str:
+    clauses = []
+    for scope in scopes:
+        value = str(scope[value_key]).replace("'", "''")
+        clauses.extend(
+            [
+                (
+                    "EventTime between "
+                    f"(datetime({scope['startedAt']}) .. "
+                    f"datetime({scope['finishedAt']}))"
+                ),
+                f"'{value}'",
+            ]
+        )
+    return "case(" + ", ".join([*clauses, "''"]) + ")"
+
+
+def query_repeated_aggregates(
+    workspace: str,
+    app_names: str | list[str],
+    gateway_cases: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    scopes = repeated_scopes(gateway_cases)
+    if not scopes:
+        return []
+    escaped_names = ", ".join(
+        f"'{name.replace(chr(39), chr(39) * 2)}'"
+        for name in comma_separated_values(app_names)
+    )
+    run_expression = kusto_case_expression(scopes, "key")
+    case_expression = kusto_case_expression(scopes, "case")
+    started_at = min(scope["startedAt"] for scope in scopes)
+    finished_at = max(scope["finishedAt"] for scope in scopes)
+    query = f"""
+let Base = materialize(
+  union isfuzzy=true ContainerAppConsoleLogs, ContainerAppConsoleLogs_CL
+  | extend AppName = tostring(column_ifexists("ContainerAppName", column_ifexists("ContainerAppName_s", "")))
+  | extend Message = tostring(column_ifexists("Log", column_ifexists("Log_s", "")))
+  | where AppName in ({escaped_names})
+  | where TimeGenerated between (datetime({started_at}) .. datetime({finished_at}))
+  | where Message has "overmesh_backend_request" or Message has "overmesh_manifest_sign" or Message has "overmesh_listing_scan"
+  | extend CleanMessage = replace_regex(Message, @'\\x1B\\[[0-?]*[ -/]*[@-~]', '')
+  | extend ParsedTime = todatetime(extract(@'^(\\d{{4}}-\\d{{2}}-\\d{{2}}T\\d{{2}}:\\d{{2}}:\\d{{2}}(?:\\.\\d+)?Z)', 1, CleanMessage))
+  | extend EventTime = coalesce(ParsedTime, TimeGenerated)
+  | extend RunKey = {run_expression}
+  | extend CaseId = {case_expression}
+  | where isnotempty(RunKey)
+  | extend Event = extract(@'event=\"?([^\" ]+)', 1, CleanMessage)
+  | extend Fingerprint = extract(@'client_request_fingerprint=\"?([^\" ]+)', 1, CleanMessage)
+  | extend BackendId = extract(@'backend_id=\"?([^\" ]+)', 1, CleanMessage)
+  | extend Operation = extract(@'operation=\"?([^\" ]+)', 1, CleanMessage)
+  | extend ObjectClass = extract(@'object_class=\"?([^\" ]+)', 1, CleanMessage)
+  | extend Status = extract(@'status=\"?([^\" ]+)', 1, CleanMessage)
+  | extend TransportSuccess = extract(@'transport_success=\"?([^\" ]+)', 1, CleanMessage)
+  | extend HeaderDurationUs = tolong(extract(@'response_headers_duration_us=\"?([^\" ]+)', 1, CleanMessage))
+  | extend SignDurationUs = tolong(extract(@'duration_us=\"?([^\" ]+)', 1, CleanMessage))
+  | extend SignSuccess = extract(@'success=\"?([^\" ]+)', 1, CleanMessage)
+  | extend SignDomain = extract(@'domain=\"?([^\" ]+)', 1, CleanMessage)
+  | extend EntriesReturned = tolong(extract(@'entries_returned=\"?([^\" ]+)', 1, CleanMessage))
+  | extend EntriesScanned = tolong(extract(@'entries_scanned=\"?([^\" ]+)', 1, CleanMessage))
+);
+let Scoped = materialize(
+  union
+    (Base | project ScopeType='run', Scope=RunKey, Event, Fingerprint, BackendId, Operation, ObjectClass, Status, TransportSuccess, HeaderDurationUs, SignDurationUs, SignSuccess, SignDomain, EntriesReturned, EntriesScanned),
+    (Base | project ScopeType='case', Scope=CaseId, Event, Fingerprint, BackendId, Operation, ObjectClass, Status, TransportSuccess, HeaderDurationUs, SignDurationUs, SignSuccess, SignDomain, EntriesReturned, EntriesScanned)
+);
+let Backend = materialize(Scoped | where Event == 'overmesh_backend_request');
+let Signing = materialize(Scoped | where Event == 'overmesh_manifest_sign');
+let Listing = materialize(Scoped | where Event == 'overmesh_listing_scan');
+union
+  (Backend | summarize Count=count(), ClientRequestCount=count_distinct(Fingerprint), UnattributedRequests=countif(isempty(Fingerprint) or Fingerprint == 'missing'), TransportFailures=countif(TransportSuccess != 'true'), TotalDurationUs=sum(HeaderDurationUs), P50DurationUs=tolong(percentile(HeaderDurationUs, 50)), P95DurationUs=tolong(percentile(HeaderDurationUs, 95)), P99DurationUs=tolong(percentile(HeaderDurationUs, 99)), MaxDurationUs=max(HeaderDurationUs) by ScopeType, Scope | extend RowType='backend-summary'),
+  (Backend | summarize Count=count() by ScopeType, Scope, Key1=BackendId | extend RowType='backend'),
+  (Backend | summarize Count=count() by ScopeType, Scope, Key1=Operation | extend RowType='operation'),
+  (Backend | summarize Count=count() by ScopeType, Scope, Key1=ObjectClass | extend RowType='object-class'),
+  (Backend | summarize Count=count() by ScopeType, Scope, Key1=Status | extend RowType='status'),
+  (Backend | summarize Count=count() by ScopeType, Scope, Key1=Operation, Key2=ObjectClass | extend RowType='operation-object-class'),
+  (Backend | summarize Count=count() by ScopeType, Scope, Key1=ObjectClass, Key2=Status | extend RowType='object-class-status'),
+  (Signing | summarize Count=count(), Failures=countif(SignSuccess != 'true'), TotalDurationUs=sum(SignDurationUs), P50DurationUs=tolong(percentile(SignDurationUs, 50)), P95DurationUs=tolong(percentile(SignDurationUs, 95)), P99DurationUs=tolong(percentile(SignDurationUs, 99)), MaxDurationUs=max(SignDurationUs) by ScopeType, Scope | extend RowType='signing-summary'),
+  (Signing | summarize Count=count() by ScopeType, Scope, Key1=SignDomain | extend RowType='signing-domain'),
+  (Listing | summarize Count=count(), EntriesReturned=sum(EntriesReturned), EntriesScanned=sum(EntriesScanned) by ScopeType, Scope | extend RowType='listing-summary'),
+  (Backend | where ScopeType == 'run' | summarize Count=count() by ScopeType, Scope, Key1=Fingerprint | extend RowType='fingerprint'),
+  (Backend | where ScopeType == 'run' | summarize Count=count() by ScopeType, Scope, Key1=Fingerprint, Key2=BackendId | extend RowType='fingerprint-backend')
+"""
+    response = run_json(
+        [
+            "az",
+            "monitor",
+            "log-analytics",
+            "query",
+            "--workspace",
+            workspace,
+            "--analytics-query",
+            query,
+            "--timespan",
+            f"{started_at}/{finished_at}",
+            "--output",
+            "json",
+        ]
+    )
+    if isinstance(response, list):
+        return response
+    if not isinstance(response, dict) or not response.get("tables"):
+        raise RuntimeError("aggregated telemetry query returned no table")
+    table = response["tables"][0]
+    columns = [column["name"] for column in table.get("columns", [])]
+    return [
+        dict(zip(columns, row, strict=True))
+        for row in table.get("rows", [])
+    ]
+
+
+def repeated_aggregate_metrics(
+    rows: list[dict[str, Any]],
+) -> tuple[
+    dict[tuple[str, str], dict[str, Any]],
+    dict[str, Counter[str]],
+    dict[str, dict[str, set[str]]],
+]:
+    metrics: dict[tuple[str, str], dict[str, Any]] = {}
+    fingerprint_counts: dict[str, Counter[str]] = {}
+    fingerprint_backends: dict[str, dict[str, set[str]]] = {}
+
+    def scope_metrics(scope_type: str, scope: str) -> dict[str, Any]:
+        return metrics.setdefault(
+            (scope_type, scope),
+            {
+                "backendRequests": {
+                    "count": 0,
+                    "clientRequestCount": 0,
+                    "unattributedRequests": 0,
+                    "transportFailures": 0,
+                    "responseHeadersDuration": duration_summary([]),
+                    "byBackend": {},
+                    "byOperation": {},
+                    "byObjectClass": {},
+                    "byOperationAndObjectClass": {},
+                    "byObjectClassAndStatus": {},
+                    "byStatus": {},
+                },
+                "manifestSigning": {
+                    **duration_summary([]),
+                    "failures": 0,
+                    "byDomain": {},
+                },
+                "listingScan": {
+                    "pages": 0,
+                    "entriesReturned": 0,
+                    "entriesScanned": 0,
+                },
+            },
+        )
+
+    for row in rows:
+        scope_type = str(row.get("ScopeType", ""))
+        scope = str(row.get("Scope", ""))
+        row_type = row.get("RowType")
+        current = scope_metrics(scope_type, scope)
+        count = int(row.get("Count") or 0)
+        key1 = str(row.get("Key1") or "")
+        key2 = str(row.get("Key2") or "")
+        if row_type == "backend-summary":
+            backend = current["backendRequests"]
+            backend.update(
+                {
+                    "count": count,
+                    "clientRequestCount": int(
+                        row.get("ClientRequestCount") or 0
+                    ),
+                    "unattributedRequests": int(
+                        row.get("UnattributedRequests") or 0
+                    ),
+                    "transportFailures": int(
+                        row.get("TransportFailures") or 0
+                    ),
+                    "responseHeadersDuration": {
+                        "count": count,
+                        "totalDurationUs": int(
+                            row.get("TotalDurationUs") or 0
+                        ),
+                        "p50DurationUs": int(
+                            row.get("P50DurationUs") or 0
+                        ),
+                        "p95DurationUs": int(
+                            row.get("P95DurationUs") or 0
+                        ),
+                        "p99DurationUs": int(
+                            row.get("P99DurationUs") or 0
+                        ),
+                        "maxDurationUs": int(
+                            row.get("MaxDurationUs") or 0
+                        ),
+                    },
+                }
+            )
+        elif row_type in {
+            "backend",
+            "operation",
+            "object-class",
+            "status",
+        }:
+            field = {
+                "backend": "byBackend",
+                "operation": "byOperation",
+                "object-class": "byObjectClass",
+                "status": "byStatus",
+            }[row_type]
+            current["backendRequests"][field][key1] = count
+        elif row_type in {
+            "operation-object-class",
+            "object-class-status",
+        }:
+            field = {
+                "operation-object-class": "byOperationAndObjectClass",
+                "object-class-status": "byObjectClassAndStatus",
+            }[row_type]
+            current["backendRequests"][field].setdefault(key1, {})[
+                key2
+            ] = count
+        elif row_type == "signing-summary":
+            current["manifestSigning"].update(
+                {
+                    "count": count,
+                    "totalDurationUs": int(
+                        row.get("TotalDurationUs") or 0
+                    ),
+                    "p50DurationUs": int(
+                        row.get("P50DurationUs") or 0
+                    ),
+                    "p95DurationUs": int(
+                        row.get("P95DurationUs") or 0
+                    ),
+                    "p99DurationUs": int(
+                        row.get("P99DurationUs") or 0
+                    ),
+                    "maxDurationUs": int(
+                        row.get("MaxDurationUs") or 0
+                    ),
+                    "failures": int(row.get("Failures") or 0),
+                }
+            )
+        elif row_type == "signing-domain":
+            current["manifestSigning"]["byDomain"][key1] = count
+        elif row_type == "listing-summary":
+            current["listingScan"] = {
+                "pages": count,
+                "entriesReturned": int(
+                    row.get("EntriesReturned") or 0
+                ),
+                "entriesScanned": int(
+                    row.get("EntriesScanned") or 0
+                ),
+            }
+        elif row_type == "fingerprint":
+            fingerprint_counts.setdefault(scope, Counter())[key1] = count
+        elif row_type == "fingerprint-backend":
+            fingerprint_backends.setdefault(scope, {}).setdefault(
+                key1, set()
+            ).add(key2)
+    return metrics, fingerprint_counts, fingerprint_backends
+
+
+def collect_stable_backend_request_count(
+    workspace: str,
+    app_names: str | list[str],
+    started_at: str,
+    finished_at: str,
+    wait_seconds: int,
+    poll_seconds: int,
+) -> int:
+    deadline = time.monotonic() + wait_seconds
+    previous: int | None = None
+    stable_polls = 0
+    while True:
+        count = query_backend_request_count(
+            workspace,
+            app_names,
+            started_at,
+            finished_at,
+        )
+        if count > 0:
+            stable_polls = stable_polls + 1 if count == previous else 1
+            previous = count
+            if stable_polls >= 2:
+                return count
+        else:
+            previous = None
+            stable_polls = 0
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                "Azure Monitor did not return a stable fixture setup "
+                f"backend request count within {wait_seconds} seconds"
+            )
+        time.sleep(poll_seconds)
 
 
 def log_rows(response: Any) -> list[tuple[datetime, str]]:
@@ -341,6 +700,9 @@ def aggregate_events(messages: list[str]) -> dict[str, Any]:
     signing_domains: Counter[str] = Counter()
     client_request_fingerprints: set[str] = set()
     unattributed_requests = 0
+    listing_entries_returned = 0
+    listing_entries_scanned = 0
+    listing_pages = 0
     for message in messages:
         fields = parse_fields(message)
         event = fields.get("event")
@@ -385,6 +747,13 @@ def aggregate_events(messages: list[str]) -> dict[str, Any]:
             signing_durations.append(duration_us)
             signing_failures += int(not success)
             signing_domains[fields.get("domain", "unknown")] += 1
+        elif event == "overmesh_listing_scan":
+            try:
+                listing_entries_returned += int(fields["entries_returned"])
+                listing_entries_scanned += int(fields["entries_scanned"])
+            except (KeyError, ValueError):
+                continue
+            listing_pages += 1
     return {
         "backendRequests": {
             "count": len(backend_header_durations),
@@ -409,6 +778,11 @@ def aggregate_events(messages: list[str]) -> dict[str, Any]:
             **duration_summary(signing_durations),
             "failures": signing_failures,
             "byDomain": dict(sorted(signing_domains.items())),
+        },
+        "listingScan": {
+            "pages": listing_pages,
+            "entriesReturned": listing_entries_returned,
+            "entriesScanned": listing_entries_scanned,
         },
     }
 
@@ -472,6 +846,78 @@ def request_counts_by_fingerprint(
         if fingerprint in expected:
             counts[fingerprint] += 1
     return counts
+
+
+def listing_budget(
+    messages: list[str],
+    operation: str | None = None,
+) -> dict[str, int | float]:
+    return listing_budget_from_metrics(
+        aggregate_events(messages),
+        operation,
+    )
+
+
+def listing_budget_from_metrics(
+    metrics: dict[str, Any],
+    operation: str | None = None,
+) -> dict[str, int | float]:
+    scan = metrics["listingScan"]
+    entries_scanned = scan["entriesScanned"]
+    if entries_scanned <= 0:
+        raise RuntimeError("listing telemetry has no scanned entries")
+    operation_classes = metrics["backendRequests"][
+        "byOperationAndObjectClass"
+    ]
+    control_gets = operation_classes.get("control_get_object", {})
+    backend_requests = sum(
+        control_gets.get(object_class, 0)
+        for object_class in ("catalogue", "head")
+    )
+    if operation == "list_containers":
+        backend_requests += operation_classes.get(
+            "authorize_container_list", {}
+        ).get("container", 0)
+    return {
+        "entriesReturned": scan["entriesReturned"],
+        "entriesScanned": entries_scanned,
+        "backendRequests": backend_requests,
+        "requestsPerEntryReturned": round(
+            backend_requests / scan["entriesReturned"], 6
+        )
+        if scan["entriesReturned"]
+        else 0.0,
+        "requestsPerEntryScanned": round(
+            backend_requests / entries_scanned, 6
+        ),
+    }
+
+
+def aggregate_fingerprint_vector(
+    fingerprint_counts: dict[str, Counter[str]],
+    gateway_cases: list[dict[str, Any]],
+    run_id: str,
+) -> FingerprintCountVector:
+    vector: list[tuple[str, int | None, str, int]] = []
+    for benchmark_case in gateway_cases:
+        for run in benchmark_case["runs"]:
+            scope = f"{benchmark_case['id']}::repeat-{run['repeat']}"
+            expected = measured_request_fingerprints_for_run(
+                run_id,
+                benchmark_case,
+                run,
+            )
+            counts = fingerprint_counts.get(scope, Counter())
+            vector.extend(
+                (
+                    benchmark_case["id"],
+                    run["repeat"],
+                    fingerprint,
+                    counts[fingerprint],
+                )
+                for fingerprint in sorted(expected)
+            )
+    return tuple(vector)
 
 
 FingerprintCountVector = tuple[tuple[str, int | None, str, int], ...]
@@ -788,6 +1234,135 @@ def collect_stable_events(
         time.sleep(poll_seconds)
 
 
+def collect_stable_repeated_aggregates(
+    workspace: str,
+    app_names: str | list[str],
+    gateway_cases: list[dict[str, Any]],
+    run_id: str,
+    wait_seconds: int,
+    poll_seconds: int,
+    stable_polls_required: int,
+) -> tuple[
+    dict[tuple[str, str], dict[str, Any]],
+    dict[str, Counter[str]],
+    dict[str, dict[str, set[str]]],
+]:
+    deadline = time.monotonic() + wait_seconds
+    previous_vector: FingerprintCountVector | None = None
+    stable_polls = 0
+    latest: tuple[
+        dict[tuple[str, str], dict[str, Any]],
+        dict[str, Counter[str]],
+        dict[str, dict[str, set[str]]],
+    ] | None = None
+    while True:
+        latest = repeated_aggregate_metrics(
+            query_repeated_aggregates(
+                workspace,
+                app_names,
+                gateway_cases,
+            )
+        )
+        current_vector = aggregate_fingerprint_vector(
+            latest[1],
+            gateway_cases,
+            run_id,
+        )
+        complete = fingerprint_count_vector_complete(
+            current_vector,
+            gateway_cases,
+        )
+        previous_vector, stable_polls = next_stability(
+            previous_vector,
+            stable_polls,
+            current_vector,
+            complete,
+        )
+        if stable_polls >= stable_polls_required:
+            return latest
+        if time.monotonic() >= deadline:
+            diagnostics = fingerprint_count_diagnostics(
+                current_vector,
+                gateway_cases,
+            )
+            detail = (
+                "fingerprint counts incomplete or mismatched: "
+                + "; ".join(diagnostics)
+                if diagnostics
+                else (
+                    "complete aggregate fingerprint vector did not "
+                    f"stabilize for {stable_polls_required} polls"
+                )
+            )
+            raise RuntimeError(
+                "Azure Monitor did not return complete aggregated telemetry "
+                f"within {wait_seconds} seconds; {detail}"
+            )
+        time.sleep(poll_seconds)
+
+
+def aggregate_placement_coverage(
+    run_id: str,
+    benchmark_case: dict[str, Any],
+    fingerprint_backends: dict[str, dict[str, set[str]]],
+    aggregate_metrics: dict[str, Any],
+) -> dict[str, Any]:
+    pool_size = benchmark_case["pathPoolSize"]
+    warmup_per_run = benchmark_case["warmupIterations"] // len(
+        benchmark_case["runs"]
+    )
+    pairs_by_path: dict[int, set[tuple[str, str]]] = {
+        index: set() for index in range(pool_size)
+    }
+    for run in benchmark_case["runs"]:
+        scope = f"{benchmark_case['id']}::repeat-{run['repeat']}"
+        by_fingerprint = fingerprint_backends.get(scope, {})
+        repeat_index = run["repeat"] - 1
+        for measured_index in range(run["iterations"]):
+            invocation_index = warmup_per_run + measured_index
+            fingerprint = request_fingerprint(
+                request_id(
+                    run_id,
+                    "gateway",
+                    benchmark_case["id"],
+                    invocation_index,
+                    repeat_index,
+                )
+            )
+            backends = by_fingerprint.get(fingerprint, set())
+            if len(backends) != 2:
+                raise RuntimeError(
+                    f"case {benchmark_case['id']} request {fingerprint} "
+                    f"reached {len(backends)} placement backends, expected 2"
+                )
+            pairs_by_path[invocation_index % pool_size].add(
+                tuple(sorted(backends))
+            )
+    inconsistent_paths = [
+        path_index
+        for path_index, pairs in pairs_by_path.items()
+        if len(pairs) != 1
+    ]
+    if inconsistent_paths:
+        raise RuntimeError(
+            f"case {benchmark_case['id']} has missing or inconsistent "
+            f"placement for pool paths {inconsistent_paths}"
+        )
+    distinct_pairs = {
+        next(iter(pairs)) for pairs in pairs_by_path.values()
+    }
+    if len(distinct_pairs) != 3:
+        raise RuntimeError(
+            f"case {benchmark_case['id']} exercised {len(distinct_pairs)} "
+            "placement pairs, expected 3"
+        )
+    return {
+        "distinctPaths": pool_size,
+        "distinctPlacementPairs": len(distinct_pairs),
+        "byBackend": aggregate_metrics["backendRequests"]["byBackend"],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--evidence", type=Path, required=True)
@@ -822,17 +1397,41 @@ def main() -> int:
         if benchmark_case["target"] == "gateway"
     ]
     campaign = evidence["campaign"]
-    query_windows = telemetry_query_windows(gateway_cases, campaign)
-    events = collect_stable_events(
-        workspace,
-        app_names,
-        query_windows,
-        gateway_cases,
-        campaign["runId"],
-        wait_seconds,
-        poll_seconds,
-        stable_polls_required,
-    )
+    fixture_setup = campaign.get("fixtureSetup")
+    repeated = bool(gateway_cases and gateway_cases[0].get("runs"))
+    aggregate_metrics_by_scope: dict[
+        tuple[str, str], dict[str, Any]
+    ] = {}
+    aggregate_fingerprint_counts: dict[str, Counter[str]] = {}
+    aggregate_fingerprint_backends: dict[
+        str, dict[str, set[str]]
+    ] = {}
+    events: list[tuple[datetime, str]] = []
+    if repeated:
+        (
+            aggregate_metrics_by_scope,
+            aggregate_fingerprint_counts,
+            aggregate_fingerprint_backends,
+        ) = collect_stable_repeated_aggregates(
+            workspace,
+            app_names,
+            gateway_cases,
+            campaign["runId"],
+            wait_seconds,
+            poll_seconds,
+            stable_polls_required,
+        )
+    else:
+        events = collect_stable_events(
+            workspace,
+            app_names,
+            telemetry_query_windows(gateway_cases, campaign),
+            gateway_cases,
+            campaign["runId"],
+            wait_seconds,
+            poll_seconds,
+            stable_polls_required,
+        )
 
     for benchmark_case in gateway_cases:
         runs = benchmark_case.get("runs")
@@ -862,7 +1461,11 @@ def main() -> int:
                 )
             ]
         )
-        event_metrics = aggregate_events(case_messages)
+        event_metrics = (
+            aggregate_metrics_by_scope[("case", benchmark_case["id"])]
+            if repeated
+            else aggregate_events(case_messages)
+        )
         if event_metrics["backendRequests"]["count"] == 0:
             raise RuntimeError(
                 f"case {benchmark_case['id']} has no backend request telemetry"
@@ -874,12 +1477,21 @@ def main() -> int:
         benchmark_case["serverTelemetry"] = event_metrics
         if runs is not None:
             requests_per_operation_per_run: list[int] = []
+            listing_budgets: list[dict[str, int | float]] = []
+            is_listing = benchmark_case["operation"].startswith("list_")
             for run, run_messages in zip(
                 runs,
                 messages_by_run,
                 strict=True,
             ):
-                run_metrics = aggregate_events(run_messages)
+                scope = (
+                    f"{benchmark_case['id']}::repeat-{run['repeat']}"
+                )
+                run_metrics = (
+                    aggregate_metrics_by_scope[("run", scope)]
+                    if repeated
+                    else aggregate_events(run_messages)
+                )
                 if (
                     run_metrics["backendRequests"]["unattributedRequests"]
                     != 0
@@ -888,53 +1500,137 @@ def main() -> int:
                         f"case {benchmark_case['id']} repeat "
                         f"{run['repeat']} has unattributed backend requests"
                     )
-                expected = measured_request_fingerprints_for_run(
-                    campaign["runId"],
-                    benchmark_case,
-                    run,
-                )
-                counts = request_counts_by_fingerprint(
-                    run_messages,
-                    expected,
-                )
-                distinct_counts = set(counts.values())
-                if set(counts) != expected or len(distinct_counts) != 1:
-                    raise RuntimeError(
-                        f"case {benchmark_case['id']} repeat "
-                        f"{run['repeat']} request budget varies by path or "
-                        "client operation"
+                if is_listing:
+                    budget = listing_budget_from_metrics(
+                        run_metrics,
+                        benchmark_case["operation"],
                     )
-                requests_per_operation_per_run.append(
-                    next(iter(distinct_counts))
-                )
+                    if budget["entriesReturned"] != run["entriesReturned"]:
+                        raise RuntimeError(
+                            f"case {benchmark_case['id']} repeat "
+                            f"{run['repeat']} client and server entry counts "
+                            "differ"
+                        )
+                    expected_per_entry = benchmark_case.get(
+                        "expectedRequestsPerEntryScanned"
+                    )
+                    if (
+                        expected_per_entry is not None
+                        and budget["requestsPerEntryScanned"]
+                        != expected_per_entry
+                    ):
+                        raise RuntimeError(
+                            f"case {benchmark_case['id']} repeat "
+                            f"{run['repeat']} requests per entry scanned is "
+                            f"{budget['requestsPerEntryScanned']}, expected "
+                            f"{expected_per_entry}"
+                        )
+                    listing_budgets.append(budget)
+                    run["listingBudget"] = budget
+                else:
+                    expected = measured_request_fingerprints_for_run(
+                        campaign["runId"],
+                        benchmark_case,
+                        run,
+                    )
+                    counts = (
+                        Counter(
+                            {
+                                fingerprint: (
+                                    aggregate_fingerprint_counts.get(
+                                        scope, Counter()
+                                    )[fingerprint]
+                                )
+                                for fingerprint in expected
+                                if aggregate_fingerprint_counts.get(
+                                    scope, Counter()
+                                )[fingerprint]
+                                > 0
+                            }
+                        )
+                        if repeated
+                        else request_counts_by_fingerprint(
+                            run_messages,
+                            expected,
+                        )
+                    )
+                    distinct_counts = set(counts.values())
+                    if set(counts) != expected or len(distinct_counts) != 1:
+                        raise RuntimeError(
+                            f"case {benchmark_case['id']} repeat "
+                            f"{run['repeat']} request budget varies by path "
+                            "or client operation"
+                        )
+                    requests_per_operation_per_run.append(
+                        next(iter(distinct_counts))
+                    )
                 run["serverTelemetry"] = run_metrics
-            if len(set(requests_per_operation_per_run)) != 1:
-                raise RuntimeError(
-                    f"case {benchmark_case['id']} request budget varies "
-                    "between campaign repeats"
-                )
-            expected_budget = benchmark_case.get(
-                "expectedBackendRequestsPerOperation"
-            )
-            if (
-                expected_budget is not None
-                and requests_per_operation_per_run[0] != expected_budget
-            ):
-                raise RuntimeError(
-                    f"case {benchmark_case['id']} request budget is "
-                    f"{requests_per_operation_per_run[0]}, expected "
-                    f"{expected_budget}"
-                )
-            benchmark_case["repeatability"][
-                "requestsPerOperationPerRun"
-            ] = requests_per_operation_per_run
-            if "pathPoolSize" in benchmark_case:
-                benchmark_case["placementCoverage"] = placement_coverage(
-                    campaign["runId"],
-                    benchmark_case,
-                    messages_by_run,
+            if is_listing:
+                per_entry = [
+                    budget["requestsPerEntryScanned"]
+                    for budget in listing_budgets
+                ]
+                if len(set(per_entry)) != 1:
+                    raise RuntimeError(
+                        f"case {benchmark_case['id']} per-entry request "
+                        "budget varies between campaign repeats"
+                    )
+                benchmark_case["listingBudget"] = listing_budget_from_metrics(
                     event_metrics,
+                    benchmark_case["operation"],
                 )
+                benchmark_case["repeatability"][
+                    "requestsPerEntryScannedPerRun"
+                ] = per_entry
+            else:
+                if len(set(requests_per_operation_per_run)) != 1:
+                    raise RuntimeError(
+                        f"case {benchmark_case['id']} request budget varies "
+                        "between campaign repeats"
+                    )
+                expected_budget = benchmark_case.get(
+                    "expectedBackendRequestsPerOperation"
+                )
+                if (
+                    expected_budget is not None
+                    and requests_per_operation_per_run[0] != expected_budget
+                ):
+                    raise RuntimeError(
+                        f"case {benchmark_case['id']} request budget is "
+                        f"{requests_per_operation_per_run[0]}, expected "
+                        f"{expected_budget}"
+                    )
+                benchmark_case["repeatability"][
+                    "requestsPerOperationPerRun"
+                ] = requests_per_operation_per_run
+            if "pathPoolSize" in benchmark_case:
+                benchmark_case["placementCoverage"] = (
+                    aggregate_placement_coverage(
+                        campaign["runId"],
+                        benchmark_case,
+                        aggregate_fingerprint_backends,
+                        event_metrics,
+                    )
+                    if repeated
+                    else placement_coverage(
+                        campaign["runId"],
+                        benchmark_case,
+                        messages_by_run,
+                        event_metrics,
+                    )
+                )
+
+    if fixture_setup is not None:
+        fixture_setup["backendRequests"] = {
+            "count": collect_stable_backend_request_count(
+                workspace,
+                app_names,
+                fixture_setup["startedAt"],
+                fixture_setup["finishedAt"],
+                wait_seconds,
+                poll_seconds,
+            )
+        }
 
     container_metrics = query_metrics(
         resource_ids,

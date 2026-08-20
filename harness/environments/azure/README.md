@@ -189,13 +189,13 @@ make test-live-azure-client-compat
 ## Performance baseline
 
 `make test-live-azure-performance` executes the versioned matrix in
-`harness/performance/live-v4.toml`. It executes the complete matrix three times
-in sequence, with 30 measured operations per write case and 60 per read case
-and repeat. Repeats are separated by the rest of the matrix so their p50 spread
+`harness/performance/live-v5.toml`. It executes the complete matrix three times
+in sequence, with workload-specific iteration counts recorded in the contract.
+Repeats are separated by the rest of the matrix so their p50 spread
 measures run-to-run conditions rather than adjacent samples. The retained
 0.10.0 baseline remains bound to `live-v1.toml`; v2 is the first
 request-attributed contract and v3 is the single-path, 240-read-sample
-predecessor.
+predecessor. The retained v4 contract remains immutable for its signed campaign.
 
 Each read case cycles deterministically over the same 24 logical paths in every
 repeat and campaign. Setup creates every path at the case payload size before
@@ -222,13 +222,26 @@ second, bytes per second, successful and failed operation counts, and
 gateway-to-direct ratios. Thirty samples do not support a distinct p99, so the
 contract does not publish one.
 
-The v4 non-regression policy separates controlled and observed quantities.
+V5 adds flat, hierarchical, paginated, and container listing, complete staged
+block upload sequences, and committed block-list reads. Listing fixtures are
+persistent and their sorted logical-name manifest, payload size, and content
+hashes are checked before measurement. The 20 container fixtures
+must be pre-created on every backend replica; the runner writes their sentinel
+through both the direct and Gateway targets so both surfaces are validated.
+Fixture setup time and Gateway backend request count are campaign evidence but
+remain outside every measured case window. Listing cases use a 600-second
+request timeout.
+
+The v5 non-regression policy separates controlled and observed quantities.
 Backend requests per operation are deterministic, exact, and blocking. A p50
 Gateway-to-direct overhead comparison becomes blocking only when both targets
 in both campaigns measure that case below the contract's p50 spread threshold;
 otherwise it remains a signal. Absolute latency and p95 remain informational.
-This makes latency gating a measured classification rather than a contract
-assertion.
+For listing, the blocking request gate is `requestsPerEntryScanned`; the
+Gateway emits the actual returned and scanned counts, and the collector counts
+only the four catalogue/head validation reads attributable to each scanned
+candidate. Fixed pagination and quarantine-list requests remain visible in
+full backend telemetry but do not dilute that per-entry budget.
 
 Additional required environment:
 

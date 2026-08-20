@@ -7,7 +7,11 @@ import re
 from pathlib import Path
 from typing import Any
 
-from overmesh_live_performance import Contract, load_contract
+from overmesh_live_performance import (
+    LISTING_OPERATIONS,
+    Contract,
+    load_contract,
+)
 
 FORBIDDEN = [
     re.compile(
@@ -109,10 +113,29 @@ def validate_document(
         raise ValueError("performance non-regression policy does not match")
     if document.get("campaign", {}).get("isolatedEnvironment") is not True:
         raise ValueError("performance campaign is not marked as isolated")
-    if contract.schema_version == 4 and not document.get("campaign", {}).get(
+    if contract.schema_version in {4, 5} and not document.get("campaign", {}).get(
         "releaseTag"
     ):
-        raise ValueError("schema_version 4 campaign release tag is missing")
+        raise ValueError("campaign release tag is missing")
+    if contract.schema_version == 5:
+        fixture_setup = document.get("campaign", {}).get("fixtureSetup", {})
+        fixture_manifests = {
+            fixture.get("id"): fixture.get("manifestSha256")
+            for fixture in fixture_setup.get("fixtures", [])
+            if isinstance(fixture, dict)
+        }
+        expected_manifests = {
+            fixture.id: fixture.manifest_sha256
+            for fixture in contract.fixtures
+        }
+        if (
+            fixture_manifests != expected_manifests
+            or fixture_setup.get("wallSeconds", 0) <= 0
+            or fixture_setup.get("backendRequests", {}).get("count", 0) <= 0
+        ):
+            raise ValueError(
+                "schema_version 5 fixture setup evidence is incomplete"
+            )
 
     expected_ids = {benchmark_case.id for benchmark_case in contract.cases}
     cases = document.get("cases")
@@ -158,7 +181,7 @@ def validate_document(
             or metrics.get("errorCount") != 0
         ):
             raise ValueError(f"case {key} did not complete successfully")
-        if contract.schema_version == 4:
+        if contract.schema_version in {4, 5}:
             runs = case.get("runs")
             if (
                 not isinstance(runs, list)
@@ -197,7 +220,47 @@ def validate_document(
                 != expected_classification
             ):
                 raise ValueError(f"case {key} has invalid repeatability")
+        is_listing = benchmark_case.operation.startswith("list_")
+        if contract.schema_version == 5:
+            if benchmark_case.backend_requests_per_operation == "establish":
+                if case.get("backendRequestBudget") != "establish":
+                    raise ValueError(
+                        f"case {key} is missing its establish request budget"
+                    )
+            elif "backendRequestBudget" in case:
+                raise ValueError(
+                    f"case {key} has an unexpected establish request budget"
+                )
+            if benchmark_case.fixture is not None and (
+                case.get("fixture") != benchmark_case.fixture.id
+                or case.get("fixtureManifestSha256")
+                != benchmark_case.fixture.manifest_sha256
+            ):
+                raise ValueError(f"case {key} fixture identity is invalid")
+            if is_listing:
+                if (
+                    benchmark_case.expected_requests_per_entry_scanned
+                    == "establish"
+                    and case.get("listingRequestBudget") != "establish"
+                ):
+                    raise ValueError(
+                        f"case {key} is missing its establish listing budget"
+                    )
+                if case.get("entriesReturned") != sum(
+                    run.get("entriesReturned", 0) for run in case["runs"]
+                ):
+                    raise ValueError(
+                        f"case {key} returned-entry count is inconsistent"
+                    )
+            elif "listingBudget" in case:
+                raise ValueError(
+                    f"non-listing case {key} has a listing budget"
+                )
         if key[1] != "gateway":
+            if contract.schema_version == 5 and "listingBudget" in case:
+                raise ValueError(
+                    f"direct case {key} must not claim Gateway request costs"
+                )
             continue
         telemetry = case.get("serverTelemetry", {})
         backend = telemetry.get("backendRequests", {})
@@ -223,7 +286,67 @@ def validate_document(
                 expected_iterations,
                 telemetry,
             )
-        if contract.schema_version == 4:
+        if contract.schema_version in {4, 5}:
+            if contract.schema_version == 5 and is_listing:
+                per_run = []
+                for run in case["runs"]:
+                    validate_classified_backend_telemetry(
+                        key,
+                        benchmark_case.measured_iterations,
+                        run.get("serverTelemetry", {}),
+                    )
+                    budget = run.get("listingBudget", {})
+                    if (
+                        budget.get("entriesReturned")
+                        != run.get("entriesReturned")
+                        or budget.get("entriesScanned", 0) <= 0
+                        or budget.get("backendRequests", 0) <= 0
+                    ):
+                        raise ValueError(
+                            f"case {key} repeat listing budget is incomplete"
+                        )
+                    expected_ratio = round(
+                        budget["backendRequests"]
+                        / budget["entriesScanned"],
+                        6,
+                    )
+                    expected_listing_ratio = (
+                        benchmark_case.expected_requests_per_entry_scanned
+                    )
+                    if (
+                        budget.get("requestsPerEntryScanned")
+                        != expected_ratio
+                        or (
+                            isinstance(expected_listing_ratio, float)
+                            and expected_ratio != expected_listing_ratio
+                        )
+                    ):
+                        raise ValueError(
+                            f"case {key} repeat listing budget is invalid"
+                        )
+                    per_run.append(expected_ratio)
+                aggregate = case.get("listingBudget", {})
+                if (
+                    aggregate.get("entriesReturned")
+                    != case.get("entriesReturned")
+                    or aggregate.get("entriesScanned", 0) <= 0
+                    or (
+                        isinstance(
+                            benchmark_case.expected_requests_per_entry_scanned,
+                            float,
+                        )
+                        and aggregate.get("requestsPerEntryScanned")
+                        != benchmark_case.expected_requests_per_entry_scanned
+                    )
+                    or case["repeatability"].get(
+                        "requestsPerEntryScannedPerRun"
+                    )
+                    != per_run
+                ):
+                    raise ValueError(
+                        f"case {key} aggregate listing budget is invalid"
+                    )
+                continue
             requests_per_run = []
             for run in case["runs"]:
                 validate_classified_backend_telemetry(
@@ -243,8 +366,13 @@ def validate_document(
                 )
             if (
                 len(set(requests_per_run)) != 1
-                or requests_per_run[0]
-                != benchmark_case.backend_requests_per_operation
+                or (
+                    isinstance(
+                        benchmark_case.backend_requests_per_operation, int
+                    )
+                    and requests_per_run[0]
+                    != benchmark_case.backend_requests_per_operation
+                )
                 or case["repeatability"].get(
                     "requestsPerOperationPerRun"
                 )
@@ -290,7 +418,21 @@ def validate_document(
                     f"campaign has incomplete {label} resource coverage"
                 )
 
-    if contract.schema_version == 4:
+    if contract.schema_version == 5:
+        for concurrency in (1, 4):
+            staged = indexed[
+                ("put_block_sequence-16mib-c" + str(concurrency), "gateway")
+            ]["repeatability"]["requestsPerOperationPerRun"][0]
+            single = indexed[
+                ("put_blob-16mib-c" + str(concurrency), "gateway")
+            ]["repeatability"]["requestsPerOperationPerRun"][0]
+            if staged <= single:
+                raise ValueError(
+                    "16 MiB block staging did not cost more backend requests "
+                    f"than Put Blob at concurrency {concurrency}"
+                )
+
+    if contract.schema_version in {4, 5}:
         gateway_cases = [
             case
             for (case_id, target), case in indexed.items()
@@ -302,20 +444,33 @@ def validate_document(
             for case in gateway_cases
             if case["operation"] in read_operations
         )
+        listing_operations = {
+            "list_blobs_flat",
+            "list_blobs_hierarchical",
+            "list_blobs_paginated",
+            "list_containers",
+        }
         write_max = max(
             case["repeatability"]["p50SpreadRatio"]
             for case in gateway_cases
-            if case["operation"] not in read_operations
+            if case["operation"] not in read_operations | listing_operations
         )
         worst_case = max(
             gateway_cases,
             key=lambda case: case["repeatability"]["p50SpreadRatio"],
         )["id"]
-        if document.get("resolution") != {
+        expected_resolution = {
             "readP50SpreadRatioMax": read_max,
             "writeP50SpreadRatioMax": write_max,
             "worstCase": worst_case,
-        }:
+        }
+        if contract.schema_version == 5:
+            expected_resolution["listingP50SpreadRatioMax"] = max(
+                case["repeatability"]["p50SpreadRatio"]
+                for case in gateway_cases
+                if case["operation"] in listing_operations
+            )
+        if document.get("resolution") != expected_resolution:
             raise ValueError("campaign resolution is missing or inconsistent")
 
     comparisons = document.get("comparisons")
@@ -349,8 +504,26 @@ def validate_document(
         if historical.get("status") == "compared":
             for result in historical.get("cases", []):
                 classifications = result.get("nonRegression", {})
-                backend_requests = classifications.get(
-                    "backendRequestsPerOperation", {}
+                case_id = result.get("case")
+                benchmark_case = next(
+                    (
+                        candidate
+                        for candidate in contract.cases
+                        if candidate.id == case_id
+                    ),
+                    None,
+                )
+                if benchmark_case is None:
+                    raise ValueError(
+                        "historical comparison references an unknown case"
+                    )
+                request_gate = classifications.get(
+                    (
+                        "requestsPerEntryScanned"
+                        if benchmark_case.operation in LISTING_OPERATIONS
+                        else "backendRequestsPerOperation"
+                    ),
+                    {},
                 )
                 invalid_latency_classification = (
                     classifications.get("p50Latency", {}).get(
@@ -366,8 +539,8 @@ def validate_document(
                     not in {"passed", "not-gated"}
                 )
                 if (
-                    backend_requests.get("classification") != "blocking"
-                    or backend_requests.get("status") != "passed"
+                    request_gate.get("classification") != "blocking"
+                    or request_gate.get("status") != "passed"
                     or invalid_latency_classification
                     or classifications.get("p95Latency", {}).get(
                         "classification"

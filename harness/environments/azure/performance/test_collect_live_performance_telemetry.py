@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from collect_live_performance_telemetry import (
     aggregate_events,
+    collect_stable_backend_request_count,
     collect_stable_events,
     comma_separated_values,
     covered_gateway_cases,
@@ -15,6 +16,7 @@ from collect_live_performance_telemetry import (
     fingerprint_count_vector,
     fingerprint_count_vector_complete,
     log_rows,
+    listing_budget,
     measured_request_fingerprints,
     next_stability,
     parse_fields,
@@ -132,6 +134,68 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         )
         self.assertEqual(metrics["manifestSigning"]["count"], 1)
         self.assertNotIn("logs", metrics)
+
+    def test_listing_budget_uses_only_per_entry_validation_reads(self) -> None:
+        messages = [
+            (
+                'event="overmesh_listing_scan" '
+                'client_request_fingerprint="request-a" '
+                "entries_returned=2 entries_scanned=2"
+            )
+        ]
+        messages.extend(
+            (
+                'event="overmesh_backend_request" '
+                'client_request_fingerprint="request-a" '
+                'backend_id="storage-a" '
+                'operation="control_get_object" '
+                f'object_class="{object_class}" status=200 '
+                "response_headers_duration_us=1 transport_success=true"
+            )
+            for object_class in ["catalogue", "catalogue", "head", "head"]
+            * 2
+        )
+        messages.append(
+            'event="overmesh_backend_request" '
+            'client_request_fingerprint="request-a" '
+            'backend_id="storage-a" operation="control_list_objects_page" '
+            'object_class="catalogue" status=200 '
+            "response_headers_duration_us=1 transport_success=true"
+        )
+        self.assertEqual(
+            listing_budget(messages),
+            {
+                "entriesReturned": 2,
+                "entriesScanned": 2,
+                "backendRequests": 8,
+                "requestsPerEntryReturned": 4.0,
+                "requestsPerEntryScanned": 4.0,
+            },
+        )
+
+    @patch("collect_live_performance_telemetry.time.sleep")
+    @patch(
+        "collect_live_performance_telemetry.query_backend_request_count",
+        side_effect=[0, 12, 12],
+    )
+    def test_fixture_setup_count_waits_for_stable_ingestion(
+        self,
+        query_count,
+        sleep,
+    ) -> None:
+        self.assertEqual(
+            collect_stable_backend_request_count(
+                "workspace",
+                ["gateway"],
+                "2026-01-01T00:00:00Z",
+                "2026-01-01T00:01:00Z",
+                60,
+                1,
+            ),
+            12,
+        )
+        self.assertEqual(query_count.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
 
     def test_case_coverage_requires_a_backend_event_in_each_window(self) -> None:
         first = datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc)

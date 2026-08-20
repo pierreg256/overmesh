@@ -92,10 +92,37 @@ def build_comparison(
         baseline_signing = baseline_server.get("manifestSigning", {})
         current_requests = requests_per_operation(current_gateway)
         baseline_requests = requests_per_operation(baseline_gateway)
+        is_listing = (
+            schema_version == 5
+            and current_gateway["operation"].startswith("list_")
+        )
+        current_listing_requests = (
+            current_gateway.get("listingBudget", {}).get(
+                "requestsPerEntryScanned"
+            )
+            if is_listing
+            else None
+        )
+        baseline_listing_requests = (
+            baseline_gateway.get("listingBudget", {}).get(
+                "requestsPerEntryScanned"
+            )
+            if is_listing
+            else None
+        )
+        if is_listing and (
+            not isinstance(current_listing_requests, (int, float))
+            or not isinstance(baseline_listing_requests, (int, float))
+        ):
+            raise ValueError(
+                f"listing case {case_id} is missing per-entry request budgets"
+            )
         request_status = (
             "passed"
             if (
-                current_requests == baseline_requests
+                current_listing_requests == baseline_listing_requests
+                if is_listing
+                else current_requests == baseline_requests
                 if schema_version >= 4
                 else current_backend["count"]
                 * baseline_gateway["iterations"]
@@ -178,9 +205,21 @@ def build_comparison(
                     baseline_overhead["gatewayToDirectThroughputRatio"],
                 ),
                 "serverTelemetryChange": {
-                    "backendRequestsPerOperation": ratio(
-                        current_requests,
-                        baseline_requests,
+                    (
+                        "requestsPerEntryScanned"
+                        if is_listing
+                        else "backendRequestsPerOperation"
+                    ): ratio(
+                        (
+                            current_listing_requests
+                            if is_listing
+                            else current_requests
+                        ),
+                        (
+                            baseline_listing_requests
+                            if is_listing
+                            else baseline_requests
+                        ),
                     ),
                     "signingP95Duration": ratio(
                         current_signing.get("p95DurationUs"),
@@ -190,12 +229,28 @@ def build_comparison(
                 **(
                     {
                         "nonRegression": {
-                            "backendRequestsPerOperation": {
+                            (
+                                "requestsPerEntryScanned"
+                                if is_listing
+                                else "backendRequestsPerOperation"
+                            ): {
                                 "classification": policy[
-                                    "backendRequestsPerOperation"
+                                    (
+                                        "requestsPerEntryScanned"
+                                        if is_listing
+                                        else "backendRequestsPerOperation"
+                                    )
                                 ],
-                                "baseline": baseline_requests,
-                                "current": current_requests,
+                                "baseline": (
+                                    baseline_listing_requests
+                                    if is_listing
+                                    else baseline_requests
+                                ),
+                                "current": (
+                                    current_listing_requests
+                                    if is_listing
+                                    else current_requests
+                                ),
                                 "status": request_status,
                             },
                             "p50Latency": {
@@ -269,6 +324,10 @@ def build_comparison(
         if (
             result.get("nonRegression", {})
             .get("backendRequestsPerOperation", {})
+            .get("status")
+            == "failed"
+            or result.get("nonRegression", {})
+            .get("requestsPerEntryScanned", {})
             .get("status")
             == "failed"
             or result.get("nonRegression", {})

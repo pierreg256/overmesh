@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from overmesh_live_performance import (
+    fixture_manifest_sha256,
     latency_metrics,
     load_contract,
     percentile,
@@ -72,6 +73,76 @@ class PerformanceContractTests(unittest.TestCase):
                 for benchmark_case in repeated.cases
             },
             {10, 15, 18, 43, 49},
+        )
+        live_v5 = load_contract(Path("harness/performance/live-v5.toml"))
+        self.assertEqual(live_v5.schema_version, 5)
+        self.assertEqual(len(live_v5.cases), 42)
+        self.assertEqual(len(live_v5.fixtures), 5)
+        self.assertEqual(
+            live_v5.non_regression.document()[
+                "requestsPerEntryScanned"
+            ],
+            "blocking",
+        )
+        self.assertTrue(
+            all(
+                fixture.manifest_sha256
+                == fixture_manifest_sha256(fixture)
+                for fixture in live_v5.fixtures
+            )
+        )
+        listing_cases = [
+            case
+            for case in live_v5.cases
+            if case.operation.startswith("list_")
+        ]
+        self.assertEqual(len(listing_cases), 9)
+        self.assertTrue(
+            all(case.request_timeout_seconds == 600 for case in listing_cases)
+        )
+        self.assertEqual(
+            {
+                case.expected_requests_per_entry_scanned
+                for case in listing_cases
+                if case.operation != "list_containers"
+            },
+            {4.0},
+        )
+        self.assertEqual(
+            next(
+                case
+                for case in listing_cases
+                if case.operation == "list_containers"
+            ).expected_requests_per_entry_scanned,
+            "establish",
+        )
+        self.assertEqual(
+            len(
+                [
+                    case
+                    for case in live_v5.cases
+                    if case.operation == "put_block_sequence"
+                ]
+            ),
+            4,
+        )
+        self.assertEqual(
+            {
+                case.measured_iterations
+                for case in listing_cases
+                if case.operation == "list_blobs_flat"
+                and case.fixture is not None
+                and case.fixture.blob_count == 100
+            },
+            {60},
+        )
+        self.assertTrue(
+            all(
+                case.backend_requests_per_operation == "establish"
+                for case in live_v5.cases
+                if case.operation
+                in {"put_block_sequence", "get_block_list"}
+            )
         )
 
     def test_unknown_payload_fails_closed(self) -> None:

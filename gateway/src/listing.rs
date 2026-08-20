@@ -57,6 +57,7 @@ pub struct BlobListPage {
     pub max_results: u32,
     pub marker: String,
     pub entries: Vec<BlobListEntry>,
+    pub entries_scanned: u64,
     pub next_marker: Option<String>,
     pub include_metadata: bool,
 }
@@ -74,6 +75,7 @@ pub struct ContainerListPage {
     pub max_results: u32,
     pub marker: String,
     pub containers: Vec<ListedContainer>,
+    pub entries_scanned: u64,
     pub next_marker: Option<String>,
 }
 
@@ -200,6 +202,7 @@ impl ListingService {
         let batch_size = limit.saturating_add(1).max(MIN_CATALOG_PAGE_SIZE);
         let mut backend_cursors = state.map_or(backend_cursors, |state| state.backend_cursors);
         let mut entries = Vec::with_capacity(limit);
+        let mut entries_scanned = 0_u64;
         let mut last_emitted_prefix = None;
         let mut has_more = false;
         let mut continuation_cursors = backend_cursors.clone();
@@ -224,6 +227,7 @@ impl ListingService {
                 let candidate = self
                     .validated_catalog_blob(&key, &quarantined, &control_token)
                     .await?;
+                entries_scanned = entries_scanned.saturating_add(1);
                 let Some((name, metadata)) = candidate else {
                     after = Some(key);
                     consumed_any = true;
@@ -291,6 +295,7 @@ impl ListingService {
             max_results: request.max_results,
             marker: request.marker.clone().unwrap_or_default(),
             entries,
+            entries_scanned,
             next_marker,
             include_metadata: request.include.iter().any(|value| value == "metadata"),
         })
@@ -332,6 +337,7 @@ impl ListingService {
         let limit = usize::try_from(request.max_results).expect("maxresults fits usize");
         let batch_size = limit.saturating_add(1).max(MIN_CATALOG_PAGE_SIZE);
         let mut containers = Vec::with_capacity(limit);
+        let mut entries_scanned = 0_u64;
         let mut last_container = after.clone();
         let mut continuation_cursors = backend_cursors.clone();
         let mut has_more = false;
@@ -369,9 +375,11 @@ impl ListingService {
                     .validated_catalog_blob(&key, &quarantined, &control_token)
                     .await?
                 else {
+                    entries_scanned = entries_scanned.saturating_add(1);
                     consumed_any = true;
                     continue;
                 };
+                entries_scanned = entries_scanned.saturating_add(1);
                 match self.authorize_container(&candidate, principal).await {
                     Ok(()) => {}
                     Err(ListingError::Authorization | ListingError::ContainerNotFound) => {
@@ -421,6 +429,7 @@ impl ListingService {
             max_results: request.max_results,
             marker: request.marker.clone().unwrap_or_default(),
             containers,
+            entries_scanned,
             next_marker,
         })
     }
@@ -846,6 +855,7 @@ mod tests {
                 name: "a&b".to_owned(),
                 metadata: metadata(),
             })],
+            entries_scanned: 1,
             next_marker: Some("\"next\"".to_owned()),
             include_metadata: true,
         };

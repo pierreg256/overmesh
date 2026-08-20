@@ -43,7 +43,7 @@ validator="$script_dir/performance/validate_performance_evidence.py"
 requirements="$script_dir/performance/requirements.txt"
 builder="$script_dir/build-live-evidence.py"
 signer="$script_dir/sign-live-evidence.sh"
-contract=${OVERMESH_LIVE_PERFORMANCE_CONTRACT:-"$repo_root/harness/performance/live-v4.toml"}
+contract=${OVERMESH_LIVE_PERFORMANCE_CONTRACT:-"$repo_root/harness/performance/live-v5.toml"}
 install_root=${OVERMESH_LIVE_PERFORMANCE_ROOT:-/opt/overmesh-live/performance}
 export AZURE_EXTENSION_DIR=${OVERMESH_LIVE_PERFORMANCE_AZURE_EXTENSION_DIR:-"$install_root/az-extensions"}
 log_analytics_extension_version=${OVERMESH_LIVE_PERFORMANCE_LOG_ANALYTICS_EXTENSION_VERSION:-1.0.0b1}
@@ -73,8 +73,8 @@ contract_schema_version=$(
     'import pathlib,sys,tomllib; print(tomllib.loads(pathlib.Path(sys.argv[1]).read_text())["schema_version"])' \
     "$contract"
 )
-if [[ "$contract_schema_version" == "4" && -z "${OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG:-}" ]]; then
-  echo "OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG is required by contract v4." >&2
+if [[ "$contract_schema_version" =~ ^(4|5)$ && -z "${OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG:-}" ]]; then
+  echo "OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG is required by contract v4 or v5." >&2
   exit 2
 fi
 
@@ -118,7 +118,7 @@ fi
 export OVERMESH_LIVE_PERFORMANCE_RUN_ID=$run_id
 export OVERMESH_LIVE_PERFORMANCE_COMMIT=${OVERMESH_LIVE_PERFORMANCE_COMMIT:-$(git -C "$repo_root" rev-parse HEAD)}
 export OVERMESH_LIVE_PERFORMANCE_PROJECT_VERSION=${OVERMESH_LIVE_PERFORMANCE_PROJECT_VERSION:-$(<"$repo_root/VERSION")}
-if [[ "$contract_schema_version" == "4" ]]; then
+if [[ "$contract_schema_version" =~ ^(4|5)$ ]]; then
   if [[ "$(git -C "$repo_root" cat-file -t "refs/tags/$OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG" 2>/dev/null || true)" != "tag" ]]; then
     echo "OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG must name an annotated local tag." >&2
     exit 2

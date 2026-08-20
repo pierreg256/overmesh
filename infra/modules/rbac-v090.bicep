@@ -30,6 +30,9 @@ param customerContainerName string
 @description('Retained customer containers requiring symmetric access on Storage C.')
 param retainedCustomerContainerNames array
 
+@description('Persistent performance fixture containers requiring symmetric access.')
+param performanceFixtureContainerNames array
+
 var readerRoleId = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
   'acdd72a7-3385-48ef-bd42-f606fba81ae7'
@@ -92,6 +95,27 @@ resource customerContainerC 'Microsoft.Storage/storageAccounts/blobServices/cont
 
 resource retainedCustomerContainersC 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' existing = [
   for containerName in retainedCustomerContainerNames: {
+    parent: blobServiceC
+    name: containerName
+  }
+]
+
+resource performanceFixtureContainersA 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' existing = [
+  for containerName in performanceFixtureContainerNames: {
+    parent: blobServiceA
+    name: containerName
+  }
+]
+
+resource performanceFixtureContainersB 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' existing = [
+  for containerName in performanceFixtureContainerNames: {
+    parent: blobServiceB
+    name: containerName
+  }
+]
+
+resource performanceFixtureContainersC 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' existing = [
+  for containerName in performanceFixtureContainerNames: {
     parent: blobServiceC
     name: containerName
   }
@@ -257,6 +281,78 @@ resource callerRetainedCustomersC 'Microsoft.Authorization/roleAssignments@2022-
   for (containerName, index) in retainedCustomerContainerNames: {
     name: guid(retainedCustomerContainersC[index].id, allowedCallerPrincipalId, blobContributorRoleId)
     scope: retainedCustomerContainersC[index]
+    properties: {
+      principalId: allowedCallerPrincipalId
+      principalType: 'ServicePrincipal'
+      roleDefinitionId: blobContributorRoleId
+    }
+  }
+]
+
+resource reconcilerPerformanceFixturesA 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for (containerName, index) in performanceFixtureContainerNames: {
+    name: guid(performanceFixtureContainersA[index].id, reconcilerPrincipalId, blobContributorRoleId)
+    scope: performanceFixtureContainersA[index]
+    properties: {
+      principalId: reconcilerPrincipalId
+      principalType: 'ServicePrincipal'
+      roleDefinitionId: blobContributorRoleId
+    }
+  }
+]
+
+resource reconcilerPerformanceFixturesB 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for (containerName, index) in performanceFixtureContainerNames: {
+    name: guid(performanceFixtureContainersB[index].id, reconcilerPrincipalId, blobContributorRoleId)
+    scope: performanceFixtureContainersB[index]
+    properties: {
+      principalId: reconcilerPrincipalId
+      principalType: 'ServicePrincipal'
+      roleDefinitionId: blobContributorRoleId
+    }
+  }
+]
+
+resource reconcilerPerformanceFixturesC 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for (containerName, index) in performanceFixtureContainerNames: {
+    name: guid(performanceFixtureContainersC[index].id, reconcilerPrincipalId, blobContributorRoleId)
+    scope: performanceFixtureContainersC[index]
+    properties: {
+      principalId: reconcilerPrincipalId
+      principalType: 'ServicePrincipal'
+      roleDefinitionId: blobContributorRoleId
+    }
+  }
+]
+
+resource callerPerformanceFixturesA 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for (containerName, index) in performanceFixtureContainerNames: {
+    name: guid(performanceFixtureContainersA[index].id, allowedCallerPrincipalId, blobContributorRoleId)
+    scope: performanceFixtureContainersA[index]
+    properties: {
+      principalId: allowedCallerPrincipalId
+      principalType: 'ServicePrincipal'
+      roleDefinitionId: blobContributorRoleId
+    }
+  }
+]
+
+resource callerPerformanceFixturesB 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for (containerName, index) in performanceFixtureContainerNames: {
+    name: guid(performanceFixtureContainersB[index].id, allowedCallerPrincipalId, blobContributorRoleId)
+    scope: performanceFixtureContainersB[index]
+    properties: {
+      principalId: allowedCallerPrincipalId
+      principalType: 'ServicePrincipal'
+      roleDefinitionId: blobContributorRoleId
+    }
+  }
+]
+
+resource callerPerformanceFixturesC 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for (containerName, index) in performanceFixtureContainerNames: {
+    name: guid(performanceFixtureContainersC[index].id, allowedCallerPrincipalId, blobContributorRoleId)
+    scope: performanceFixtureContainersC[index]
     properties: {
       principalId: allowedCallerPrincipalId
       principalType: 'ServicePrincipal'
