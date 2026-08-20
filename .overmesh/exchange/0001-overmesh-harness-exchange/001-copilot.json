@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "thread": "0001-overmesh-harness-exchange",
+  "seq": 1,
+  "author": "copilot",
+  "kind": "spec",
+  "createdAt": "2026-08-20T12:38:06.024Z",
+  "subject": "Implement overmesh-harness exchange",
+  "body": "Implement the complete attached assistant work exchange specification and verify every normative behavior before requesting an independent verdict.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "artifact",
+      "value": ".overmesh/exchange/0001-overmesh-harness-exchange/attachments/specification.md"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null
+}

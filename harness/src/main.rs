@@ -12,6 +12,11 @@ use overmesh_harness::{
     dataset::generate,
     doc_check,
     environment::local_service_statuses,
+    exchange::{
+        DEFAULT_CONSECUTIVE_LIMIT, Exchange, MessageKind, MessageRef, PostOrigin, PostRequest,
+        RefKind,
+    },
+    exchange_mcp,
     identity::{TestPrincipal, TestTokenKind, issue_test_token},
     manifest_validation::{
         verify_local_commit_manifest, verify_local_garbage_collection_marker,
@@ -110,6 +115,70 @@ enum Command {
         first_node: String,
         second_node: String,
     },
+    Exchange {
+        #[command(subcommand)]
+        command: ExchangeCommand,
+    },
+    ExchangeMcp,
+}
+
+#[derive(Debug, Subcommand)]
+enum ExchangeCommand {
+    List,
+    Show {
+        thread: String,
+        #[arg(long, default_value_t = 0)]
+        since: u32,
+    },
+    Approve {
+        thread: String,
+        #[arg(long)]
+        seq: Option<u32>,
+        #[arg(short = 'm', long, default_value = "Approved by operator.")]
+        message: String,
+    },
+    Reject {
+        thread: String,
+        #[arg(long)]
+        seq: Option<u32>,
+        #[arg(short = 'm', long)]
+        message: String,
+    },
+    Post {
+        thread: Option<String>,
+        #[arg(long, value_enum)]
+        kind: ExchangeKindArgument,
+        #[arg(long)]
+        subject: Option<String>,
+        #[arg(short = 'm', long)]
+        message: String,
+        #[arg(long = "ref")]
+        refs: Vec<String>,
+        #[arg(long)]
+        replies_to: Option<u32>,
+        #[arg(long)]
+        answered_by: Option<String>,
+        #[arg(long, value_enum)]
+        outcome: Option<ExchangeOutcomeArgument>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ExchangeKindArgument {
+    Finding,
+    Question,
+    Correction,
+    Spec,
+    Report,
+    Verdict,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ExchangeOutcomeArgument {
+    Verified,
+    NotVerified,
+    Withdrawn,
+    Superseded,
 }
 
 #[derive(Debug, Subcommand)]
@@ -188,6 +257,30 @@ impl From<ReplicaArgument> for toxiproxy::ProxyReplica {
     }
 }
 
+impl From<ExchangeKindArgument> for MessageKind {
+    fn from(value: ExchangeKindArgument) -> Self {
+        match value {
+            ExchangeKindArgument::Finding => Self::Finding,
+            ExchangeKindArgument::Question => Self::Question,
+            ExchangeKindArgument::Correction => Self::Correction,
+            ExchangeKindArgument::Spec => Self::Spec,
+            ExchangeKindArgument::Report => Self::Report,
+            ExchangeKindArgument::Verdict => Self::Verdict,
+        }
+    }
+}
+
+impl ExchangeOutcomeArgument {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+            Self::NotVerified => "not-verified",
+            Self::Withdrawn => "withdrawn",
+            Self::Superseded => "superseded",
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> ExitCode {
     match execute().await {
@@ -201,7 +294,17 @@ async fn main() -> ExitCode {
 
 async fn execute() -> Result<ExitCode> {
     let cli = Cli::parse();
-    let repository_root = env::current_dir().context("failed to determine current directory")?;
+    let current_directory = env::current_dir().context("failed to determine current directory")?;
+    let repository_root = if matches!(
+        &cli.command,
+        Command::Exchange { .. } | Command::ExchangeMcp
+    ) {
+        env::var_os("OVERMESH_EXCHANGE_REPOSITORY")
+            .map(PathBuf::from)
+            .unwrap_or(current_directory)
+    } else {
+        current_directory
+    };
 
     match cli.command {
         Command::List { directory } => {
@@ -415,8 +518,132 @@ async fn execute() -> Result<ExitCode> {
                 found.context("failed to find a logical blob for the requested replica pair")?
             );
         }
+        Command::Exchange { command } => {
+            let exchange = exchange_from_environment(&repository_root)?;
+            match command {
+                ExchangeCommand::List => {
+                    println!("{}", serde_json::to_string_pretty(&exchange.list()?)?);
+                }
+                ExchangeCommand::Show { thread, since } => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&exchange.read_operator(&thread, since)?)?
+                    );
+                }
+                ExchangeCommand::Approve {
+                    thread,
+                    seq,
+                    message,
+                } => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(
+                            &exchange.approve(&thread, seq, true, message,)?
+                        )?
+                    );
+                }
+                ExchangeCommand::Reject {
+                    thread,
+                    seq,
+                    message,
+                } => {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(
+                            &exchange.approve(&thread, seq, false, message,)?
+                        )?
+                    );
+                }
+                ExchangeCommand::Post {
+                    thread,
+                    kind,
+                    subject,
+                    message,
+                    refs,
+                    replies_to,
+                    answered_by,
+                    outcome,
+                } => {
+                    let subject = subject.unwrap_or_else(|| subject_from_body(&message));
+                    let result = exchange.post(
+                        "human",
+                        PostOrigin::Cli,
+                        PostRequest {
+                            kind: kind.into(),
+                            subject,
+                            body: message,
+                            thread,
+                            refs: refs
+                                .iter()
+                                .map(|reference| parse_exchange_ref(reference))
+                                .collect::<Result<_>>()?,
+                            replies_to,
+                            answered_by,
+                            outcome: outcome.map(|outcome| outcome.as_str().to_owned()),
+                        },
+                    )?;
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                }
+            }
+        }
+        Command::ExchangeMcp => {
+            let exchange = exchange_from_environment(&repository_root)?;
+            let author = env::var("OVERMESH_EXCHANGE_AUTHOR")
+                .context("OVERMESH_EXCHANGE_AUTHOR is required for exchange-mcp")?;
+            exchange_mcp::serve_stdio(&exchange, &author)?;
+        }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn exchange_from_environment(repository_root: &Path) -> Result<Exchange> {
+    let authors = env::var("OVERMESH_EXCHANGE_AUTHORS")
+        .unwrap_or_else(|_| "claude,copilot".to_owned())
+        .split(',')
+        .map(str::trim)
+        .map(str::to_owned)
+        .filter(|author| !author.is_empty())
+        .collect::<Vec<_>>();
+    let limit = env::var("OVERMESH_EXCHANGE_CONSECUTIVE_LIMIT")
+        .ok()
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .context("OVERMESH_EXCHANGE_CONSECUTIVE_LIMIT must be a positive integer")
+        })
+        .transpose()?
+        .unwrap_or(DEFAULT_CONSECUTIVE_LIMIT);
+    Exchange::new(repository_root, authors, limit)
+}
+
+fn parse_exchange_ref(value: &str) -> Result<MessageRef> {
+    let (kind, value) = value
+        .split_once(':')
+        .context("exchange ref must be kind:value")?;
+    if value.is_empty() {
+        bail!("exchange ref value must be non-empty");
+    }
+    let kind = match kind {
+        "code" => RefKind::Code,
+        "commit" => RefKind::Commit,
+        "artifact" => RefKind::Artifact,
+        "record" => RefKind::Record,
+        "url" => RefKind::Url,
+        _ => bail!("unknown exchange ref kind {kind:?}"),
+    };
+    Ok(MessageRef {
+        kind,
+        value: value.to_owned(),
+    })
+}
+
+fn subject_from_body(body: &str) -> String {
+    let subject = body
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("Exchange message")
+        .trim();
+    subject.chars().take(120).collect()
 }
 
 fn github_repository_url(repository_root: &Path) -> Result<String> {

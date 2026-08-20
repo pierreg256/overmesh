@@ -2,6 +2,8 @@ pub mod crypto;
 pub mod dataset;
 pub mod doc_check;
 pub mod environment;
+pub mod exchange;
+pub mod exchange_mcp;
 pub mod fault;
 pub mod identity;
 pub mod manifest_validation;

@@ -1,0 +1,450 @@
+use std::io::{self, BufRead, Write};
+
+use anyhow::{Context, Result};
+use serde::Deserialize;
+use serde_json::{Value, json};
+
+use crate::exchange::{Exchange, MessageKind, MessageRef, PostOrigin, PostRequest, VerdictOutcome};
+
+const MCP_PROTOCOL_VERSION: &str = "2025-03-26";
+
+#[derive(Debug, Deserialize)]
+struct CallToolParams {
+    name: String,
+    #[serde(default)]
+    arguments: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ReadArguments {
+    thread: String,
+    #[serde(default)]
+    since: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PostArguments {
+    kind: MessageKind,
+    subject: String,
+    body: String,
+    thread: Option<String>,
+    #[serde(default)]
+    refs: Vec<MessageRef>,
+    replies_to: Option<u32>,
+    answered_by: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ResolveArguments {
+    thread: String,
+    outcome: VerdictOutcome,
+    body: String,
+    refs: Vec<MessageRef>,
+}
+
+pub fn serve_stdio(exchange: &Exchange, author: &str) -> Result<()> {
+    exchange.validate_mcp_author(author)?;
+    let stdin = io::stdin();
+    let mut stdout = io::stdout().lock();
+    for line in stdin.lock().lines() {
+        let line = line.context("failed to read MCP request")?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let request = match serde_json::from_str::<Value>(&line) {
+            Ok(request) => request,
+            Err(error) => {
+                write_response(
+                    &mut stdout,
+                    &json_rpc_error(Value::Null, -32700, &format!("parse error: {error}")),
+                )?;
+                continue;
+            }
+        };
+        if let Some(response) = dispatch_message(exchange, author, &request) {
+            write_response(&mut stdout, &response)?;
+        }
+    }
+    Ok(())
+}
+
+fn write_response(output: &mut impl Write, response: &Value) -> Result<()> {
+    serde_json::to_writer(&mut *output, response)?;
+    output.write_all(b"\n")?;
+    output.flush()?;
+    Ok(())
+}
+
+fn dispatch_message(exchange: &Exchange, author: &str, message: &Value) -> Option<Value> {
+    let Some(batch) = message.as_array() else {
+        return handle_request(exchange, author, message);
+    };
+    if batch.is_empty() {
+        return Some(json_rpc_error(Value::Null, -32600, "invalid request"));
+    }
+    let responses = batch
+        .iter()
+        .filter_map(|request| handle_request(exchange, author, request))
+        .collect::<Vec<_>>();
+    (!responses.is_empty()).then_some(Value::Array(responses))
+}
+
+pub fn handle_request(exchange: &Exchange, author: &str, request: &Value) -> Option<Value> {
+    let Some(object) = request.as_object() else {
+        return Some(json_rpc_error(Value::Null, -32600, "invalid request"));
+    };
+    let candidate_id = object.get("id").cloned();
+    let valid_id = candidate_id
+        .as_ref()
+        .is_none_or(|id| id.is_null() || id.is_string() || id.is_number());
+    if object.get("jsonrpc") != Some(&Value::String("2.0".to_owned())) || !valid_id {
+        return Some(json_rpc_error(Value::Null, -32600, "invalid request"));
+    }
+    let Some(method) = object.get("method").and_then(Value::as_str) else {
+        return Some(json_rpc_error(
+            candidate_id.unwrap_or(Value::Null),
+            -32600,
+            "request method is required",
+        ));
+    };
+    let id = candidate_id?;
+    if let Err(error) = exchange.validate_mcp_author(author) {
+        return Some(json_rpc_error(id, -32602, &error.to_string()));
+    }
+    let result = match method {
+        "initialize" => Ok(json!({
+            "protocolVersion": MCP_PROTOCOL_VERSION,
+            "capabilities": {"tools": {}},
+            "serverInfo": {
+                "name": "overmesh-harness-exchange",
+                "version": env!("CARGO_PKG_VERSION")
+            }
+        })),
+        "ping" => Ok(json!({})),
+        "tools/list" => Ok(json!({"tools": tool_definitions()})),
+        "tools/call" => request
+            .get("params")
+            .cloned()
+            .context("tools/call params are required")
+            .and_then(|params| {
+                serde_json::from_value::<CallToolParams>(params)
+                    .context("invalid tools/call params")
+            })
+            .and_then(|params| call_tool(exchange, author, params)),
+        method => {
+            return Some(json_rpc_error(
+                id,
+                -32601,
+                &format!("method not found: {method}"),
+            ));
+        }
+    };
+    Some(match result {
+        Ok(result) => json!({"jsonrpc": "2.0", "id": id, "result": result}),
+        Err(error) => json_rpc_error(id, -32602, &format!("{error:#}")),
+    })
+}
+
+fn call_tool(exchange: &Exchange, author: &str, params: CallToolParams) -> Result<Value> {
+    exchange.validate_mcp_author(author)?;
+    let value = match params.name.as_str() {
+        "exchange_list" => serde_json::to_value(exchange.list()?)?,
+        "exchange_read" => {
+            let arguments: ReadArguments =
+                serde_json::from_value(params.arguments).context("invalid exchange_read args")?;
+            serde_json::to_value(exchange.read(&arguments.thread, arguments.since)?)?
+        }
+        "exchange_post" => {
+            let arguments: PostArguments =
+                serde_json::from_value(params.arguments).context("invalid exchange_post args")?;
+            if matches!(arguments.kind, MessageKind::Verdict | MessageKind::Approval) {
+                anyhow::bail!(
+                    "exchange_post cannot post verdict or approval; use exchange_resolve or the operator CLI"
+                );
+            }
+            serde_json::to_value(exchange.post(
+                author,
+                PostOrigin::Mcp,
+                PostRequest {
+                    kind: arguments.kind,
+                    subject: arguments.subject,
+                    body: arguments.body,
+                    thread: arguments.thread,
+                    refs: arguments.refs,
+                    replies_to: arguments.replies_to,
+                    answered_by: arguments.answered_by,
+                    outcome: None,
+                },
+            )?)?
+        }
+        "exchange_resolve" => {
+            let arguments: ResolveArguments = serde_json::from_value(params.arguments)
+                .context("invalid exchange_resolve args")?;
+            serde_json::to_value(exchange.resolve(
+                author,
+                PostOrigin::Mcp,
+                &arguments.thread,
+                arguments.outcome,
+                arguments.body,
+                arguments.refs,
+            )?)?
+        }
+        name => anyhow::bail!("unknown exchange tool {name:?}"),
+    };
+    let text = serde_json::to_string_pretty(&value)?;
+    Ok(json!({
+        "content": [{"type": "text", "text": text}],
+        "structuredContent": value,
+        "isError": false
+    }))
+}
+
+fn json_rpc_error(id: Value, code: i32, message: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {"code": code, "message": message}
+    })
+}
+
+fn tool_definitions() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "exchange_list",
+            "description": "List exchange threads with derived state and waiting participant.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "exchange_read",
+            "description": "Read messages after a sequence number. Unapproved spec bodies are withheld.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["thread"],
+                "properties": {
+                    "thread": {"type": "string"},
+                    "since": {"type": "integer", "minimum": 0, "default": 0}
+                },
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "exchange_post",
+            "description": "Post a typed finding, question, correction, spec, or report; omit thread to create one.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["kind", "subject", "body"],
+                "properties": {
+                    "kind": {
+                        "enum": ["finding", "question", "correction", "spec", "report"]
+                    },
+                    "subject": {"type": "string", "minLength": 1},
+                    "body": {"type": "string", "maxLength": 16384},
+                    "thread": {"type": "string"},
+                    "refs": {
+                        "type": "array",
+                        "items": {"$ref": "#/$defs/ref"}
+                    },
+                    "repliesTo": {"type": "integer", "minimum": 1},
+                    "answeredBy": {"type": "string", "minLength": 1}
+                },
+                "$defs": {"ref": ref_schema()},
+                "additionalProperties": false
+            }
+        }),
+        json!({
+            "name": "exchange_resolve",
+            "description": "Post a deliberate verdict. A human approval is still required to resolve the thread.",
+            "inputSchema": {
+                "type": "object",
+                "required": ["thread", "outcome", "body", "refs"],
+                "properties": {
+                    "thread": {"type": "string"},
+                    "outcome": {
+                        "enum": ["verified", "not-verified", "withdrawn", "superseded"]
+                    },
+                    "body": {"type": "string", "maxLength": 16384},
+                    "refs": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {"$ref": "#/$defs/ref"}
+                    }
+                },
+                "$defs": {"ref": ref_schema()},
+                "additionalProperties": false
+            }
+        }),
+    ]
+}
+
+fn ref_schema() -> Value {
+    json!({
+        "type": "object",
+        "required": ["kind", "value"],
+        "properties": {
+            "kind": {
+                "enum": ["code", "commit", "artifact", "record", "url"]
+            },
+            "value": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, process::Command};
+
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn fixture() -> (TempDir, Exchange) {
+        let root = tempfile::tempdir().unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(root.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::write(root.path().join("code.rs"), "fn main() {}\n").unwrap();
+        let exchange = Exchange::default_for_repository(root.path()).unwrap();
+        (root, exchange)
+    }
+
+    #[test]
+    fn lists_exactly_four_tools() {
+        let (_root, exchange) = fixture();
+        let response = handle_request(
+            &exchange,
+            "copilot",
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+        )
+        .unwrap();
+        assert_eq!(response["result"]["tools"].as_array().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn posts_and_withholds_spec_through_mcp() {
+        let (_root, exchange) = fixture();
+        let posted = handle_request(
+            &exchange,
+            "copilot",
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "exchange_post",
+                    "arguments": {
+                        "kind": "spec",
+                        "subject": "Implement",
+                        "body": "withheld"
+                    }
+                }
+            }),
+        )
+        .unwrap();
+        let thread = posted["result"]["structuredContent"]["thread"]
+            .as_str()
+            .unwrap();
+        let read = handle_request(
+            &exchange,
+            "claude",
+            &json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "exchange_read",
+                    "arguments": {"thread": thread}
+                }
+            }),
+        )
+        .unwrap();
+        assert!(read["result"]["structuredContent"]["messages"][0]["body"].is_null());
+        assert_eq!(
+            read["result"]["structuredContent"]["messages"][0]["withheld"],
+            "awaiting approval"
+        );
+    }
+
+    #[test]
+    fn rejects_human_server_identity() {
+        let (_root, exchange) = fixture();
+        let response = handle_request(
+            &exchange,
+            "human",
+            &json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+        )
+        .unwrap();
+        assert_eq!(response["error"]["code"], -32602);
+    }
+
+    #[test]
+    fn ignores_notifications() {
+        let (_root, exchange) = fixture();
+        assert!(
+            handle_request(
+                &exchange,
+                "copilot",
+                &json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_json_rpc_envelopes() {
+        let (_root, exchange) = fixture();
+        for request in [
+            json!("not an object"),
+            json!({"id": 1, "method": "tools/list"}),
+            json!({"jsonrpc": "2.0", "id": true, "method": "tools/list"}),
+            json!({"jsonrpc": "2.0", "id": 1}),
+        ] {
+            let response = handle_request(&exchange, "copilot", &request).unwrap();
+            assert_eq!(response["error"]["code"], -32600);
+        }
+    }
+
+    #[test]
+    fn dispatches_json_rpc_batches_and_omits_notifications() {
+        let (_root, exchange) = fixture();
+        let response = dispatch_message(
+            &exchange,
+            "copilot",
+            &json!([
+                {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                {"jsonrpc": "2.0", "id": 2, "method": "ping"}
+            ]),
+        )
+        .unwrap();
+        let responses = response.as_array().unwrap();
+        assert_eq!(responses.len(), 2);
+        assert_eq!(responses[0]["id"], 1);
+        assert_eq!(responses[1]["id"], 2);
+        assert!(
+            dispatch_message(
+                &exchange,
+                "copilot",
+                &json!([
+                    {"jsonrpc": "2.0", "method": "notifications/initialized"}
+                ]),
+            )
+            .is_none()
+        );
+        assert_eq!(
+            dispatch_message(&exchange, "copilot", &json!([])).unwrap()["error"]["code"],
+            -32600
+        );
+    }
+}

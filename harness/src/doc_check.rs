@@ -318,7 +318,9 @@ fn ignored_documentation_path(path: &str) -> bool {
         .any(|component| matches!(*component, ".git" | ".harness" | "target" | "node_modules"))
         || matches!(
             components.as_slice(),
-            ["site", "content", ..] | ["site", "public", ..]
+            ["site", "content", ..]
+                | ["site", "public", ..]
+                | [".overmesh", "exchange", _, "attachments", ..]
         )
 }
 
@@ -1246,6 +1248,16 @@ fn helper() {}
         assert!(is_adr_filename("0008-listing.md"));
         assert!(!is_adr_filename("README.md"));
         assert!(!is_adr_filename("008-listing.md"));
+    }
+
+    #[test]
+    fn ignores_exchange_markdown_attachments_but_not_messages() {
+        assert!(ignored_documentation_path(
+            ".overmesh/exchange/0001-spec/attachments/protocol.md"
+        ));
+        assert!(!ignored_documentation_path(
+            ".overmesh/exchange/0001-spec/message.md"
+        ));
     }
 
     #[test]

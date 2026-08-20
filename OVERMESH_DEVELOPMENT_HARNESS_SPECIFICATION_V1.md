@@ -159,6 +159,34 @@ every real-system smoke assertion. A scenario's `environment.providers` lists
 the providers for which that history is applicable; the declarative runner
 always executes the model provider.
 
+### 5.0.1 Assistant Work Exchange
+
+The harness exposes a local, file-backed work exchange for assistants operating
+on the same repository. It is a typed work queue, not a chat or shared-memory
+service.
+
+- Each thread MUST live under `.overmesh/exchange/<nnnn>-<slug>/`.
+- Each message MUST be one immutable, schema-versioned JSON file.
+- Message creation MUST be append-only and safe under concurrent writers.
+- Every accepted message MUST be staged with `git add` and MUST NOT be
+  committed by the harness.
+- Findings, corrections, reports, and verdicts MUST carry the repository refs
+  required by their message kind, and refs MUST be validated before writing.
+- Thread state and `waitingOn` MUST be derived from message files on every
+  read; no derived state file is permitted.
+- An unapproved `spec` body MUST be withheld from assistant readers.
+- A `verdict` MUST NOT resolve a thread until an operator approval follows it.
+- The sixth consecutive non-human message MUST be rejected. Five consecutive
+  non-human messages place the thread in `escalated` state until a human posts.
+- The author of the last non-verdict message MUST NOT author the verdict.
+- The stdio MCP server MUST reject a missing, unapproved, or `human` server
+  identity. Human messages MUST enter through the operator CLI.
+
+The version 1 MCP surface is limited to `exchange_list`, `exchange_read`,
+`exchange_post`, and `exchange_resolve`. The operator surface is
+`overmesh-harness exchange`; it owns approval and rejection. Neither surface
+executes work instructions automatically.
+
 ### 5.1 Scenario Orchestrator
 
 The Scenario Orchestrator:

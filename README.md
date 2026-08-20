@@ -28,6 +28,7 @@ The Rust harness also includes:
 - ES256 canonicalization and signature tests;
 - deterministic dataset generation;
 - JSON reports;
+- a typed, append-only assistant work exchange with operator approval;
 - two Azurite Blob backends behind Toxiproxy.
 
 Run the fast validation suite:
@@ -55,6 +56,29 @@ cargo run --quiet -p overmesh-harness -- fault disable a
 cargo run --quiet -p overmesh-harness -- fault latency b --milliseconds 500
 cargo run --quiet -p overmesh-harness -- fault reset
 ```
+
+Use the operator side of the assistant work exchange:
+
+```bash
+cargo run --quiet -p overmesh-harness -- exchange list
+cargo run --quiet -p overmesh-harness -- exchange show 0001-example
+cargo run --quiet -p overmesh-harness -- exchange approve 0001-example
+```
+
+Assistant clients run the same versioned binary as a stdio MCP server, with an
+explicit non-human identity. Set `OVERMESH_EXCHANGE_REPOSITORY` when the client
+does not launch the server from the repository root:
+
+```bash
+OVERMESH_EXCHANGE_AUTHOR=copilot \
+OVERMESH_EXCHANGE_REPOSITORY=/path/to/overmesh \
+  cargo run --quiet -p overmesh-harness -- exchange-mcp
+```
+
+Exchange messages are immutable JSON files under `.overmesh/exchange/` and are
+staged, never committed, by the server. Findings and decisions cite validated
+repository refs. Specs and verdicts require operator approval; five consecutive
+non-human messages escalate the thread.
 
 Run the process-level gateway authentication and signed dual-write smoke test:
 

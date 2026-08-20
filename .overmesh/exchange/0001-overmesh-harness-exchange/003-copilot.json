@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "thread": "0001-overmesh-harness-exchange",
+  "seq": 3,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-20T12:56:48.902Z",
+  "subject": "Exchange implementation and installation complete",
+  "body": "Implemented the append-only typed exchange, operator CLI, four-tool MCP server, approval withholding, derived state, inter-process concurrency control, persisted-history validation, symlink containment, JSON-RPC batches, and repository-root pinning. Installed overmesh-harness 0.11.0 in ~/.local/bin and registered distinct copilot and claude MCP identities. Full make test-pr validation passes.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/src/exchange.rs"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/exchange_mcp.rs"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/main.rs"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/doc_check.rs"
+    },
+    {
+      "kind": "code",
+      "value": "README.md"
+    },
+    {
+      "kind": "code",
+      "value": "OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null
+}
