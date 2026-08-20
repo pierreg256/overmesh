@@ -3,7 +3,7 @@ use std::{
     fmt::Write as _,
     fs,
     path::{Component, Path},
-    process::Command,
+    process::{Command, Stdio},
 };
 
 use anyhow::{Context, Result};
@@ -144,6 +144,7 @@ pub fn check(repository_root: &Path) -> Result<DocumentationReport> {
     check_evidence(repository_root, &traceability, &adr_metadata, &mut report)?;
     check_assertions(repository_root, &traceability, &mut report)?;
     check_retained_artifact_redaction(repository_root, &mut report)?;
+    check_retained_artifact_provenance(repository_root, &mut report)?;
 
     report.violations.sort_by(|left, right| {
         (
@@ -806,6 +807,95 @@ fn contains_guid(value: &str) -> bool {
     })
 }
 
+fn check_retained_artifact_provenance(
+    repository_root: &Path,
+    report: &mut DocumentationReport,
+) -> Result<()> {
+    let artifacts = repository_root.join(RETAINED_ARTIFACTS_DIRECTORY);
+    if !artifacts.is_dir() {
+        return Ok(());
+    }
+    let main_reference = ["refs/heads/main", "refs/remotes/origin/main"]
+        .into_iter()
+        .find(|reference| git_revision_exists(repository_root, reference));
+
+    for entry in WalkDir::new(&artifacts)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|value| value == "json")
+        })
+    {
+        let relative = entry
+            .path()
+            .strip_prefix(repository_root)
+            .context("retained artifact escaped repository root")?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let content = fs::read_to_string(entry.path())
+            .with_context(|| format!("failed to read retained artifact {relative}"))?;
+        let Ok(document) = serde_json::from_str::<serde_json::Value>(&content) else {
+            continue;
+        };
+        let Some(commit) = document
+            .get("campaign")
+            .and_then(|campaign| campaign.get("commit"))
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        if commit.len() != 40 || !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            report.push(
+                "R9",
+                &relative,
+                None,
+                format!("campaign.commit {commit:?} is not a full Git commit SHA"),
+                "retain the full 40-character commit SHA in campaign.commit",
+            );
+            continue;
+        }
+        let Some(main_reference) = main_reference else {
+            report.push(
+                "R9",
+                &relative,
+                None,
+                "cannot verify campaign.commit because the main ref is unavailable",
+                "fetch main history before running doc-check",
+            );
+            continue;
+        };
+        let status = Command::new("git")
+            .args(["merge-base", "--is-ancestor", commit, main_reference])
+            .current_dir(repository_root)
+            .status()
+            .with_context(|| format!("failed to check provenance for {relative}"))?;
+        if !status.success() {
+            report.push(
+                "R9",
+                &relative,
+                None,
+                format!("campaign.commit {commit} is not an ancestor of main"),
+                "merge the campaign commit into main before retaining its evidence",
+            );
+        }
+    }
+    Ok(())
+}
+
+fn git_revision_exists(repository_root: &Path, revision: &str) -> bool {
+    Command::new("git")
+        .args(["rev-parse", "--verify", "--quiet", revision])
+        .current_dir(repository_root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
 fn documentation_metrics(repository_root: &Path) -> Result<BTreeMap<String, String>> {
     let unit_test_count = ["gateway", "harness", "reconciler"]
         .into_iter()
@@ -1202,6 +1292,38 @@ reason = "Intentional fixture."
     }
 
     #[test]
+    fn retained_campaign_commit_must_be_an_ancestor_of_main() {
+        let fixture = documentation_fixture();
+        git(
+            fixture.path(),
+            &["config", "user.email", "fixture@example.test"],
+        );
+        git(fixture.path(), &["config", "user.name", "Fixture"]);
+        git(fixture.path(), &["add", "."]);
+        git(fixture.path(), &["commit", "--quiet", "-m", "main"]);
+        git(fixture.path(), &["branch", "-M", "main"]);
+        git(fixture.path(), &["switch", "--quiet", "-c", "campaign"]);
+        write(fixture.path(), "campaign.txt", "unmerged\n");
+        git(fixture.path(), &["add", "campaign.txt"]);
+        git(
+            fixture.path(),
+            &["commit", "--quiet", "-m", "unmerged campaign"],
+        );
+        let campaign_commit = git_output(fixture.path(), &["rev-parse", "HEAD"]);
+        git(fixture.path(), &["switch", "--quiet", "main"]);
+        write(
+            fixture.path(),
+            "harness/artifacts/live/0.10.0/performance.json",
+            &format!(r#"{{"campaign":{{"commit":"{campaign_commit}"}}}}"#),
+        );
+
+        let report = check(fixture.path()).expect("check fixture");
+        assert!(report.violations.iter().any(|violation| {
+            violation.rule == "R9" && violation.message.contains("is not an ancestor of main")
+        }));
+    }
+
+    #[test]
     fn evidence_exemption_suppresses_only_the_named_citation() {
         let fixture = documentation_fixture();
         write(
@@ -1428,5 +1550,27 @@ pattern = "milestone {}"
         let mut existing = fs::read_to_string(&path).expect("read fixture");
         existing.push_str(content);
         fs::write(path, existing).expect("append fixture");
+    }
+
+    fn git(root: &Path, arguments: &[&str]) {
+        let status = Command::new("git")
+            .args(arguments)
+            .current_dir(root)
+            .status()
+            .expect("run git");
+        assert!(status.success(), "git {arguments:?} failed");
+    }
+
+    fn git_output(root: &Path, arguments: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(arguments)
+            .current_dir(root)
+            .output()
+            .expect("run git");
+        assert!(output.status.success(), "git {arguments:?} failed");
+        String::from_utf8(output.stdout)
+            .expect("git output is UTF-8")
+            .trim()
+            .to_owned()
     }
 }

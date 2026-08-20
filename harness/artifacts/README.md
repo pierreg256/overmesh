@@ -8,6 +8,11 @@ tokens, credentials, secrets, or transient Azure request headers.
 
 Temporary harness output remains under `.harness/` and is not versioned.
 
+`releases.toml` binds every closed milestone tag to its immutable close commit
+and retained evidence bundle names. Existing signed bundles remain byte-for-byte
+unchanged; future campaign bundles also carry the release tag beside their
+campaign commit.
+
 ## Canonical and raw forms
 
 The committed form is deterministically redacted by
