@@ -189,13 +189,25 @@ make test-live-azure-client-compat
 ## Performance baseline
 
 `make test-live-azure-performance` executes the versioned matrix in
-`harness/performance/live-v3.toml`. It keeps 30 measured write operations and
-uses 240 for each read workload so latency percentiles are useful as signals.
-The retained 0.10.0 baseline remains bound to `live-v1.toml`; v2 is retained as
-the first request-attributed campaign contract. The runner alternates each case between one
-direct Storage Account and the live Overmesh endpoint, using the same managed
-identity, Azure SDK versions, validation host, payload bytes, operation count,
-and concurrency.
+`harness/performance/live-v4.toml`. It executes the complete matrix three times
+in sequence, with 30 measured operations per write case and 60 per read case
+and repeat. Repeats are separated by the rest of the matrix so their p50 spread
+measures run-to-run conditions rather than adjacent samples. The retained
+0.10.0 baseline remains bound to `live-v1.toml`; v2 is the first
+request-attributed contract and v3 is the single-path, 240-read-sample
+predecessor.
+
+Each read case cycles deterministically over the same 24 logical paths in every
+repeat and campaign. Setup creates every path at the case payload size before
+warm-up. Collection fails unless the paths exercise all three RF=2 placement
+pairs, every individual client operation keeps the declared request budget,
+and every repeat has zero unattributed requests. Evidence records per-run p50,
+the max/min p50 spread, exact request budgets per run, placement coverage, and
+campaign-level read and write resolution. Pool provisioning and cleanup remain
+outside the measured campaign window. The runner still alternates each
+case between one direct Storage Account and the live Overmesh endpoint, using
+the same managed identity, Azure SDK versions, validation host, payload bytes,
+operation count, and concurrency.
 
 The performance gate is intentionally excluded from `test-pre-pr-live` because
 it is long-running and retains signed release evidence. `make test-release`
@@ -210,18 +222,21 @@ second, bytes per second, successful and failed operation counts, and
 gateway-to-direct ratios. Thirty samples do not support a distinct p99, so the
 contract does not publish one.
 
-The v2 non-regression policy separates controlled and observed quantities.
-Backend requests per operation are deterministic and blocking: a compared
-campaign stops before signing if any case increases them. p50 latency is a
-signal and p95 is informational; neither fails the gate because geography,
-service scheduling and network variance are outside the code's control. The
-first v2 campaign establishes these request-count baselines.
+The v4 non-regression policy separates controlled and observed quantities.
+Backend requests per operation are deterministic, exact, and blocking. A p50
+Gateway-to-direct overhead comparison becomes blocking only when both targets
+in both campaigns measure that case below the contract's p50 spread threshold;
+otherwise it remains a signal. Absolute latency and p95 remain informational.
+This makes latency gating a measured classification rather than a contract
+assertion.
 
 Additional required environment:
 
 - `OVERMESH_LIVE_PERFORMANCE_RING_VERSION`;
 - `OVERMESH_LIVE_PERFORMANCE_RING_HASH`;
 - `OVERMESH_LIVE_PERFORMANCE_DEPLOYMENT`;
+- `OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG`, naming an annotated tag that is an
+  ancestor of the campaign commit;
 - `OVERMESH_LIVE_PERFORMANCE_ENVIRONMENT`;
 - `OVERMESH_LIVE_PERFORMANCE_ISOLATED_ENVIRONMENT=true`;
 - `OVERMESH_LIVE_PERFORMANCE_PUBLIC_KEY`;

@@ -26,6 +26,7 @@ ALLOWED_OPERATIONS = {
     "head_blob",
     "delete_blob",
 }
+READ_OPERATIONS = {"get_blob", "get_range", "head_blob"}
 @dataclass(frozen=True)
 class Payload:
     id: str
@@ -39,6 +40,7 @@ class BenchmarkCase:
     concurrency: int
     range_bytes: int | None
     measured_iterations: int
+    backend_requests_per_operation: int | None = None
 
     @property
     def id(self) -> str:
@@ -56,15 +58,27 @@ class Exclusion:
 @dataclass(frozen=True)
 class NonRegressionPolicy:
     backend_requests_per_operation: str
-    p50_latency: str
+    p50_latency: str | None
     p95_latency: str
+    p50_stability_spread_ratio_threshold: float | None = None
+    p50_regression_ratio_threshold: float | None = None
 
-    def document(self) -> dict[str, str]:
-        return {
+    def document(self) -> dict[str, str | float]:
+        document: dict[str, str | float] = {
             "backendRequestsPerOperation": self.backend_requests_per_operation,
-            "p50Latency": self.p50_latency,
             "p95Latency": self.p95_latency,
         }
+        if self.p50_latency is not None:
+            document["p50Latency"] = self.p50_latency
+        if self.p50_stability_spread_ratio_threshold is not None:
+            document["p50Latency"] = "derived"
+            document["p50StabilitySpreadRatioThreshold"] = (
+                self.p50_stability_spread_ratio_threshold
+            )
+            document["p50RegressionRatioThreshold"] = (
+                self.p50_regression_ratio_threshold
+            )
+        return document
 
 
 @dataclass(frozen=True)
@@ -77,6 +91,8 @@ class Contract:
     cases: tuple[BenchmarkCase, ...]
     exclusions: tuple[Exclusion, ...]
     non_regression: NonRegressionPolicy | None
+    campaign_repeats: int
+    read_path_pool_size: int | None
 
 
 def utc_now() -> str:
@@ -104,11 +120,36 @@ def require_positive_integer(value: object, name: str) -> int:
     return value
 
 
+def require_ratio(value: object, name: str) -> float:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or value <= 1
+    ):
+        raise ValueError(f"{name} must be a finite number greater than 1")
+    return float(value)
+
+
+def v4_request_budget(operation: str, payload_size: int) -> int:
+    if operation in {"put_blob", "overwrite_blob"}:
+        return 49
+    if operation == "delete_blob":
+        return 43
+    if operation == "head_blob":
+        return 10
+    if operation == "get_blob" and payload_size == 16 * 1024 * 1024:
+        return 18
+    if operation in {"get_blob", "get_range"}:
+        return 15
+    raise ValueError(f"schema_version 4 has no request budget for {operation}")
+
+
 def load_contract(path: Path) -> Contract:
     document = tomllib.loads(path.read_text(encoding="utf-8"))
     schema_version = document.get("schema_version")
-    if schema_version not in {1, 2, 3}:
-        raise ValueError("performance contract schema_version must be 1, 2, or 3")
+    if schema_version not in {1, 2, 3, 4}:
+        raise ValueError("performance contract schema_version must be 1, 2, 3, or 4")
     payloads: dict[str, Payload] = {}
     for index, entry in enumerate(document.get("payload", [])):
         payload_id = entry.get("id")
@@ -141,16 +182,49 @@ def load_contract(path: Path) -> Contract:
                 "requests as blocking, p50 as signal, and p95 as informational"
             )
         non_regression = NonRegressionPolicy(**expected_policy)
+    elif schema_version == 4:
+        expected_keys = {
+            "backend_requests_per_operation",
+            "p50_stability_spread_ratio_threshold",
+            "p50_regression_ratio_threshold",
+            "p95_latency",
+        }
+        if not isinstance(policy_document, dict) or set(policy_document) != expected_keys:
+            raise ValueError(
+                "schema_version 4 non_regression must declare exact request "
+                "blocking, p50 stability and regression thresholds, and p95 policy"
+            )
+        if (
+            policy_document["backend_requests_per_operation"] != "blocking"
+            or policy_document["p95_latency"] != "informational"
+        ):
+            raise ValueError(
+                "schema_version 4 requires blocking backend requests and "
+                "informational p95 latency"
+            )
+        non_regression = NonRegressionPolicy(
+            backend_requests_per_operation="blocking",
+            p50_latency=None,
+            p95_latency="informational",
+            p50_stability_spread_ratio_threshold=require_ratio(
+                policy_document["p50_stability_spread_ratio_threshold"],
+                "non_regression.p50_stability_spread_ratio_threshold",
+            ),
+            p50_regression_ratio_threshold=require_ratio(
+                policy_document["p50_regression_ratio_threshold"],
+                "non_regression.p50_regression_ratio_threshold",
+            ),
+        )
     elif policy_document is not None:
         raise ValueError(
-            "non_regression is supported only by schema_version 2 or 3"
+            "non_regression is supported only by schema_version 2 or later"
         )
 
     global_measured_iterations = document.get("measured_iterations")
-    if schema_version == 3:
+    if schema_version in {3, 4}:
         if global_measured_iterations is not None:
             raise ValueError(
-                "schema_version 3 requires measured_iterations per workload"
+                "schema_version 3 or 4 requires measured_iterations per workload"
             )
         measured_iterations = None
     else:
@@ -175,17 +249,31 @@ def load_contract(path: Path) -> Contract:
         elif range_bytes is not None:
             raise ValueError("range_bytes is valid only for get_range")
         workload_measured_iterations = workload.get("measured_iterations")
-        if schema_version == 3:
+        if schema_version in {3, 4}:
             workload_measured_iterations = require_positive_integer(
                 workload_measured_iterations,
                 f"workload[{workload_index}].measured_iterations",
             )
         elif workload_measured_iterations is not None:
             raise ValueError(
-                "workload measured_iterations requires schema_version 3"
+                "workload measured_iterations requires schema_version 3 or 4"
             )
         else:
             workload_measured_iterations = measured_iterations
+        if schema_version == 4:
+            backend_requests_per_operation = require_positive_integer(
+                workload.get("backend_requests_per_operation"),
+                (
+                    f"workload[{workload_index}]."
+                    "backend_requests_per_operation"
+                ),
+            )
+        elif workload.get("backend_requests_per_operation") is not None:
+            raise ValueError(
+                "backend_requests_per_operation requires schema_version 4"
+            )
+        else:
+            backend_requests_per_operation = None
         for payload_id in workload.get("payloads", []):
             if payload_id not in payloads:
                 raise ValueError(
@@ -202,7 +290,34 @@ def load_contract(path: Path) -> Contract:
                     concurrency=concurrency,
                     range_bytes=range_bytes,
                     measured_iterations=workload_measured_iterations,
+                    backend_requests_per_operation=(
+                        backend_requests_per_operation
+                    ),
                 )
+                if schema_version == 4:
+                    expected_iterations = (
+                        60 if operation in READ_OPERATIONS else 30
+                    )
+                    if (
+                        benchmark_case.measured_iterations
+                        != expected_iterations
+                    ):
+                        raise ValueError(
+                            f"schema_version 4 requires {expected_iterations} "
+                            f"measured iterations for {operation}"
+                        )
+                    expected_budget = v4_request_budget(
+                        operation,
+                        benchmark_case.payload.size_bytes,
+                    )
+                    if (
+                        benchmark_case.backend_requests_per_operation
+                        != expected_budget
+                    ):
+                        raise ValueError(
+                            f"schema_version 4 requires request budget "
+                            f"{expected_budget} for {benchmark_case.id}"
+                        )
                 if benchmark_case.id in case_ids:
                     raise ValueError(f"benchmark case {benchmark_case.id!r} is duplicated")
                 case_ids.add(benchmark_case.id)
@@ -250,8 +365,25 @@ def load_contract(path: Path) -> Contract:
                 reason=reason.strip(),
             )
         )
-    if schema_version in {2, 3} and not exclusions:
-        raise ValueError("schema_version 2 or 3 requires explicit exclusions")
+    if schema_version >= 2 and not exclusions:
+        raise ValueError("schema_version 2 or later requires explicit exclusions")
+
+    if schema_version == 4:
+        campaign_repeats = require_positive_integer(
+            document.get("campaign_repeats"),
+            "campaign_repeats",
+        )
+        if campaign_repeats != 3:
+            raise ValueError("schema_version 4 requires three campaign repeats")
+        read_path_pool_size = require_positive_integer(
+            document.get("read_path_pool_size"),
+            "read_path_pool_size",
+        )
+        if read_path_pool_size != 24:
+            raise ValueError("schema_version 4 requires a read path pool of 24")
+    else:
+        campaign_repeats = 1
+        read_path_pool_size = None
 
     return Contract(
         schema_version=schema_version,
@@ -266,6 +398,8 @@ def load_contract(path: Path) -> Contract:
         cases=tuple(cases),
         exclusions=tuple(exclusions),
         non_regression=non_regression,
+        campaign_repeats=campaign_repeats,
+        read_path_pool_size=read_path_pool_size,
     )
 
 
@@ -280,6 +414,12 @@ def plan(contract: Contract) -> dict[str, Any]:
         ),
         "requestTimeoutSeconds": contract.request_timeout_seconds,
         "targetOrder": list(contract.target_order),
+        "campaignRepeats": contract.campaign_repeats,
+        **(
+            {"readPathPoolSize": contract.read_path_pool_size}
+            if contract.read_path_pool_size is not None
+            else {}
+        ),
         **(
             {"nonRegression": contract.non_regression.document()}
             if contract.non_regression is not None
@@ -293,6 +433,16 @@ def plan(contract: Contract) -> dict[str, Any]:
                 "sizeBytes": benchmark_case.payload.size_bytes,
                 "concurrency": benchmark_case.concurrency,
                 "measuredIterations": benchmark_case.measured_iterations,
+                **(
+                    {
+                        "backendRequestsPerOperation": (
+                            benchmark_case.backend_requests_per_operation
+                        )
+                    }
+                    if benchmark_case.backend_requests_per_operation
+                    is not None
+                    else {}
+                ),
                 **(
                     {"rangeBytes": benchmark_case.range_bytes}
                     if benchmark_case.range_bytes is not None
@@ -340,9 +490,16 @@ def deterministic_payload(payload: Payload) -> bytes:
     return (seed * repeats)[: payload.size_bytes]
 
 
-def request_id(run_id: str, target: str, case_id: str, index: int) -> str:
+def request_id(
+    run_id: str,
+    target: str,
+    case_id: str,
+    index: int,
+    repeat_index: int | None = None,
+) -> str:
+    repeat = "" if repeat_index is None else f":repeat-{repeat_index + 1}"
     digest = hashlib.sha256(
-        f"{run_id}:{target}:{case_id}:{index}".encode("utf-8")
+        f"{run_id}{repeat}:{target}:{case_id}:{index}".encode("utf-8")
     ).hexdigest()[:24]
     return f"perf-{target}-{digest}"
 
@@ -352,8 +509,15 @@ def setup_request_id(
     target: str,
     case_id: str,
     index: int,
+    repeat_index: int | None = None,
 ) -> str:
-    return request_id(run_id, target, case_id, -100_000 - index)
+    return request_id(
+        run_id,
+        target,
+        case_id,
+        -100_000 - index,
+        repeat_index,
+    )
 
 
 def sdk_request_options(request_id: str) -> dict[str, str]:
@@ -378,6 +542,29 @@ def execute_wave(
     return latencies, time.perf_counter() - started
 
 
+def read_blob_name(case_id: str, pool_index: int) -> str:
+    return f"perf/{case_id}/{pool_index:04d}"
+
+
+def measured_metrics(
+    latencies: list[float],
+    iterations: int,
+    wall_seconds: float,
+    bytes_per_operation: int,
+) -> dict[str, float | int]:
+    return {
+        **latency_metrics(latencies),
+        "successCount": iterations,
+        "errorCount": 0,
+        "wallSeconds": round(wall_seconds, 6),
+        "operationsPerSecond": round(iterations / wall_seconds, 3),
+        "bytesPerSecond": round(
+            (iterations * bytes_per_operation) / wall_seconds,
+            3,
+        ),
+    }
+
+
 def run_campaign(contract_path: Path, output_path: Path) -> None:
     from azure.core.exceptions import ResourceNotFoundError
     from azure.identity import (
@@ -389,6 +576,7 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
         __version__ as blob_version,
     )
 
+    contract = load_contract(contract_path)
     required_environment = [
         "OVERMESH_LIVE_GATEWAY_ENDPOINT",
         "OVERMESH_LIVE_ACCOUNT_A_BLOB_ENDPOINT",
@@ -400,6 +588,8 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
         "OVERMESH_LIVE_PERFORMANCE_ENVIRONMENT",
         "OVERMESH_LIVE_PERFORMANCE_ISOLATED_ENVIRONMENT",
     ]
+    if contract.schema_version == 4:
+        required_environment.append("OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG")
     missing = [name for name in required_environment if not os.environ.get(name)]
     if missing:
         raise RuntimeError(
@@ -410,7 +600,6 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
             "OVERMESH_LIVE_PERFORMANCE_ISOLATED_ENVIRONMENT must be true"
         )
 
-    contract = load_contract(contract_path)
     run_id = os.environ.get(
         "OVERMESH_LIVE_PERFORMANCE_RUN_ID",
         datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
@@ -445,133 +634,59 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
     if len(set(storage_api_versions.values())) != 1:
         raise RuntimeError("direct and gateway clients selected different API versions")
 
-    started_at = utc_now()
-    results: list[dict[str, Any]] = []
-    for benchmark_case in contract.cases:
-        payload = deterministic_payload(benchmark_case.payload)
-        for target in contract.target_order:
-            container_client = services[target].get_container_client(container)
-            prefix = f"performance/{run_id}/{target}/{benchmark_case.id}"
-            seed_blob = f"{prefix}/seed.bin"
-            cleanup = (
-                {
-                    f"{prefix}/item-{index:05}.bin"
-                    for index in range(
-                        contract.warmup_iterations
-                        + benchmark_case.measured_iterations
+    started_at = ""
+    finished_at = ""
+    run_results: dict[
+        tuple[str, str],
+        list[tuple[dict[str, Any], list[float]]],
+    ] = {
+        (benchmark_case.id, target): []
+        for benchmark_case in contract.cases
+        for target in contract.target_order
+    }
+    read_cleanup: list[tuple[Any, str, str, str]] = []
+
+    try:
+        if contract.read_path_pool_size is not None:
+            for benchmark_case in contract.cases:
+                if benchmark_case.operation not in READ_OPERATIONS:
+                    continue
+                payload = deterministic_payload(benchmark_case.payload)
+                for target in contract.target_order:
+                    container_client = services[target].get_container_client(
+                        container
                     )
-                }
-                if benchmark_case.operation
-                in {"put_blob", "overwrite_blob", "delete_blob"}
-                else {seed_blob}
-                if benchmark_case.operation
-                in {"get_blob", "get_range", "head_blob"}
-                else set()
-            )
-            if benchmark_case.operation in {"get_blob", "get_range", "head_blob"}:
-                container_client.upload_blob(
-                    seed_blob,
-                    payload,
-                    overwrite=False,
-                    **sdk_request_options(
-                        request_id(
-                            run_id,
-                            target,
+                    for pool_index in range(contract.read_path_pool_size):
+                        blob_name = read_blob_name(
                             benchmark_case.id,
-                            -1,
+                            pool_index,
                         )
-                    ),
-                )
-
-            def invoke(index: int) -> None:
-                blob_name = f"{prefix}/item-{index:05}.bin"
-                blob_client = container_client.get_blob_client(blob_name)
-                current_request_id = request_id(
-                    run_id, target, benchmark_case.id, index
-                )
-                if benchmark_case.operation == "put_blob":
-                    blob_client.upload_blob(
-                        payload,
-                        overwrite=False,
-                        **sdk_request_options(current_request_id),
-                    )
-                elif benchmark_case.operation == "overwrite_blob":
-                    blob_client.upload_blob(
-                        payload,
-                        overwrite=True,
-                        **sdk_request_options(current_request_id),
-                    )
-                elif benchmark_case.operation == "get_blob":
-                    received = (
-                        container_client.get_blob_client(seed_blob)
-                        .download_blob(**sdk_request_options(current_request_id))
-                        .readall()
-                    )
-                    if received != payload:
-                        raise RuntimeError("downloaded bytes did not match payload")
-                elif benchmark_case.operation == "get_range":
-                    expected = payload[: benchmark_case.range_bytes]
-                    received = (
-                        container_client.get_blob_client(seed_blob)
-                        .download_blob(
-                            offset=0,
-                            length=benchmark_case.range_bytes,
-                            **sdk_request_options(current_request_id),
-                        )
-                        .readall()
-                    )
-                    if received != expected:
-                        raise RuntimeError("range bytes did not match payload")
-                elif benchmark_case.operation == "head_blob":
-                    properties = container_client.get_blob_client(
-                        seed_blob
-                    ).get_blob_properties(
-                        **sdk_request_options(current_request_id)
-                    )
-                    if properties.size != len(payload):
-                        raise RuntimeError("HEAD content length did not match")
-                elif benchmark_case.operation == "delete_blob":
-                    blob_client.delete_blob(
-                        **sdk_request_options(current_request_id)
-                    )
-                else:
-                    raise RuntimeError(
-                        f"unsupported operation {benchmark_case.operation}"
-                    )
-
-            try:
-                if benchmark_case.operation in {"overwrite_blob", "delete_blob"}:
-                    initial_payload = bytes(byte ^ 0xFF for byte in payload)
-                    for index in range(
-                        contract.warmup_iterations
-                        + benchmark_case.measured_iterations
-                    ):
-                        blob_name = f"{prefix}/item-{index:05}.bin"
                         container_client.upload_blob(
                             blob_name,
-                            initial_payload,
-                            overwrite=False,
+                            payload,
+                            overwrite=True,
                             **sdk_request_options(
                                 setup_request_id(
                                     run_id,
                                     target,
                                     benchmark_case.id,
-                                    index,
+                                    pool_index,
                                 )
                             ),
                         )
-                execute_wave(
-                    invoke,
-                    contract.warmup_iterations,
-                    benchmark_case.concurrency,
-                )
-                case_started_at = utc_now()
-                latencies, wall_seconds = execute_wave(
-                    lambda index: invoke(index + contract.warmup_iterations),
-                    benchmark_case.measured_iterations,
-                    benchmark_case.concurrency,
-                )
-                case_finished_at = utc_now()
+                        read_cleanup.append(
+                            (
+                                container_client,
+                                target,
+                                benchmark_case.id,
+                                blob_name,
+                            )
+                        )
+
+        started_at = utc_now()
+        for repeat_index in range(contract.campaign_repeats):
+            for benchmark_case in contract.cases:
+                payload = deterministic_payload(benchmark_case.payload)
                 bytes_per_operation = (
                     benchmark_case.range_bytes
                     if benchmark_case.operation == "get_range"
@@ -580,57 +695,317 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                     in {"put_blob", "overwrite_blob", "get_blob"}
                     else 0
                 )
-                results.append(
-                    {
-                        "id": benchmark_case.id,
-                        "target": target,
-                        "targetFingerprint": endpoint_fingerprint(
-                            endpoints[target]
-                        ),
-                        "operation": benchmark_case.operation,
-                        "payload": benchmark_case.payload.id,
-                        "payloadBytes": benchmark_case.payload.size_bytes,
-                        "concurrency": benchmark_case.concurrency,
-                        "startedAt": case_started_at,
-                        "finishedAt": case_finished_at,
-                        "warmupIterations": contract.warmup_iterations,
-                        "iterations": benchmark_case.measured_iterations,
-                        "metrics": {
-                            **latency_metrics(latencies),
-                            "successCount": benchmark_case.measured_iterations,
-                            "errorCount": 0,
-                            "wallSeconds": round(wall_seconds, 6),
-                            "operationsPerSecond": round(
-                                benchmark_case.measured_iterations / wall_seconds,
-                                3,
-                            ),
-                            "bytesPerSecond": round(
-                                (
-                                    benchmark_case.measured_iterations
-                                    * bytes_per_operation
-                                )
-                                / wall_seconds,
-                                3,
-                            ),
-                        },
-                    }
-                )
-            finally:
-                for cleanup_index, blob_name in enumerate(sorted(cleanup)):
-                    try:
-                        container_client.delete_blob(
-                            blob_name,
+                for target in contract.target_order:
+                    container_client = services[target].get_container_client(
+                        container
+                    )
+                    prefix = (
+                        f"performance/{run_id}/repeat-{repeat_index + 1}/"
+                        f"{target}/{benchmark_case.id}"
+                    )
+                    seed_blob = f"{prefix}/seed.bin"
+                    write_cleanup = (
+                        {
+                            f"{prefix}/item-{index:05}.bin"
+                            for index in range(
+                                contract.warmup_iterations
+                                + benchmark_case.measured_iterations
+                            )
+                        }
+                        if benchmark_case.operation
+                        in {"put_blob", "overwrite_blob", "delete_blob"}
+                        else set()
+                    )
+                    if (
+                        contract.read_path_pool_size is None
+                        and benchmark_case.operation in READ_OPERATIONS
+                    ):
+                        container_client.upload_blob(
+                            seed_blob,
+                            payload,
+                            overwrite=False,
                             **sdk_request_options(
-                                request_id(
+                                setup_request_id(
                                     run_id,
                                     target,
                                     benchmark_case.id,
-                                    100000 + cleanup_index,
+                                    0,
+                                    repeat_index,
                                 )
                             ),
                         )
-                    except ResourceNotFoundError:
-                        pass
+                        write_cleanup.add(seed_blob)
+
+                    def invoke(index: int) -> None:
+                        blob_name = f"{prefix}/item-{index:05}.bin"
+                        blob_client = container_client.get_blob_client(blob_name)
+                        current_request_id = request_id(
+                            run_id,
+                            target,
+                            benchmark_case.id,
+                            index,
+                            repeat_index
+                            if contract.schema_version == 4
+                            else None,
+                        )
+                        if benchmark_case.operation == "put_blob":
+                            blob_client.upload_blob(
+                                payload,
+                                overwrite=False,
+                                **sdk_request_options(current_request_id),
+                            )
+                        elif benchmark_case.operation == "overwrite_blob":
+                            blob_client.upload_blob(
+                                payload,
+                                overwrite=True,
+                                **sdk_request_options(current_request_id),
+                            )
+                        elif benchmark_case.operation in {
+                            "get_blob",
+                            "get_range",
+                            "head_blob",
+                        }:
+                            current_read_blob = (
+                                read_blob_name(
+                                    benchmark_case.id,
+                                    index % contract.read_path_pool_size,
+                                )
+                                if contract.read_path_pool_size is not None
+                                else seed_blob
+                            )
+                            current_read_client = (
+                                container_client.get_blob_client(
+                                    current_read_blob
+                                )
+                            )
+                            if benchmark_case.operation == "get_blob":
+                                received = current_read_client.download_blob(
+                                    **sdk_request_options(current_request_id)
+                                ).readall()
+                                if received != payload:
+                                    raise RuntimeError(
+                                        "downloaded bytes did not match payload"
+                                    )
+                            elif benchmark_case.operation == "get_range":
+                                expected = payload[
+                                    : benchmark_case.range_bytes
+                                ]
+                                received = current_read_client.download_blob(
+                                    offset=0,
+                                    length=benchmark_case.range_bytes,
+                                    **sdk_request_options(current_request_id),
+                                ).readall()
+                                if received != expected:
+                                    raise RuntimeError(
+                                        "range bytes did not match payload"
+                                    )
+                            else:
+                                properties = (
+                                    current_read_client.get_blob_properties(
+                                        **sdk_request_options(
+                                            current_request_id
+                                        )
+                                    )
+                                )
+                                if properties.size != len(payload):
+                                    raise RuntimeError(
+                                        "HEAD content length did not match"
+                                    )
+                        elif benchmark_case.operation == "delete_blob":
+                            blob_client.delete_blob(
+                                **sdk_request_options(current_request_id)
+                            )
+                        else:
+                            raise RuntimeError(
+                                "unsupported operation "
+                                f"{benchmark_case.operation}"
+                            )
+
+                    try:
+                        if benchmark_case.operation in {
+                            "overwrite_blob",
+                            "delete_blob",
+                        }:
+                            initial_payload = bytes(
+                                byte ^ 0xFF for byte in payload
+                            )
+                            for index in range(
+                                contract.warmup_iterations
+                                + benchmark_case.measured_iterations
+                            ):
+                                blob_name = f"{prefix}/item-{index:05}.bin"
+                                container_client.upload_blob(
+                                    blob_name,
+                                    initial_payload,
+                                    overwrite=False,
+                                    **sdk_request_options(
+                                        setup_request_id(
+                                            run_id,
+                                            target,
+                                            benchmark_case.id,
+                                            index,
+                                            repeat_index,
+                                        )
+                                    ),
+                                )
+                        execute_wave(
+                            invoke,
+                            contract.warmup_iterations,
+                            benchmark_case.concurrency,
+                        )
+                        case_started_at = utc_now()
+                        latencies, wall_seconds = execute_wave(
+                            lambda index: invoke(
+                                index + contract.warmup_iterations
+                            ),
+                            benchmark_case.measured_iterations,
+                            benchmark_case.concurrency,
+                        )
+                        case_finished_at = utc_now()
+                        run_results[(benchmark_case.id, target)].append(
+                            (
+                                {
+                                    "repeat": repeat_index + 1,
+                                    "startedAt": case_started_at,
+                                    "finishedAt": case_finished_at,
+                                    "iterations": (
+                                        benchmark_case.measured_iterations
+                                    ),
+                                    "metrics": measured_metrics(
+                                        latencies,
+                                        benchmark_case.measured_iterations,
+                                        wall_seconds,
+                                        bytes_per_operation,
+                                    ),
+                                },
+                                latencies,
+                            )
+                        )
+                    finally:
+                        for cleanup_index, blob_name in enumerate(
+                            sorted(write_cleanup)
+                        ):
+                            try:
+                                container_client.delete_blob(
+                                    blob_name,
+                                    **sdk_request_options(
+                                        request_id(
+                                            run_id,
+                                            target,
+                                            benchmark_case.id,
+                                            100_000 + cleanup_index,
+                                            repeat_index,
+                                        )
+                                    ),
+                                )
+                            except ResourceNotFoundError:
+                                pass
+        finished_at = utc_now()
+    finally:
+        for cleanup_index, (
+            container_client,
+            target,
+            case_id,
+            blob_name,
+        ) in enumerate(reversed(read_cleanup)):
+            try:
+                container_client.delete_blob(
+                    blob_name,
+                    **sdk_request_options(
+                        request_id(
+                            run_id,
+                            target,
+                            case_id,
+                            200_000 + cleanup_index,
+                        )
+                    ),
+                )
+            except ResourceNotFoundError:
+                pass
+
+    results: list[dict[str, Any]] = []
+    stability_threshold = (
+        contract.non_regression.p50_stability_spread_ratio_threshold
+        if contract.non_regression is not None
+        else None
+    )
+    for benchmark_case in contract.cases:
+        for target in contract.target_order:
+            completed_runs = run_results[(benchmark_case.id, target)]
+            runs = [run for run, _ in completed_runs]
+            all_latencies = [
+                latency
+                for _, latencies in completed_runs
+                for latency in latencies
+            ]
+            total_iterations = sum(run["iterations"] for run in runs)
+            total_wall_seconds = sum(
+                run["metrics"]["wallSeconds"] for run in runs
+            )
+            bytes_per_operation = (
+                benchmark_case.range_bytes
+                if benchmark_case.operation == "get_range"
+                else benchmark_case.payload.size_bytes
+                if benchmark_case.operation
+                in {"put_blob", "overwrite_blob", "get_blob"}
+                else 0
+            )
+            p50_per_run = [
+                float(run["metrics"]["p50Ms"]) for run in runs
+            ]
+            spread = round(max(p50_per_run) / min(p50_per_run), 3)
+            repeatability: dict[str, Any] = {
+                "runs": contract.campaign_repeats,
+                "p50MsPerRun": p50_per_run,
+                "p50SpreadRatio": spread,
+            }
+            if stability_threshold is not None:
+                repeatability["p50Classification"] = (
+                    "blocking" if spread < stability_threshold else "signal"
+                )
+            result: dict[str, Any] = {
+                "id": benchmark_case.id,
+                "target": target,
+                "targetFingerprint": endpoint_fingerprint(endpoints[target]),
+                "operation": benchmark_case.operation,
+                "payload": benchmark_case.payload.id,
+                "payloadBytes": benchmark_case.payload.size_bytes,
+                "concurrency": benchmark_case.concurrency,
+                "startedAt": runs[0]["startedAt"],
+                "finishedAt": runs[-1]["finishedAt"],
+                "warmupIterations": contract.warmup_iterations,
+                "iterations": total_iterations,
+                "metrics": measured_metrics(
+                    all_latencies,
+                    total_iterations,
+                    total_wall_seconds,
+                    bytes_per_operation,
+                ),
+            }
+            if contract.schema_version == 4:
+                result.update(
+                    {
+                        "warmupIterations": (
+                            contract.warmup_iterations
+                            * contract.campaign_repeats
+                        ),
+                        "iterationsPerRun": (
+                            benchmark_case.measured_iterations
+                        ),
+                        "runs": runs,
+                        "repeatability": repeatability,
+                    }
+                )
+            if (
+                benchmark_case.operation in READ_OPERATIONS
+                and contract.read_path_pool_size is not None
+            ):
+                result["pathPoolSize"] = contract.read_path_pool_size
+            if benchmark_case.backend_requests_per_operation is not None:
+                result["expectedBackendRequestsPerOperation"] = (
+                    benchmark_case.backend_requests_per_operation
+                )
+            results.append(result)
 
     by_case = {
         (result["id"], result["target"]): result for result in results
@@ -656,13 +1031,45 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
             }
         )
 
+    resolution = None
+    if contract.schema_version == 4:
+        gateway_results = [
+            result for result in results if result["target"] == "gateway"
+        ]
+        worst_case = max(
+            gateway_results,
+            key=lambda result: result["repeatability"]["p50SpreadRatio"],
+        )
+        resolution = {
+            "readP50SpreadRatioMax": max(
+                result["repeatability"]["p50SpreadRatio"]
+                for result in gateway_results
+                if result["operation"] in READ_OPERATIONS
+            ),
+            "writeP50SpreadRatioMax": max(
+                result["repeatability"]["p50SpreadRatio"]
+                for result in gateway_results
+                if result["operation"] not in READ_OPERATIONS
+            ),
+            "worstCase": worst_case["id"],
+        }
+
     output = {
         "apiVersion": "performance.overmesh.io/v1",
         "campaign": {
             "runId": run_id,
             "startedAt": started_at,
-            "finishedAt": utc_now(),
+            "finishedAt": finished_at,
             "commit": commit,
+            **(
+                {
+                    "releaseTag": os.environ[
+                        "OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG"
+                    ]
+                }
+                if contract.schema_version == 4
+                else {}
+            ),
             "projectVersion": project_version,
             "ringVersion": os.environ[
                 "OVERMESH_LIVE_PERFORMANCE_RING_VERSION"
@@ -694,6 +1101,7 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
         },
         "cases": results,
         "comparisons": comparisons,
+        **({"resolution": resolution} if resolution is not None else {}),
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
@@ -707,7 +1115,7 @@ def main() -> int:
     parser.add_argument(
         "--contract",
         type=Path,
-        default=Path("harness/performance/live-v3.toml"),
+        default=Path("harness/performance/live-v4.toml"),
     )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--plan", action="store_true")

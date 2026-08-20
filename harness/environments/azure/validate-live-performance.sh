@@ -43,7 +43,7 @@ validator="$script_dir/performance/validate_performance_evidence.py"
 requirements="$script_dir/performance/requirements.txt"
 builder="$script_dir/build-live-evidence.py"
 signer="$script_dir/sign-live-evidence.sh"
-contract=${OVERMESH_LIVE_PERFORMANCE_CONTRACT:-"$repo_root/harness/performance/live-v3.toml"}
+contract=${OVERMESH_LIVE_PERFORMANCE_CONTRACT:-"$repo_root/harness/performance/live-v4.toml"}
 install_root=${OVERMESH_LIVE_PERFORMANCE_ROOT:-/opt/overmesh-live/performance}
 export AZURE_EXTENSION_DIR=${OVERMESH_LIVE_PERFORMANCE_AZURE_EXTENSION_DIR:-"$install_root/az-extensions"}
 log_analytics_extension_version=${OVERMESH_LIVE_PERFORMANCE_LOG_ANALYTICS_EXTENSION_VERSION:-1.0.0b1}
@@ -56,8 +56,9 @@ work_dir=${OVERMESH_LIVE_PERFORMANCE_WORK_DIR:-"$repo_root/.harness/live-perform
 raw_output=${OVERMESH_LIVE_PERFORMANCE_RAW_EVIDENCE_PATH:-"$work_dir/raw-performance.json"}
 client_output="$work_dir/client-performance.json"
 evidence_dir=${OVERMESH_LIVE_PERFORMANCE_EVIDENCE_DIRECTORY:-"$work_dir/signed"}
-evidence="$evidence_dir/performance-v010-evidence.json"
-signature="$evidence_dir/performance-v010-evidence.sig.json"
+bundle_name=${OVERMESH_LIVE_PERFORMANCE_BUNDLE_NAME:-performance-v011-v4-evidence.json}
+evidence="$evidence_dir/$bundle_name"
+signature="$evidence_dir/${bundle_name%.json}.sig.json"
 checksums="$evidence_dir/SHA256SUMS"
 
 for command_name in python3 curl git az; do
@@ -66,6 +67,16 @@ for command_name in python3 curl git az; do
     exit 2
   fi
 done
+
+contract_schema_version=$(
+  python3 -c \
+    'import pathlib,sys,tomllib; print(tomllib.loads(pathlib.Path(sys.argv[1]).read_text())["schema_version"])' \
+    "$contract"
+)
+if [[ "$contract_schema_version" == "4" && -z "${OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG:-}" ]]; then
+  echo "OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG is required by contract v4." >&2
+  exit 2
+fi
 
 mkdir -p "$downloads" "$(dirname "$raw_output")" "$evidence_dir"
 installed_log_analytics_version=$(
@@ -107,6 +118,23 @@ fi
 export OVERMESH_LIVE_PERFORMANCE_RUN_ID=$run_id
 export OVERMESH_LIVE_PERFORMANCE_COMMIT=${OVERMESH_LIVE_PERFORMANCE_COMMIT:-$(git -C "$repo_root" rev-parse HEAD)}
 export OVERMESH_LIVE_PERFORMANCE_PROJECT_VERSION=${OVERMESH_LIVE_PERFORMANCE_PROJECT_VERSION:-$(<"$repo_root/VERSION")}
+if [[ "$contract_schema_version" == "4" ]]; then
+  if [[ "$(git -C "$repo_root" cat-file -t "refs/tags/$OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG" 2>/dev/null || true)" != "tag" ]]; then
+    echo "OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG must name an annotated local tag." >&2
+    exit 2
+  fi
+  nearest_release_tag=$(
+    git -C "$repo_root" describe \
+      --tags \
+      --abbrev=0 \
+      --match 'v*' \
+      "$OVERMESH_LIVE_PERFORMANCE_COMMIT"
+  )
+  if [[ "$nearest_release_tag" != "$OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG" ]]; then
+    echo "The performance release tag must be the nearest release tag reachable from the campaign commit." >&2
+    exit 2
+  fi
+fi
 
 "$venv/bin/python" "$runner" \
   --contract "$contract" \

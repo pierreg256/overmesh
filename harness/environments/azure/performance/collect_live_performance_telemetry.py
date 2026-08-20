@@ -69,9 +69,16 @@ def comma_separated_values(value: str | list[str]) -> list[str]:
     return normalized
 
 
-def request_id(run_id: str, target: str, case_id: str, index: int) -> str:
+def request_id(
+    run_id: str,
+    target: str,
+    case_id: str,
+    index: int,
+    repeat_index: int | None = None,
+) -> str:
+    repeat = "" if repeat_index is None else f":repeat-{repeat_index + 1}"
     digest = hashlib.sha256(
-        f"{run_id}:{target}:{case_id}:{index}".encode("utf-8")
+        f"{run_id}{repeat}:{target}:{case_id}:{index}".encode("utf-8")
     ).hexdigest()[:24]
     return f"perf-{target}-{digest}"
 
@@ -84,7 +91,43 @@ def measured_request_fingerprints(
     run_id: str,
     benchmark_case: dict[str, Any],
 ) -> set[str]:
-    first = benchmark_case["warmupIterations"]
+    if "runs" not in benchmark_case:
+        first = benchmark_case["warmupIterations"]
+        return {
+            request_fingerprint(
+                request_id(
+                    run_id,
+                    "gateway",
+                    benchmark_case["id"],
+                    index,
+                )
+            )
+            for index in range(first, first + benchmark_case["iterations"])
+        }
+    return {
+        fingerprint
+        for run in benchmark_case["runs"]
+        for fingerprint in measured_request_fingerprints_for_run(
+            run_id,
+            benchmark_case,
+            run,
+        )
+    }
+
+
+def measured_request_fingerprints_for_run(
+    run_id: str,
+    benchmark_case: dict[str, Any],
+    run: dict[str, Any],
+) -> set[str]:
+    first = benchmark_case["warmupIterations"] // len(
+        benchmark_case["runs"]
+    )
+    repeat_index = (
+        run["repeat"] - 1
+        if benchmark_case["repeatability"]["runs"] > 1
+        else None
+    )
     return {
         request_fingerprint(
             request_id(
@@ -92,9 +135,10 @@ def measured_request_fingerprints(
                 "gateway",
                 benchmark_case["id"],
                 index,
+                repeat_index,
             )
         )
-        for index in range(first, first + benchmark_case["iterations"])
+        for index in range(first, first + run["iterations"])
     }
 
 
@@ -400,6 +444,12 @@ def events_in_case_window(
     events: list[tuple[datetime, str]],
     benchmark_case: dict[str, Any],
 ) -> list[tuple[datetime, str]]:
+    if "runs" in benchmark_case:
+        return [
+            event
+            for run in benchmark_case["runs"]
+            for event in events_in_case_window(events, run)
+        ]
     started_at = parse_timestamp(benchmark_case["startedAt"])
     finished_at = parse_timestamp(benchmark_case["finishedAt"])
     return [
@@ -407,6 +457,96 @@ def events_in_case_window(
         for timestamp, message in events
         if started_at <= timestamp <= finished_at
     ]
+
+
+def request_counts_by_fingerprint(
+    messages: list[str],
+    expected: set[str],
+) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    for message in messages:
+        fields = parse_fields(message)
+        if fields.get("event") != "overmesh_backend_request":
+            continue
+        fingerprint = fields.get("client_request_fingerprint")
+        if fingerprint in expected:
+            counts[fingerprint] += 1
+    return counts
+
+
+def placement_coverage(
+    run_id: str,
+    benchmark_case: dict[str, Any],
+    messages_by_run: list[list[str]],
+    aggregate_metrics: dict[str, Any],
+) -> dict[str, Any]:
+    pool_size = benchmark_case["pathPoolSize"]
+    warmup_per_run = benchmark_case["warmupIterations"] // len(
+        benchmark_case["runs"]
+    )
+    pairs_by_path: dict[int, set[tuple[str, str]]] = {
+        index: set() for index in range(pool_size)
+    }
+    for run, messages in zip(
+        benchmark_case["runs"],
+        messages_by_run,
+        strict=True,
+    ):
+        backends_by_fingerprint: dict[str, set[str]] = {}
+        for message in messages:
+            fields = parse_fields(message)
+            if fields.get("event") != "overmesh_backend_request":
+                continue
+            fingerprint = fields.get("client_request_fingerprint")
+            backend_id = fields.get("backend_id")
+            if fingerprint and backend_id and backend_id != "unknown":
+                backends_by_fingerprint.setdefault(fingerprint, set()).add(
+                    backend_id
+                )
+        repeat_index = run["repeat"] - 1
+        for measured_index in range(run["iterations"]):
+            invocation_index = warmup_per_run + measured_index
+            fingerprint = request_fingerprint(
+                request_id(
+                    run_id,
+                    "gateway",
+                    benchmark_case["id"],
+                    invocation_index,
+                    repeat_index,
+                )
+            )
+            backends = backends_by_fingerprint.get(fingerprint, set())
+            if len(backends) != 2:
+                raise RuntimeError(
+                    f"case {benchmark_case['id']} request {fingerprint} "
+                    f"reached {len(backends)} placement backends, expected 2"
+                )
+            pairs_by_path[invocation_index % pool_size].add(
+                tuple(sorted(backends))
+            )
+    inconsistent_paths = [
+        path_index
+        for path_index, pairs in pairs_by_path.items()
+        if len(pairs) != 1
+    ]
+    if inconsistent_paths:
+        raise RuntimeError(
+            f"case {benchmark_case['id']} has missing or inconsistent "
+            f"placement for pool paths {inconsistent_paths}"
+        )
+    distinct_pairs = {
+        next(iter(pairs)) for pairs in pairs_by_path.values()
+    }
+    if len(distinct_pairs) != 3:
+        raise RuntimeError(
+            f"case {benchmark_case['id']} exercised {len(distinct_pairs)} "
+            "placement pairs, expected 3"
+        )
+    return {
+        "distinctPaths": pool_size,
+        "distinctPlacementPairs": len(distinct_pairs),
+        "byBackend": aggregate_metrics["backendRequests"]["byBackend"],
+    }
 
 
 def next_stability(
@@ -422,6 +562,28 @@ def next_stability(
     return current_count, 1
 
 
+def telemetry_query_windows(
+    gateway_cases: list[dict[str, Any]],
+    campaign: dict[str, Any],
+) -> list[tuple[str, str]]:
+    if not gateway_cases or "runs" not in gateway_cases[0]:
+        return [(campaign["startedAt"], campaign["finishedAt"])]
+    repeat_count = len(gateway_cases[0]["runs"])
+    return [
+        (
+            min(
+                benchmark_case["runs"][repeat_index]["startedAt"]
+                for benchmark_case in gateway_cases
+            ),
+            max(
+                benchmark_case["runs"][repeat_index]["finishedAt"]
+                for benchmark_case in gateway_cases
+            ),
+        )
+        for repeat_index in range(repeat_count)
+    ]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--evidence", type=Path, required=True)
@@ -434,7 +596,7 @@ def main() -> int:
         "OVERMESH_LIVE_PERFORMANCE_GATEWAY_RESOURCE_ID"
     ]
     wait_seconds = int(
-        os.environ.get("OVERMESH_LIVE_PERFORMANCE_LOG_WAIT_SECONDS", "180")
+        os.environ.get("OVERMESH_LIVE_PERFORMANCE_LOG_WAIT_SECONDS", "600")
     )
     poll_seconds = int(
         os.environ.get("OVERMESH_LIVE_PERFORMANCE_LOG_POLL_SECONDS", "15")
@@ -456,24 +618,22 @@ def main() -> int:
         if benchmark_case["target"] == "gateway"
     ]
     campaign = evidence["campaign"]
-    expected_by_case = {
-        benchmark_case["id"]: measured_request_fingerprints(
-            campaign["runId"],
-            benchmark_case,
-        )
-        for benchmark_case in gateway_cases
-    }
+    query_windows = telemetry_query_windows(gateway_cases, campaign)
     deadline = time.monotonic() + wait_seconds
     events: list[tuple[datetime, str]] = []
     previous_count: int | None = None
     stable_polls = 0
     while True:
-        events = query_logs(
-            workspace,
-            app_names,
-            campaign["startedAt"],
-            campaign["finishedAt"],
-        )
+        events = [
+            event
+            for window_started_at, window_finished_at in query_windows
+            for event in query_logs(
+                workspace,
+                app_names,
+                window_started_at,
+                window_finished_at,
+            )
+        ]
         covered = covered_gateway_cases(
             events,
             gateway_cases,
@@ -518,16 +678,106 @@ def main() -> int:
         time.sleep(poll_seconds)
 
     for benchmark_case in gateway_cases:
-        case_messages = [
-            message
-            for _, message in events_in_case_window(events, benchmark_case)
-        ]
+        runs = benchmark_case.get("runs")
+        messages_by_run = (
+            [
+                [
+                    message
+                    for _, message in events_in_case_window(events, run)
+                ]
+                for run in runs
+            ]
+            if runs is not None
+            else []
+        )
+        case_messages = (
+            [
+                message
+                for run_messages in messages_by_run
+                for message in run_messages
+            ]
+            if runs is not None
+            else [
+                message
+                for _, message in events_in_case_window(
+                    events,
+                    benchmark_case,
+                )
+            ]
+        )
         event_metrics = aggregate_events(case_messages)
         if event_metrics["backendRequests"]["count"] == 0:
             raise RuntimeError(
                 f"case {benchmark_case['id']} has no backend request telemetry"
             )
+        if event_metrics["backendRequests"]["unattributedRequests"] != 0:
+            raise RuntimeError(
+                f"case {benchmark_case['id']} has unattributed backend requests"
+            )
         benchmark_case["serverTelemetry"] = event_metrics
+        if runs is not None:
+            requests_per_operation_per_run: list[int] = []
+            for run, run_messages in zip(
+                runs,
+                messages_by_run,
+                strict=True,
+            ):
+                run_metrics = aggregate_events(run_messages)
+                if (
+                    run_metrics["backendRequests"]["unattributedRequests"]
+                    != 0
+                ):
+                    raise RuntimeError(
+                        f"case {benchmark_case['id']} repeat "
+                        f"{run['repeat']} has unattributed backend requests"
+                    )
+                expected = measured_request_fingerprints_for_run(
+                    campaign["runId"],
+                    benchmark_case,
+                    run,
+                )
+                counts = request_counts_by_fingerprint(
+                    run_messages,
+                    expected,
+                )
+                distinct_counts = set(counts.values())
+                if set(counts) != expected or len(distinct_counts) != 1:
+                    raise RuntimeError(
+                        f"case {benchmark_case['id']} repeat "
+                        f"{run['repeat']} request budget varies by path or "
+                        "client operation"
+                    )
+                requests_per_operation_per_run.append(
+                    next(iter(distinct_counts))
+                )
+                run["serverTelemetry"] = run_metrics
+            if len(set(requests_per_operation_per_run)) != 1:
+                raise RuntimeError(
+                    f"case {benchmark_case['id']} request budget varies "
+                    "between campaign repeats"
+                )
+            expected_budget = benchmark_case.get(
+                "expectedBackendRequestsPerOperation"
+            )
+            if (
+                expected_budget is not None
+                and requests_per_operation_per_run[0] != expected_budget
+            ):
+                raise RuntimeError(
+                    f"case {benchmark_case['id']} request budget is "
+                    f"{requests_per_operation_per_run[0]}, expected "
+                    f"{expected_budget}"
+                )
+            benchmark_case["repeatability"][
+                "requestsPerOperationPerRun"
+            ] = requests_per_operation_per_run
+            if "pathPoolSize" in benchmark_case:
+                benchmark_case["placementCoverage"] = placement_coverage(
+                    campaign["runId"],
+                    benchmark_case,
+                    messages_by_run,
+                    event_metrics,
+                )
 
     container_metrics = query_metrics(
         resource_ids,

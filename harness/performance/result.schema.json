@@ -51,6 +51,29 @@
       "type": "object",
       "required": ["containerApp"]
     },
+    "resolution": {
+      "type": "object",
+      "required": [
+        "readP50SpreadRatioMax",
+        "writeP50SpreadRatioMax",
+        "worstCase"
+      ],
+      "properties": {
+        "readP50SpreadRatioMax": {
+          "type": "number",
+          "minimum": 1
+        },
+        "writeP50SpreadRatioMax": {
+          "type": "number",
+          "minimum": 1
+        },
+        "worstCase": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
     "cases": {
       "type": "array",
       "minItems": 1,
@@ -66,7 +89,89 @@
           "finishedAt",
           "iterations",
           "metrics"
-        ]
+        ],
+        "properties": {
+          "runs": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "repeat",
+                "startedAt",
+                "finishedAt",
+                "iterations",
+                "metrics"
+              ]
+            }
+          },
+          "repeatability": {
+            "type": "object",
+            "required": [
+              "runs",
+              "p50MsPerRun",
+              "p50SpreadRatio",
+              "p50Classification"
+            ],
+            "properties": {
+              "runs": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "p50MsPerRun": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                }
+              },
+              "p50SpreadRatio": {
+                "type": "number",
+                "minimum": 1
+              },
+              "requestsPerOperationPerRun": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "p50Classification": {
+                "enum": ["blocking", "signal"]
+              }
+            },
+            "additionalProperties": false
+          },
+          "placementCoverage": {
+            "type": "object",
+            "required": [
+              "distinctPaths",
+              "distinctPlacementPairs",
+              "byBackend"
+            ],
+            "properties": {
+              "distinctPaths": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "distinctPlacementPairs": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "byBackend": {
+                "type": "object",
+                "minProperties": 1,
+                "additionalProperties": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
       }
     },
     "comparisons": {
@@ -103,5 +208,29 @@
       ]
     }
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "contract": {
+            "properties": {
+              "schemaVersion": {
+                "const": 4
+              }
+            },
+            "required": ["schemaVersion"]
+          }
+        }
+      },
+      "then": {
+        "required": ["resolution"],
+        "properties": {
+          "campaign": {
+            "required": ["releaseTag"]
+          }
+        }
+      }
+    }
+  ],
   "additionalProperties": false
 }

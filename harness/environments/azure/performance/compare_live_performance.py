@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import statistics
 from pathlib import Path
 from typing import Any
 
@@ -30,10 +31,21 @@ def requests_per_operation(case: dict[str, Any]) -> float:
     return round(count / iterations, 4)
 
 
+def require_isolated_api(document: dict[str, Any], label: str) -> None:
+    api_version = document.get("apiVersion")
+    if api_version != "performance.overmesh.io/v1":
+        raise ValueError(
+            f"{label} uses unsupported apiVersion {api_version!r}; "
+            "client-observed campaigns can never be baselines or comparisons"
+        )
+
+
 def build_comparison(
     current: dict[str, Any],
     baseline: dict[str, Any],
 ) -> dict[str, Any]:
+    require_isolated_api(current, "current evidence")
+    require_isolated_api(baseline, "baseline evidence")
     current_hash = current["contract"]["sha256"]
     baseline_hash = baseline["contract"]["sha256"]
     if current_hash != baseline_hash:
@@ -70,6 +82,8 @@ def build_comparison(
         baseline_overhead = baseline_comparisons[case_id]
         current_gateway = current_cases[(case_id, "gateway")]
         baseline_gateway = baseline_cases[(case_id, "gateway")]
+        current_direct = current_cases[(case_id, "direct")]
+        baseline_direct = baseline_cases[(case_id, "direct")]
         current_server = current_gateway.get("serverTelemetry", {})
         baseline_server = baseline_gateway.get("serverTelemetry", {})
         current_backend = current_server.get("backendRequests", {})
@@ -80,9 +94,70 @@ def build_comparison(
         baseline_requests = requests_per_operation(baseline_gateway)
         request_status = (
             "passed"
-            if current_backend["count"] * baseline_gateway["iterations"]
-            <= baseline_backend["count"] * current_gateway["iterations"]
+            if (
+                current_requests == baseline_requests
+                if schema_version >= 4
+                else current_backend["count"]
+                * baseline_gateway["iterations"]
+                <= baseline_backend["count"]
+                * current_gateway["iterations"]
+            )
             else "failed"
+        )
+        p50_classification = (
+            "blocking"
+            if schema_version >= 4
+            and current_gateway["repeatability"]["p50Classification"]
+            == "blocking"
+            and baseline_gateway["repeatability"]["p50Classification"]
+            == "blocking"
+            and current_direct["repeatability"]["p50Classification"]
+            == "blocking"
+            and baseline_direct["repeatability"]["p50Classification"]
+            == "blocking"
+            else "signal"
+            if schema_version >= 4
+            else policy["p50Latency"]
+            if schema_version >= 2
+            else "unclassified"
+        )
+        baseline_p50 = (
+            statistics.median(
+                baseline_gateway["repeatability"]["p50MsPerRun"]
+            )
+            if schema_version >= 4
+            else baseline_gateway["metrics"]["p50Ms"]
+        )
+        current_p50 = (
+            statistics.median(
+                current_gateway["repeatability"]["p50MsPerRun"]
+            )
+            if schema_version >= 4
+            else current_gateway["metrics"]["p50Ms"]
+        )
+        baseline_p50_overhead = baseline_overhead[
+            "gatewayToDirectLatencyRatio"
+        ]["p50Ms"]
+        current_p50_overhead = current_overhead[
+            "gatewayToDirectLatencyRatio"
+        ]["p50Ms"]
+        if schema_version >= 4:
+            baseline_direct_p50 = statistics.median(
+                baseline_direct["repeatability"]["p50MsPerRun"]
+            )
+            current_direct_p50 = statistics.median(
+                current_direct["repeatability"]["p50MsPerRun"]
+            )
+            baseline_p50_overhead = baseline_p50 / baseline_direct_p50
+            current_p50_overhead = current_p50 / current_direct_p50
+        p50_status = (
+            "failed"
+            if p50_classification == "blocking"
+            and current_p50_overhead / baseline_p50_overhead
+            > policy["p50RegressionRatioThreshold"]
+            else "passed"
+            if p50_classification == "blocking"
+            else "not-gated"
         )
         cases.append(
             {
@@ -124,13 +199,22 @@ def build_comparison(
                                 "status": request_status,
                             },
                             "p50Latency": {
-                                "classification": policy["p50Latency"],
-                                "baselineGatewayMs": baseline_gateway["metrics"][
-                                    "p50Ms"
-                                ],
-                                "currentGatewayMs": current_gateway["metrics"][
-                                    "p50Ms"
-                                ],
+                                "classification": p50_classification,
+                                "baselineGatewayMs": baseline_p50,
+                                "currentGatewayMs": current_p50,
+                                **(
+                                    {
+                                        "baselineGatewayToDirectRatio": (
+                                            baseline_p50_overhead
+                                        ),
+                                        "currentGatewayToDirectRatio": (
+                                            current_p50_overhead
+                                        ),
+                                        "status": p50_status,
+                                    }
+                                    if schema_version >= 4
+                                    else {}
+                                ),
                                 "gatewayToDirectRatioChange": ratio(
                                     current_overhead[
                                         "gatewayToDirectLatencyRatio"
@@ -182,10 +266,16 @@ def build_comparison(
     blocking_regressions = [
         result["case"]
         for result in cases
-        if result.get("nonRegression", {})
-        .get("backendRequestsPerOperation", {})
-        .get("status")
-        == "failed"
+        if (
+            result.get("nonRegression", {})
+            .get("backendRequestsPerOperation", {})
+            .get("status")
+            == "failed"
+            or result.get("nonRegression", {})
+            .get("p50Latency", {})
+            .get("status")
+            == "failed"
+        )
     ]
     return {
         "status": "compared",
@@ -234,6 +324,7 @@ def main() -> int:
     arguments = parser.parse_args()
 
     current = json.loads(arguments.current.read_text(encoding="utf-8"))
+    require_isolated_api(current, "current evidence")
     if arguments.baseline is None:
         policy = current["contract"].get("nonRegression")
         current["historicalComparison"] = {
@@ -258,6 +349,7 @@ def main() -> int:
         }
     else:
         baseline = json.loads(arguments.baseline.read_text(encoding="utf-8"))
+        require_isolated_api(baseline, "baseline evidence")
         current["historicalComparison"] = build_comparison(current, baseline)
         current["historicalComparison"]["baseline"][
             "evidenceSha256"
