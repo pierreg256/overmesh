@@ -143,6 +143,13 @@ def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def fixture_hash_matches(value: str | None, expected: str) -> bool:
+    return (
+        isinstance(value, str)
+        and value.removeprefix("sha256:") == expected
+    )
+
+
 def sha256_path(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
 
@@ -1135,7 +1142,9 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                             ).get("overmesh_sha256")
                             if (
                                 item.size != fixture.payload_size_bytes
-                                or content_hash != payload_sha256
+                                or not fixture_hash_matches(
+                                    content_hash, payload_sha256
+                                )
                             ):
                                 raise RuntimeError(
                                     f"fixture {fixture.id} target {target} "
@@ -1222,11 +1231,33 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                             ).get("overmesh_fixture_sha256") or (
                                 properties.metadata or {}
                             ).get("overmesh_sha256")
-                            if (
+                            invalid_content = (
                                 properties.size
                                 != fixture.payload_size_bytes
-                                or content_hash != payload_sha256
-                            ):
+                                or not fixture_hash_matches(
+                                    content_hash, payload_sha256
+                                )
+                            )
+                            if target == "gateway":
+                                downloaded = (
+                                    blob_client.download_blob(
+                                        **sdk_request_options(
+                                            setup_request_id(
+                                                run_id,
+                                                target,
+                                                fixture.id,
+                                                20_000 + index,
+                                            )
+                                        )
+                                    ).readall()
+                                )
+                                invalid_content = (
+                                    len(downloaded)
+                                    != fixture.payload_size_bytes
+                                    or sha256_bytes(downloaded)
+                                    != payload_sha256
+                                )
+                            if invalid_content:
                                 raise RuntimeError(
                                     f"fixture {fixture.id} target {target} "
                                     f"container {fixture_container} failed "

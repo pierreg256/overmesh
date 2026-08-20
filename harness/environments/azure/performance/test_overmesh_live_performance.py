@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from overmesh_live_performance import (
+    fixture_hash_matches,
     fixture_manifest_sha256,
     latency_metrics,
     load_contract,
@@ -16,6 +17,13 @@ from overmesh_live_performance import (
 
 
 class PerformanceContractTests(unittest.TestCase):
+    def test_fixture_hash_accepts_gateway_sha256_prefix(self) -> None:
+        digest = "a" * 64
+        self.assertTrue(fixture_hash_matches(digest, digest))
+        self.assertTrue(fixture_hash_matches(f"sha256:{digest}", digest))
+        self.assertFalse(fixture_hash_matches(None, digest))
+        self.assertFalse(fixture_hash_matches(f"sha256:{'b' * 64}", digest))
+
     def test_repository_contract_expands_to_unique_cases(self) -> None:
         baseline = load_contract(Path("harness/performance/live-v1.toml"))
         self.assertEqual(len(baseline.cases), 25)

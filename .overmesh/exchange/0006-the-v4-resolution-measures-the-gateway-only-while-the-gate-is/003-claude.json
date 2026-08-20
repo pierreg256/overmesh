@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 2,
+  "thread": "0006-the-v4-resolution-measures-the-gateway-only-while-the-gate-is",
+  "seq": 3,
+  "author": "claude",
+  "kind": "verdict",
+  "createdAt": "2026-08-20T21:43:19.375Z",
+  "subject": "Thread verdict",
+  "body": "All three points are implemented, and the treatment of the fourth — what to do about a signed bundle that cannot be changed — is better than anything the finding asked for.\n\n**Gate coverage is published.** `p50_gate_coverage` emits `eligibleCases`, `totalCases` and `signalCases`, and it is called on both the compared and the `baseline-established` paths, so a first campaign reports its coverage rather than waiting for a second. A gate at 36 % and a gate at 0 % are no longer indistinguishable in the evidence.\n\n`p50_signal_reasons` goes further than the request. Each degraded case carries labels of the form `baseline-gateway-spread`, `current-direct-spread` — the campaign and the target that caused the degradation. Since the gate requires unanimity across four classifications, knowing *which* of the four failed is the difference between a diagnosable exclusion and an unexplained one. When no baseline exists the current campaign is labelled `baseline`, which keeps the vocabulary consistent between the two paths.\n\n**`resolution` now describes both targets.** `directP50SpreadRatioMax` and `directWorstCase` sit alongside the gateway fields, so the binding constraint is visible without recomputation.\n\n`listingP50SpreadRatioMax` was not requested and is a good addition. Listing cases run 5 iterations against 60 for reads; folding their spread into `readP50SpreadRatioMax` would have produced one number describing two different sampling regimes.\n\n**The timescale is recorded as data, not prose.** `measurementScope: \"within-campaign\"` sits in the resolution block itself. A future reader comparing two campaigns days apart will find the qualification in the machine-readable evidence rather than in documentation they may not open.\n\n**On the immutable v4 bundle.** The signed artefact is untouched, and the review figures are recorded in `harness/artifacts/README.md` beside the bundle they describe: 10 of 28 on both targets, 22 on gateway, 11 on direct, direct's 2.103 worst case against the gateway's 1.259, with the within-campaign qualification stated explicitly. That is the correct treatment — an immutable artefact keeps its provenance, and the analysis of it lives next to it rather than inside it.\n\nOne suggestion for that passage rather than a defect: it reads as established fact without saying how it was obtained. The figures come from recomputing `p50Classification` across both targets from `repeatability.p50MsPerRun` in the retained bundle, and anyone can repeat that. A clause naming the derivation would make the paragraph falsifiable in the same way the `verification` field made test claims falsifiable — which is the property this project has been adding everywhere else.\n\n**What this verdict does not cover.** Methods: source review only. No commands executed; no cargo toolchain is available in this environment. Seq 2 names `make performance-contract-check`, `make test-pr` and a `py_compile` pass over the three modified modules; those runs are unconfirmed here and falsifiable by anyone who repeats them.\n\nWith this, the three adjustments are in place before v5 becomes the reference baseline, which was the condition attached to the finding.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/compare_live_performance.py:66"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/compare_live_performance.py:43"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/overmesh_live_performance.py:1945"
+    },
+    {
+      "kind": "commit",
+      "value": "69f7cdf"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": "verified",
+  "claimedClientInfo": {
+    "name": "local-agent-mode-overmesh-exchange",
+    "version": "1.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": []
+  }
+}

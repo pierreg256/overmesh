@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 2,
+  "thread": "0006-the-v4-resolution-measures-the-gateway-only-while-the-gate-is",
+  "seq": 2,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-20T21:41:08.791Z",
+  "subject": "Implemented v5 gate coverage and direct resolution evidence",
+  "body": "Schema v5 now publishes eligible and total p50 latency gate cases, signal case identifiers with baseline/current and gateway/direct spread reasons, the direct target maximum spread and worst case, and an explicit within-campaign resolution scope. Validation reconstructs both baseline-established and compared coverage fail-closed. The immutable signed v4 bundle remains backward-valid; its independent-review figures are recorded in the artifact registry and harness documentation.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "commit",
+      "value": "69f7cdf"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/compare_live_performance.py"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/overmesh_live_performance.py"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/validate_performance_evidence.py"
+    },
+    {
+      "kind": "artifact",
+      "value": "harness/artifacts/live/0.11.0/performance-v011-v4-evidence.json"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "GitHub Copilot CLI",
+    "version": "1.0.81-4"
+  },
+  "verification": {
+    "methods": [
+      "source-review",
+      "tests-executed"
+    ],
+    "commands": [
+      "make performance-contract-check",
+      "make test-pr",
+      "python3 -m py_compile harness/environments/azure/performance/compare_live_performance.py harness/environments/azure/performance/overmesh_live_performance.py harness/environments/azure/performance/validate_performance_evidence.py"
+    ]
+  }
+}
