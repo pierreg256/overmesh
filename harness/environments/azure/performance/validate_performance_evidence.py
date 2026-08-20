@@ -470,6 +470,22 @@ def validate_document(
                 for case in gateway_cases
                 if case["operation"] in listing_operations
             )
+            direct_cases = [
+                case for case in cases if case.get("target") == "direct"
+            ]
+            direct_worst_case = max(
+                direct_cases,
+                key=lambda case: case["repeatability"]["p50SpreadRatio"],
+            )
+            expected_resolution.update(
+                {
+                    "directP50SpreadRatioMax": direct_worst_case[
+                        "repeatability"
+                    ]["p50SpreadRatio"],
+                    "directWorstCase": direct_worst_case["id"],
+                    "measurementScope": "within-campaign",
+                }
+            )
         if document.get("resolution") != expected_resolution:
             raise ValueError("campaign resolution is missing or inconsistent")
 
@@ -501,6 +517,81 @@ def validate_document(
             raise ValueError("backend request non-regression gate did not pass")
         if non_regression.get("blockingRegressions") != []:
             raise ValueError("backend request non-regression has blocking cases")
+        if contract.schema_version == 5:
+            signal_cases = []
+            if historical.get("status") == "baseline-established":
+                for case_id in sorted(expected_ids):
+                    reasons = []
+                    if (
+                        indexed[(case_id, "gateway")]["repeatability"][
+                            "p50Classification"
+                        ]
+                        != "blocking"
+                    ):
+                        reasons.append("baseline-gateway-spread")
+                    if (
+                        indexed[(case_id, "direct")]["repeatability"][
+                            "p50Classification"
+                        ]
+                        != "blocking"
+                    ):
+                        reasons.append("baseline-direct-spread")
+                    if reasons:
+                        signal_cases.append(
+                            {"case": case_id, "reasons": reasons}
+                        )
+            else:
+                comparison_cases = historical.get("cases", [])
+                if (
+                    not isinstance(comparison_cases, list)
+                    or {
+                        result.get("case")
+                        for result in comparison_cases
+                        if isinstance(result, dict)
+                    }
+                    != expected_ids
+                ):
+                    raise ValueError(
+                        "historical comparison coverage has an invalid case set"
+                    )
+                allowed_reasons = {
+                    f"{campaign}-{target}-spread"
+                    for campaign in ("baseline", "current")
+                    for target in ("gateway", "direct")
+                }
+                for result in sorted(
+                    comparison_cases, key=lambda value: value["case"]
+                ):
+                    p50 = result.get("nonRegression", {}).get(
+                        "p50Latency", {}
+                    )
+                    reasons = p50.get("signalReasons")
+                    if (
+                        not isinstance(reasons, list)
+                        or len(reasons) != len(set(reasons))
+                        or any(reason not in allowed_reasons for reason in reasons)
+                        or (p50.get("classification") == "blocking" and reasons)
+                        or (p50.get("classification") == "signal" and not reasons)
+                    ):
+                        raise ValueError(
+                            "historical p50 signal reasons are inconsistent"
+                        )
+                    if reasons:
+                        signal_cases.append(
+                            {"case": result["case"], "reasons": reasons}
+                        )
+            expected_coverage = {
+                "eligibleCases": len(expected_ids) - len(signal_cases),
+                "totalCases": len(expected_ids),
+                "signalCases": signal_cases,
+            }
+            if (
+                non_regression.get("p50LatencyGateCoverage")
+                != expected_coverage
+            ):
+                raise ValueError(
+                    "historical p50 latency gate coverage is inconsistent"
+                )
         if historical.get("status") == "compared":
             for result in historical.get("cases", []):
                 classifications = result.get("nonRegression", {})

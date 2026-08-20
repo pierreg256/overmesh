@@ -203,8 +203,12 @@ warm-up. Collection fails unless the paths exercise all three RF=2 placement
 pairs, every individual client operation keeps the declared request budget,
 and every repeat has zero unattributed requests. Evidence records per-run p50,
 the max/min p50 spread, exact request budgets per run, placement coverage, and
-campaign-level read and write resolution. Pool provisioning and cleanup remain
-outside the measured campaign window. The runner still alternates each
+campaign-level read and write resolution. Schema v5 also records the direct
+target's worst spread and the number of cases eligible for latency gating,
+including machine-readable reasons for every case degraded to a signal.
+Resolution describes variation between repeats inside one campaign; it does
+not estimate drift between campaigns run hours or days apart. Pool provisioning
+and cleanup remain outside the measured campaign window. The runner still alternates each
 case between one direct Storage Account and the live Overmesh endpoint, using
 the same managed identity, Azure SDK versions, validation host, payload bytes,
 operation count, and concurrency.
@@ -237,6 +241,9 @@ Backend requests per operation are deterministic, exact, and blocking. A p50
 Gateway-to-direct overhead comparison becomes blocking only when both targets
 in both campaigns measure that case below the contract's p50 spread threshold;
 otherwise it remains a signal. Absolute latency and p95 remain informational.
+The evidence publishes eligible and total case counts so a latency gate with
+little or no effective coverage cannot appear equivalent to a fully active
+gate.
 For listing, the blocking request gate is `requestsPerEntryScanned`; the
 Gateway emits the actual returned and scanned counts, and the collector counts
 only the four catalogue/head validation reads attributable to each scanned

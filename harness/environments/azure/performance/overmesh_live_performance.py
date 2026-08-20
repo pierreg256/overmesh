@@ -1905,8 +1905,15 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
         gateway_results = [
             result for result in results if result["target"] == "gateway"
         ]
+        direct_results = [
+            result for result in results if result["target"] == "direct"
+        ]
         worst_case = max(
             gateway_results,
+            key=lambda result: result["repeatability"]["p50SpreadRatio"],
+        )
+        direct_worst_case = max(
+            direct_results,
             key=lambda result: result["repeatability"]["p50SpreadRatio"],
         )
         resolution = {
@@ -1933,6 +1940,17 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                 else {}
             ),
             "worstCase": worst_case["id"],
+            **(
+                {
+                    "directP50SpreadRatioMax": direct_worst_case[
+                        "repeatability"
+                    ]["p50SpreadRatio"],
+                    "directWorstCase": direct_worst_case["id"],
+                    "measurementScope": "within-campaign",
+                }
+                if contract.schema_version == 5
+                else {}
+            ),
         }
 
     output = {

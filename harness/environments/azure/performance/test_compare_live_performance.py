@@ -97,6 +97,51 @@ class CompareLivePerformanceTests(unittest.TestCase):
             comparison["nonRegression"]["blockingRegressions"],
             ["get-1k-c1"],
         )
+    def test_v5_reports_why_latency_cases_are_not_gated(self) -> None:
+        baseline = campaign("baseline", 2.0, 0.5)
+        current = campaign("current", 2.0, 0.5)
+        for document in (baseline, current):
+            document["contract"]["schemaVersion"] = 5
+            document["contract"]["nonRegression"] = {
+                "backendRequestsPerOperation": "blocking",
+                "requestsPerEntryScanned": "blocking",
+                "p50Latency": "derived",
+                "p50StabilitySpreadRatioThreshold": 1.1,
+                "p50RegressionRatioThreshold": 1.1,
+                "p95Latency": "informational",
+            }
+            for case in document["cases"]:
+                case["operation"] = "list_blobs_flat"
+                case["repeatability"] = {
+                    "p50MsPerRun": [10.0, 10.1, 10.2],
+                    "p50Classification": "blocking",
+                }
+            document["cases"][1]["listingBudget"] = {
+                "requestsPerEntryScanned": 4.0
+            }
+        current["cases"][0]["repeatability"]["p50Classification"] = "signal"
+
+        comparison = build_comparison(current, baseline)
+
+        self.assertEqual(
+            comparison["cases"][0]["nonRegression"]["p50Latency"][
+                "signalReasons"
+            ],
+            ["current-direct-spread"],
+        )
+        self.assertEqual(
+            comparison["nonRegression"]["p50LatencyGateCoverage"],
+            {
+                "eligibleCases": 0,
+                "totalCases": 1,
+                "signalCases": [
+                    {
+                        "case": "get-1k-c1",
+                        "reasons": ["current-direct-spread"],
+                    }
+                ],
+            },
+        )
 
     def test_latency_change_does_not_fail_the_blocking_gate(self) -> None:
         baseline = campaign("baseline", 2.0, 0.5)
@@ -203,6 +248,14 @@ class CompareLivePerformanceTests(unittest.TestCase):
         self.assertEqual(
             comparison["nonRegression"]["blockingRegressions"],
             ["get-1k-c1"],
+        )
+        self.assertEqual(
+            comparison["nonRegression"]["p50LatencyGateCoverage"],
+            {
+                "eligibleCases": 1,
+                "totalCases": 1,
+                "signalCases": [],
+            },
         )
 
 

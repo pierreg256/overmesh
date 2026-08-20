@@ -117,3 +117,12 @@ values and the deterministic archive hash are:
 5025a60127a7ba77ddcdde04faad797b4ab6b40bb054ba2e92889a90960bad77  client-performance.json
 76710de5bc2bff86a191097a50931c61d20fd44c870ba0fc870844020bb4a3e8  performance-v011-v4-raw-evidence.tar.gz
 ```
+
+Independent review of the immutable v4 bundle found that 10 of 28 cases met
+the p50 stability requirement on both targets: 22 qualified on Gateway and 11
+on direct Storage. Direct Storage was the binding source of variance, reaching
+a 2.103 within-campaign spread on `put_blob-16mib-c4`, while the Gateway maximum
+was 1.259. These repeat spreads describe variation within the one-hour campaign
+and do not estimate drift between campaigns run on different days. Schema v5
+publishes this gate coverage and the direct-target maximum directly in its
+machine-readable evidence.

@@ -83,6 +83,17 @@
           "type": "number",
           "minimum": 1
         },
+        "directP50SpreadRatioMax": {
+          "type": "number",
+          "minimum": 1
+        },
+        "directWorstCase": {
+          "type": "string",
+          "minLength": 1
+        },
+        "measurementScope": {
+          "const": "within-campaign"
+        },
         "worstCase": {
           "type": "string",
           "minLength": 1
@@ -307,7 +318,12 @@
             "required": ["fixtureSetup"]
           },
           "resolution": {
-            "required": ["listingP50SpreadRatioMax"]
+            "required": [
+              "listingP50SpreadRatioMax",
+              "directP50SpreadRatioMax",
+              "directWorstCase",
+              "measurementScope"
+            ]
           }
         }
       }

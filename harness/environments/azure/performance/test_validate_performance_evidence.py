@@ -414,6 +414,9 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
                 "readP50SpreadRatioMax": 1.02,
                 "writeP50SpreadRatioMax": 1.02,
                 "listingP50SpreadRatioMax": 1.02,
+                "directP50SpreadRatioMax": 1.02,
+                "directWorstCase": contract.cases[0].id,
+                "measurementScope": "within-campaign",
                 "worstCase": contract.cases[0].id,
             },
             "campaignTelemetry": {
@@ -430,6 +433,11 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
                     "policy": contract.non_regression.document(),
                     "gateStatus": "baseline-established",
                     "blockingRegressions": [],
+                    "p50LatencyGateCoverage": {
+                        "eligibleCases": len(contract.cases),
+                        "totalCases": len(contract.cases),
+                        "signalCases": [],
+                    },
                 },
             },
             "toolVersions": {

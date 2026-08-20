@@ -40,6 +40,59 @@ def require_isolated_api(document: dict[str, Any], label: str) -> None:
         )
 
 
+def p50_signal_reasons(
+    current_gateway: dict[str, Any],
+    current_direct: dict[str, Any],
+    baseline_gateway: dict[str, Any] | None = None,
+    baseline_direct: dict[str, Any] | None = None,
+) -> list[str]:
+    campaigns = (
+        (
+            ("baseline", baseline_gateway, baseline_direct),
+            ("current", current_gateway, current_direct),
+        )
+        if baseline_gateway is not None and baseline_direct is not None
+        else (("baseline", current_gateway, current_direct),)
+    )
+    reasons = []
+    for label, gateway, direct in campaigns:
+        if gateway["repeatability"]["p50Classification"] != "blocking":
+            reasons.append(f"{label}-gateway-spread")
+        if direct["repeatability"]["p50Classification"] != "blocking":
+            reasons.append(f"{label}-direct-spread")
+    return reasons
+
+
+def p50_gate_coverage(
+    current_cases: dict[tuple[str, str], dict[str, Any]],
+    case_ids: list[str],
+    baseline_cases: dict[tuple[str, str], dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    signal_cases = []
+    for case_id in sorted(case_ids):
+        reasons = p50_signal_reasons(
+            current_cases[(case_id, "gateway")],
+            current_cases[(case_id, "direct")],
+            (
+                baseline_cases[(case_id, "gateway")]
+                if baseline_cases is not None
+                else None
+            ),
+            (
+                baseline_cases[(case_id, "direct")]
+                if baseline_cases is not None
+                else None
+            ),
+        )
+        if reasons:
+            signal_cases.append({"case": case_id, "reasons": reasons})
+    return {
+        "eligibleCases": len(case_ids) - len(signal_cases),
+        "totalCases": len(case_ids),
+        "signalCases": signal_cases,
+    }
+
+
 def build_comparison(
     current: dict[str, Any],
     baseline: dict[str, Any],
@@ -148,6 +201,16 @@ def build_comparison(
             if schema_version >= 2
             else "unclassified"
         )
+        signal_reasons = (
+            p50_signal_reasons(
+                current_gateway,
+                current_direct,
+                baseline_gateway,
+                baseline_direct,
+            )
+            if schema_version >= 5
+            else []
+        )
         baseline_p50 = (
             statistics.median(
                 baseline_gateway["repeatability"]["p50MsPerRun"]
@@ -255,6 +318,11 @@ def build_comparison(
                             },
                             "p50Latency": {
                                 "classification": p50_classification,
+                                **(
+                                    {"signalReasons": signal_reasons}
+                                    if schema_version >= 5
+                                    else {}
+                                ),
                                 "baselineGatewayMs": baseline_p50,
                                 "currentGatewayMs": current_p50,
                                 **(
@@ -366,6 +434,17 @@ def build_comparison(
                         "failed" if blocking_regressions else "passed"
                     ),
                     "blockingRegressions": blocking_regressions,
+                    **(
+                        {
+                            "p50LatencyGateCoverage": p50_gate_coverage(
+                                current_cases,
+                                sorted(current_comparisons),
+                                baseline_cases,
+                            )
+                        }
+                        if schema_version >= 5
+                        else {}
+                    ),
                 }
             }
             if schema_version >= 2
@@ -386,6 +465,15 @@ def main() -> int:
     require_isolated_api(current, "current evidence")
     if arguments.baseline is None:
         policy = current["contract"].get("nonRegression")
+        schema_version = current["contract"]["schemaVersion"]
+        current_cases = {
+            (case["id"], case["target"]): case for case in current["cases"]
+        }
+        case_ids = sorted(
+            case_id
+            for case_id, target in current_cases
+            if target == "gateway"
+        )
         current["historicalComparison"] = {
             "status": "baseline-established",
             "apiVersion": "performance.overmesh.io/comparison/v1",
@@ -400,9 +488,19 @@ def main() -> int:
                         "policy": policy,
                         "gateStatus": "baseline-established",
                         "blockingRegressions": [],
+                        **(
+                            {
+                                "p50LatencyGateCoverage": p50_gate_coverage(
+                                    current_cases,
+                                    case_ids,
+                                )
+                            }
+                            if schema_version >= 5
+                            else {}
+                        ),
                     }
                 }
-                if current["contract"]["schemaVersion"] >= 2
+                if schema_version >= 2
                 else {}
             ),
         }
