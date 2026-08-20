@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    env,
     fmt::Write as _,
     fs,
     net::{Ipv4Addr, Ipv6Addr},
@@ -16,6 +17,8 @@ const TRACEABILITY_PATH: &str = "docs/traceability.toml";
 const ADR_DIRECTORY: &str = "docs/adr";
 const ADR_INDEX_PATH: &str = "docs/adr/README.md";
 const RETAINED_ARTIFACTS_DIRECTORY: &str = "harness/artifacts";
+const PUBLISHED_BASE_REF_ENV: &str = "OVERMESH_DOC_CHECK_BASE_REF";
+const DEFAULT_PUBLISHED_BASE_REF: &str = "refs/remotes/origin/main";
 
 #[derive(Debug, Deserialize)]
 struct Traceability {
@@ -878,13 +881,22 @@ fn check_retained_artifact_provenance(
     repository_root: &Path,
     report: &mut DocumentationReport,
 ) -> Result<()> {
+    let published_base_ref = env::var(PUBLISHED_BASE_REF_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_PUBLISHED_BASE_REF.to_owned());
+    check_retained_artifact_provenance_against(repository_root, report, &published_base_ref)
+}
+
+fn check_retained_artifact_provenance_against(
+    repository_root: &Path,
+    report: &mut DocumentationReport,
+    published_base_ref: &str,
+) -> Result<()> {
     let artifacts = repository_root.join(RETAINED_ARTIFACTS_DIRECTORY);
     if !artifacts.is_dir() {
         return Ok(());
     }
-    let main_reference = ["refs/heads/main", "refs/remotes/origin/main"]
-        .into_iter()
-        .find(|reference| git_revision_exists(repository_root, reference));
 
     for entry in WalkDir::new(&artifacts)
         .into_iter()
@@ -925,29 +937,58 @@ fn check_retained_artifact_provenance(
             );
             continue;
         }
-        let Some(main_reference) = main_reference else {
+        if !git_revision_exists(repository_root, published_base_ref) {
             report.push(
                 "R9",
                 &relative,
                 None,
-                "cannot verify campaign.commit because the main ref is unavailable",
-                "fetch main history before running doc-check",
+                format!(
+                    "cannot verify campaign.commit because published base ref \
+                     {published_base_ref:?} is unavailable"
+                ),
+                format!(
+                    "run git fetch origin main, or set {PUBLISHED_BASE_REF_ENV} \
+                     to a fetched CI base ref"
+                ),
             );
             continue;
-        };
+        }
+        if !git_revision_exists(repository_root, commit) {
+            report.push(
+                "R9",
+                &relative,
+                None,
+                format!("campaign.commit {commit} is unavailable in the local Git history"),
+                "run git fetch origin main before retaining its evidence",
+            );
+            continue;
+        }
         let status = Command::new("git")
-            .args(["merge-base", "--is-ancestor", commit, main_reference])
+            .args(["merge-base", "--is-ancestor", commit, published_base_ref])
             .current_dir(repository_root)
             .status()
             .with_context(|| format!("failed to check provenance for {relative}"))?;
-        if !status.success() {
-            report.push(
-                "R9",
-                &relative,
-                None,
-                format!("campaign.commit {commit} is not an ancestor of main"),
-                "merge the campaign commit into main before retaining its evidence",
-            );
+        match status.code() {
+            Some(0) => {}
+            Some(1) => {
+                report.push(
+                    "R9",
+                    &relative,
+                    None,
+                    format!(
+                        "campaign.commit {commit} is not reachable from published base ref \
+                         {published_base_ref:?}; the tracking ref may be stale"
+                    ),
+                    "run git fetch origin main to refresh the published ref; if the commit \
+                     remains unreachable, merge it before retaining its evidence",
+                );
+            }
+            _ => {
+                anyhow::bail!(
+                    "git merge-base failed while checking provenance for {relative} \
+                     against {published_base_ref:?}"
+                );
+            }
         }
     }
     Ok(())
@@ -1392,7 +1433,7 @@ reason = "Intentional fixture."
     }
 
     #[test]
-    fn retained_campaign_commit_must_be_an_ancestor_of_main() {
+    fn retained_campaign_commit_must_be_reachable_from_published_base() {
         let fixture = documentation_fixture();
         git(
             fixture.path(),
@@ -1417,9 +1458,87 @@ reason = "Intentional fixture."
             &format!(r#"{{"campaign":{{"commit":"{campaign_commit}"}}}}"#),
         );
 
-        let report = check(fixture.path()).expect("check fixture");
+        let mut report = DocumentationReport::default();
+        check_retained_artifact_provenance_against(fixture.path(), &mut report, "refs/heads/main")
+            .expect("check provenance");
         assert!(report.violations.iter().any(|violation| {
-            violation.rule == "R9" && violation.message.contains("is not an ancestor of main")
+            violation.rule == "R9"
+                && violation.message.contains("may be stale")
+                && violation.hint.contains("git fetch origin main")
+        }));
+    }
+
+    #[test]
+    fn retained_campaign_uses_published_remote_instead_of_stale_local_main() {
+        let fixture = documentation_fixture();
+        git(
+            fixture.path(),
+            &["config", "user.email", "fixture@example.test"],
+        );
+        git(fixture.path(), &["config", "user.name", "Fixture"]);
+        git(fixture.path(), &["add", "."]);
+        git(fixture.path(), &["commit", "--quiet", "-m", "local main"]);
+        git(fixture.path(), &["branch", "-M", "main"]);
+        git(
+            fixture.path(),
+            &["switch", "--quiet", "-c", "published-main"],
+        );
+        write(fixture.path(), "published.txt", "published\n");
+        git(fixture.path(), &["add", "published.txt"]);
+        git(
+            fixture.path(),
+            &["commit", "--quiet", "-m", "published campaign"],
+        );
+        let campaign_commit = git_output(fixture.path(), &["rev-parse", "HEAD"]);
+        git(
+            fixture.path(),
+            &["update-ref", "refs/remotes/origin/main", &campaign_commit],
+        );
+        git(fixture.path(), &["switch", "--quiet", "main"]);
+        write(
+            fixture.path(),
+            "harness/artifacts/live/0.11.0/performance.json",
+            &format!(r#"{{"campaign":{{"commit":"{campaign_commit}"}}}}"#),
+        );
+
+        let mut report = DocumentationReport::default();
+        check_retained_artifact_provenance_against(
+            fixture.path(),
+            &mut report,
+            "refs/remotes/origin/main",
+        )
+        .expect("check provenance");
+        assert_eq!(report.violations, Vec::new());
+    }
+
+    #[test]
+    fn missing_published_base_requests_fetch_or_ci_override() {
+        let fixture = documentation_fixture();
+        git(
+            fixture.path(),
+            &["config", "user.email", "fixture@example.test"],
+        );
+        git(fixture.path(), &["config", "user.name", "Fixture"]);
+        git(fixture.path(), &["add", "."]);
+        git(fixture.path(), &["commit", "--quiet", "-m", "campaign"]);
+        let campaign_commit = git_output(fixture.path(), &["rev-parse", "HEAD"]);
+        write(
+            fixture.path(),
+            "harness/artifacts/live/0.11.0/performance.json",
+            &format!(r#"{{"campaign":{{"commit":"{campaign_commit}"}}}}"#),
+        );
+
+        let mut report = DocumentationReport::default();
+        check_retained_artifact_provenance_against(
+            fixture.path(),
+            &mut report,
+            "refs/remotes/origin/main",
+        )
+        .expect("check provenance");
+        assert!(report.violations.iter().any(|violation| {
+            violation.rule == "R9"
+                && violation.message.contains("is unavailable")
+                && violation.hint.contains(PUBLISHED_BASE_REF_ENV)
         }));
     }
 

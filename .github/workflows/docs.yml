@@ -26,4 +26,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Validate versions and documentation
+        env:
+          OVERMESH_DOC_CHECK_BASE_REF: ${{ github.event.pull_request.base.sha || github.sha }}
         run: make version-check doc-check

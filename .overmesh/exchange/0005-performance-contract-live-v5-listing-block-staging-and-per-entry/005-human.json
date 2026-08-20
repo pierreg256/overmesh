@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 2,
+  "thread": "0005-performance-contract-live-v5-listing-block-staging-and-per-entry",
+  "seq": 5,
+  "author": "human",
+  "kind": "approval",
+  "createdAt": "2026-08-20T20:18:29.300Z",
+  "subject": "approved: Thread verdict",
+  "body": "Approved by operator.",
+  "repliesTo": 4,
+  "refs": [],
+  "answeredBy": null,
+  "outcome": "approved"
+}
