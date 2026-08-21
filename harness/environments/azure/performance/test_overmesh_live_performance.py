@@ -11,12 +11,51 @@ from overmesh_live_performance import (
     load_contract,
     percentile,
     request_id,
+    retry_fixture_read,
     sdk_request_options,
     setup_request_id,
 )
 
 
 class PerformanceContractTests(unittest.TestCase):
+    def test_fixture_read_retries_only_classified_errors(self) -> None:
+        class FixtureReadError(Exception):
+            def __init__(self, status_code: int) -> None:
+                super().__init__(status_code)
+                self.status_code = status_code
+
+        attempts = 0
+        delays: list[float] = []
+
+        def operation() -> str:
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise FixtureReadError(503)
+            return "complete"
+
+        result = retry_fixture_read(
+            operation,
+            "fixture test",
+            (FixtureReadError,),
+            lambda error: error.status_code == 503,
+            delays.append,
+        )
+
+        self.assertEqual(result, "complete")
+        self.assertEqual(attempts, 3)
+        self.assertEqual(delays, [2, 4])
+
+        with self.assertRaises(FixtureReadError):
+            retry_fixture_read(
+                lambda: (_ for _ in ()).throw(FixtureReadError(400)),
+                "fixture test",
+                (FixtureReadError,),
+                lambda error: error.status_code == 503,
+                delays.append,
+            )
+        self.assertEqual(delays, [2, 4])
+
     def test_fixture_hash_accepts_gateway_sha256_prefix(self) -> None:
         digest = "a" * 64
         self.assertTrue(fixture_hash_matches(digest, digest))

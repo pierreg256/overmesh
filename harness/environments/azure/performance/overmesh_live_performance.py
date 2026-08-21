@@ -40,6 +40,37 @@ LISTING_OPERATIONS = {
     "list_blobs_paginated",
     "list_containers",
 }
+TRANSIENT_FIXTURE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
+FIXTURE_READ_ATTEMPTS = 8
+
+
+def retry_fixture_read(
+    operation: Callable[[], Any],
+    description: str,
+    retryable_errors: tuple[type[Exception], ...],
+    should_retry: Callable[[Exception], bool],
+    sleep: Callable[[float], None] = time.sleep,
+) -> Any:
+    for attempt in range(1, FIXTURE_READ_ATTEMPTS + 1):
+        try:
+            return operation()
+        except retryable_errors as error:
+            if (
+                not should_retry(error)
+                or attempt == FIXTURE_READ_ATTEMPTS
+            ):
+                raise
+            delay_seconds = min(2**attempt, 30)
+            print(
+                f"{description} failed transiently with "
+                f"{type(error).__name__}; retrying in "
+                f"{delay_seconds}s ({attempt}/{FIXTURE_READ_ATTEMPTS})",
+                file=sys.stderr,
+            )
+            sleep(delay_seconds)
+    raise AssertionError("fixture read retry loop exhausted unexpectedly")
+
+
 @dataclass(frozen=True)
 class Payload:
     id: str
@@ -959,7 +990,12 @@ def measured_metrics(
 
 
 def run_campaign(contract_path: Path, output_path: Path) -> None:
-    from azure.core.exceptions import ResourceNotFoundError
+    from azure.core.exceptions import (
+        HttpResponseError,
+        ResourceNotFoundError,
+        ServiceRequestError,
+        ServiceResponseError,
+    )
     from azure.identity import (
         ManagedIdentityCredential,
         __version__ as identity_version,
@@ -1021,6 +1057,24 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
         )
         for target, endpoint in endpoints.items()
     }
+    fixture_retryable_errors = (
+        HttpResponseError,
+        ServiceRequestError,
+        ServiceResponseError,
+    )
+
+    def should_retry_fixture_read(error: Exception) -> bool:
+        if isinstance(error, (ServiceRequestError, ServiceResponseError)):
+            return True
+        status_code = getattr(error, "status_code", None)
+        if status_code is None:
+            status_code = getattr(
+                getattr(error, "response", None),
+                "status_code",
+                None,
+            )
+        return status_code in TRANSIENT_FIXTURE_HTTP_STATUSES
+
     listing_services = {
         (
             target,
@@ -1084,12 +1138,20 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                         container_client = active_service.get_container_client(
                             container
                         )
+                        observed_items = retry_fixture_read(
+                            lambda: list(
+                                container_client.list_blobs(
+                                    name_starts_with=fixture.prefix + "/",
+                                    include=["metadata"],
+                                )
+                            ),
+                            f"fixture {fixture.id} target {target} initial list",
+                            fixture_retryable_errors,
+                            should_retry_fixture_read,
+                        )
                         observed = {
                             item.name: item
-                            for item in container_client.list_blobs(
-                                name_starts_with=fixture.prefix + "/",
-                                include=["metadata"],
-                            )
+                            for item in observed_items
                         }
                         extras = set(observed) - expected_set
                         if extras:
@@ -1123,11 +1185,16 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
 
                         with ThreadPoolExecutor(max_workers=16) as executor:
                             list(executor.map(create_fixture_blob, missing_names))
-                        verified = list(
-                            container_client.list_blobs(
-                                name_starts_with=fixture.prefix + "/",
-                                include=["metadata"],
-                            )
+                        verified = retry_fixture_read(
+                            lambda: list(
+                                container_client.list_blobs(
+                                    name_starts_with=fixture.prefix + "/",
+                                    include=["metadata"],
+                                )
+                            ),
+                            f"fixture {fixture.id} target {target} verification",
+                            fixture_retryable_errors,
+                            should_retry_fixture_read,
                         )
                         if [item.name for item in verified] != expected_names:
                             raise RuntimeError(
@@ -1154,11 +1221,19 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                     expected_containers = fixture_container_names(fixture)
                     for target in contract.target_order:
                         service = services[target]
+                        available_items = retry_fixture_read(
+                            lambda: list(
+                                service.list_containers(
+                                    name_starts_with=fixture.prefix
+                                )
+                            ),
+                            f"fixture {fixture.id} target {target} initial list",
+                            fixture_retryable_errors,
+                            should_retry_fixture_read,
+                        )
                         available = {
                             item.name
-                            for item in service.list_containers(
-                                name_starts_with=fixture.prefix
-                            )
+                            for item in available_items
                         }
                         missing_containers = (
                             set(expected_containers) - available
@@ -1186,15 +1261,21 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                 fixture_container, "fixture.bin"
                             )
                             try:
-                                properties = blob_client.get_blob_properties(
-                                    **sdk_request_options(
-                                        setup_request_id(
-                                            run_id,
-                                            target,
-                                            fixture.id,
-                                            index,
+                                properties = retry_fixture_read(
+                                    lambda: blob_client.get_blob_properties(
+                                        **sdk_request_options(
+                                            setup_request_id(
+                                                run_id,
+                                                target,
+                                                fixture.id,
+                                                index,
+                                            )
                                         )
-                                    )
+                                    ),
+                                    f"fixture {fixture.id} target {target} "
+                                    f"container {fixture_container} properties",
+                                    fixture_retryable_errors,
+                                    should_retry_fixture_read,
                                 )
                             except ResourceNotFoundError:
                                 blob_client.upload_blob(
@@ -1214,8 +1295,8 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                         )
                                     ),
                                 )
-                                properties = (
-                                    blob_client.get_blob_properties(
+                                properties = retry_fixture_read(
+                                    lambda: blob_client.get_blob_properties(
                                         **sdk_request_options(
                                             setup_request_id(
                                                 run_id,
@@ -1224,7 +1305,12 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                                 10_000 + index,
                                             )
                                         )
-                                    )
+                                    ),
+                                    f"fixture {fixture.id} target {target} "
+                                    f"container {fixture_container} "
+                                    "post-upload properties",
+                                    fixture_retryable_errors,
+                                    should_retry_fixture_read,
                                 )
                             content_hash = (
                                 properties.metadata or {}
@@ -1239,8 +1325,8 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                 )
                             )
                             if target == "gateway":
-                                downloaded = (
-                                    blob_client.download_blob(
+                                downloaded = retry_fixture_read(
+                                    lambda: blob_client.download_blob(
                                         **sdk_request_options(
                                             setup_request_id(
                                                 run_id,
@@ -1249,7 +1335,11 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                                 20_000 + index,
                                             )
                                         )
-                                    ).readall()
+                                    ).readall(),
+                                    f"fixture {fixture.id} target {target} "
+                                    f"container {fixture_container} content",
+                                    fixture_retryable_errors,
+                                    should_retry_fixture_read,
                                 )
                                 invalid_content = (
                                     len(downloaded)
@@ -1263,11 +1353,19 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                     f"container {fixture_container} failed "
                                     "identity checks"
                                 )
+                        verified_container_items = retry_fixture_read(
+                            lambda: list(
+                                service.list_containers(
+                                    name_starts_with=fixture.prefix
+                                )
+                            ),
+                            f"fixture {fixture.id} target {target} verification",
+                            fixture_retryable_errors,
+                            should_retry_fixture_read,
+                        )
                         verified_containers = {
                             item.name
-                            for item in service.list_containers(
-                                name_starts_with=fixture.prefix
-                            )
+                            for item in verified_container_items
                         }
                         if verified_containers != set(expected_containers):
                             raise RuntimeError(
