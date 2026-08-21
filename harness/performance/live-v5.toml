@@ -155,7 +155,7 @@ fixture = "list-flat-5000"
 concurrency = [1, 4]
 measured_iterations = 5
 request_timeout_seconds = 600
-max_results = 5000
+max_results = 1000
 requests_per_entry_scanned = 4.0
 
 [[workload]]
@@ -164,7 +164,7 @@ fixture = "list-hierarchical-5000"
 concurrency = [1]
 measured_iterations = 5
 request_timeout_seconds = 600
-max_results = 5000
+max_results = 10
 requests_per_entry_scanned = 4.0
 
 [[workload]]

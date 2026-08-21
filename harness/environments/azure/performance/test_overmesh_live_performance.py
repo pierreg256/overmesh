@@ -149,6 +149,24 @@ class PerformanceContractTests(unittest.TestCase):
         )
         self.assertEqual(
             {
+                case.max_results
+                for case in listing_cases
+                if case.operation == "list_blobs_flat"
+                and case.fixture is not None
+                and case.fixture.id == "list-flat-5000"
+            },
+            {1000},
+        )
+        self.assertEqual(
+            next(
+                case
+                for case in listing_cases
+                if case.operation == "list_blobs_hierarchical"
+            ).max_results,
+            10,
+        )
+        self.assertEqual(
+            {
                 case.expected_requests_per_entry_scanned
                 for case in listing_cases
                 if case.operation != "list_containers"

@@ -42,6 +42,7 @@ LISTING_OPERATIONS = {
 }
 TRANSIENT_FIXTURE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 FIXTURE_READ_ATTEMPTS = 8
+FIXTURE_SETUP_PAGE_SIZE = 1_000
 
 
 def retry_fixture_read(
@@ -1139,12 +1140,16 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                             container
                         )
                         observed_items = retry_fixture_read(
-                            lambda: list(
-                                container_client.list_blobs(
+                            lambda: [
+                                item
+                                for page in container_client.list_blobs(
                                     name_starts_with=fixture.prefix + "/",
                                     include=["metadata"],
+                                ).by_page(
+                                    results_per_page=FIXTURE_SETUP_PAGE_SIZE
                                 )
-                            ),
+                                for item in page
+                            ],
                             f"fixture {fixture.id} target {target} initial list",
                             fixture_retryable_errors,
                             should_retry_fixture_read,
@@ -1186,12 +1191,16 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                         with ThreadPoolExecutor(max_workers=16) as executor:
                             list(executor.map(create_fixture_blob, missing_names))
                         verified = retry_fixture_read(
-                            lambda: list(
-                                container_client.list_blobs(
+                            lambda: [
+                                item
+                                for page in container_client.list_blobs(
                                     name_starts_with=fixture.prefix + "/",
                                     include=["metadata"],
+                                ).by_page(
+                                    results_per_page=FIXTURE_SETUP_PAGE_SIZE
                                 )
-                            ),
+                                for item in page
+                            ],
                             f"fixture {fixture.id} target {target} verification",
                             fixture_retryable_errors,
                             should_retry_fixture_read,

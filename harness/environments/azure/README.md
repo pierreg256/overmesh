@@ -234,7 +234,10 @@ must be pre-created on every backend replica; the runner writes their sentinel
 through both the direct and Gateway targets so both surfaces are validated.
 Fixture setup time and Gateway backend request count are campaign evidence but
 remain outside every measured case window. Listing cases use a 600-second
-request timeout.
+request timeout. The 5,000-blob fixtures are traversed in pages of at most
+1,000 entries so each request remains below Azure Front Door's 240-second
+origin-response ceiling; the measured operation still validates all 5,000
+logical names.
 
 The v5 non-regression policy separates controlled and observed quantities.
 Backend requests per operation are deterministic, exact, and blocking. A p50
