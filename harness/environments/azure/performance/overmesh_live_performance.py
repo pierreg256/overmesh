@@ -1145,9 +1145,8 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                 for page in container_client.list_blobs(
                                     name_starts_with=fixture.prefix + "/",
                                     include=["metadata"],
-                                ).by_page(
-                                    results_per_page=FIXTURE_SETUP_PAGE_SIZE
-                                )
+                                    results_per_page=FIXTURE_SETUP_PAGE_SIZE,
+                                ).by_page()
                                 for item in page
                             ],
                             f"fixture {fixture.id} target {target} initial list",
@@ -1196,9 +1195,8 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                 for page in container_client.list_blobs(
                                     name_starts_with=fixture.prefix + "/",
                                     include=["metadata"],
-                                ).by_page(
-                                    results_per_page=FIXTURE_SETUP_PAGE_SIZE
-                                )
+                                    results_per_page=FIXTURE_SETUP_PAGE_SIZE,
+                                ).by_page()
                                 for item in page
                             ],
                             f"fixture {fixture.id} target {target} verification",
@@ -1650,10 +1648,9 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                 name_starts_with=(
                                     benchmark_case.fixture.prefix + "/"
                                 ),
+                                results_per_page=benchmark_case.max_results,
                                 **sdk_request_options(current_request_id),
-                            ).by_page(
-                                results_per_page=benchmark_case.max_results
-                            )
+                            ).by_page()
                             names = [
                                 item.name for page in pages for item in page
                             ]
@@ -1680,10 +1677,9 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                     benchmark_case.fixture.prefix + "/"
                                 ),
                                 delimiter="/",
+                                results_per_page=benchmark_case.max_results,
                                 **sdk_request_options(current_request_id),
-                            ).by_page(
-                                results_per_page=benchmark_case.max_results
-                            )
+                            ).by_page()
                             prefixes = [
                                 item.name for page in pages for item in page
                             ]
@@ -1710,10 +1706,9 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                 )
                             pages = active_service.list_containers(
                                 name_starts_with=benchmark_case.fixture.prefix,
+                                results_per_page=benchmark_case.max_results,
                                 **sdk_request_options(current_request_id),
-                            ).by_page(
-                                results_per_page=benchmark_case.max_results
-                            )
+                            ).by_page()
                             names = [
                                 item.name for page in pages for item in page
                             ]
