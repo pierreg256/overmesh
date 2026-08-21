@@ -260,7 +260,7 @@ resource gateway 'Microsoft.App/containerApps@2025-07-01' = if (deployRuntime) {
       ]
       scale: {
         minReplicas: 1
-        maxReplicas: 10
+        maxReplicas: 25
       }
     }
   }

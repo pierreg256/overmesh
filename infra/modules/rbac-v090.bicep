@@ -185,6 +185,16 @@ resource reconcilerReaderC 'Microsoft.Authorization/roleAssignments@2022-04-01' 
   }
 }
 
+resource callerDirectBaselineReaderA 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storageA.id, allowedCallerPrincipalId, readerRoleId)
+  scope: storageA
+  properties: {
+    principalId: allowedCallerPrincipalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: readerRoleId
+  }
+}
+
 resource gatewaySystemC 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(systemContainerC.id, gatewayPrincipalId, blobContributorRoleId)
   scope: systemContainerC
