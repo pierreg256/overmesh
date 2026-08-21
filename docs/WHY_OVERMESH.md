@@ -383,7 +383,7 @@ block staging APIs with their own retention and collection, reconciliation with
 repair and quarantine, and continuous RBAC posture auditing against Azure
 Resource Manager.
 
-**How it is validated:** 224 unit and integration tests, 23 declarative
+**How it is validated:** 225 unit and integration tests, 23 declarative
 scenarios against an independent reference model, three process-level suites
 and a Rust system validator running against Azurite backends behind a fault
 proxy, and a live Azure gate that verifies account posture, authorization

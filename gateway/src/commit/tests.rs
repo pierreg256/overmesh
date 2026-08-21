@@ -52,6 +52,7 @@ struct MemoryState {
     containers: Mutex<BTreeMap<String, u64>>,
     lease_held: AtomicBool,
     fail_prefix: Mutex<Option<String>>,
+    empty_control_page_once: AtomicBool,
 }
 
 struct MemoryBackend {
@@ -73,6 +74,12 @@ impl MemoryBackend {
 
     fn clear_failure(&self) {
         *self.state.fail_prefix.lock().expect("failure lock") = None;
+    }
+
+    fn return_empty_control_page_once(&self) {
+        self.state
+            .empty_control_page_once
+            .store(true, Ordering::SeqCst);
     }
 
     fn hold_lease(&self) {
@@ -451,6 +458,16 @@ impl ReplicaBackend for MemoryBackend {
             .collect::<Vec<_>>();
         ordered.sort();
         let start = parse_opaque_cursor(&self.id, cursor)?;
+        if self
+            .state
+            .empty_control_page_once
+            .swap(false, Ordering::SeqCst)
+        {
+            return Ok(ObjectListPage {
+                next_cursor: Some(opaque_cursor(&self.id, start)),
+                objects: Vec::new(),
+            });
+        }
         let total = ordered.len();
         let values = ordered
             .into_iter()
@@ -764,6 +781,57 @@ fn service_fixture_parts_with_staging_lifetime(
         },
     ));
     (service, storage_a, storage_b)
+}
+
+fn three_backend_service_fixture() -> (Arc<CommitService>, Arc<MemoryBackend>) {
+    let storage_a = Arc::new(MemoryBackend::new("storage-a"));
+    let storage_b = Arc::new(MemoryBackend::new("storage-b"));
+    let storage_c = Arc::new(MemoryBackend::new("storage-c"));
+    let mut ring = RingDocument {
+        api_version: "overmesh.io/v1".to_owned(),
+        ring_version: 1,
+        root: true,
+        parent_ring_version: None,
+        parent_ring_hash: None,
+        replication_factor: 2,
+        created_at: "2026-08-15T10:00:00Z".to_owned(),
+        signed_at_unix_ms: 1_776_000_000_000,
+        signing_key_id: "test-ring-key-01".to_owned(),
+        ring_hash: String::new(),
+        nodes: ["storage-a", "storage-b", "storage-c"]
+            .into_iter()
+            .map(|id| RingNode {
+                id: id.to_owned(),
+                region: format!("local-{id}"),
+                weight: 100,
+            })
+            .collect(),
+    };
+    ring.ring_hash = ring.computed_hash().expect("ring hash");
+    let signer: Arc<dyn ManifestSigner> = Arc::new(
+        LocalTestManifestSigner::new(
+            "test-blob-key-01",
+            true,
+            crate::manifest::KeyValidity::new(0, u64::MAX).expect("validity"),
+        )
+        .expect("test signer"),
+    );
+    let backends: HashMap<String, SharedBackend> = HashMap::from([
+        ("storage-a".to_owned(), storage_a.clone() as SharedBackend),
+        ("storage-b".to_owned(), storage_b as SharedBackend),
+        ("storage-c".to_owned(), storage_c as SharedBackend),
+    ]);
+    let service = Arc::new(CommitService::new_with_options(
+        Arc::new(SignedRing::from_document(ring).expect("ring")),
+        backends,
+        signer,
+        Arc::new(TestControlTokenProvider),
+        CommitServiceOptions {
+            listing_token_lifetime: Duration::from_secs(15 * 60),
+            staging_lifetime: Duration::from_secs(7 * 24 * 60 * 60),
+        },
+    ));
+    (service, storage_a)
 }
 
 fn principal() -> AuthenticatedPrincipal {
@@ -2035,6 +2103,58 @@ async fn continuation_has_no_duplicate_or_omitted_catalog_entries() {
             break;
         }
     }
+    assert_eq!(actual, expected);
+}
+
+#[tokio::test]
+async fn continuation_does_not_skip_skewed_three_backend_catalog_pages() {
+    use crate::listing::{BlobListEntry, ListRequest};
+
+    let (service, empty_page_backend) = three_backend_service_fixture();
+    let expected = (0..300)
+        .map(|index| format!("blob-{index:03}"))
+        .collect::<Vec<_>>();
+    for name in &expected {
+        let path = format!("/container/{name}");
+        let content = spool_body(Body::from(path.clone()), 4)
+            .await
+            .expect("content");
+        service
+            .put_blob(
+                &blob(&path),
+                &principal(),
+                &format!("three-backend-{name}"),
+                &content,
+                LogicalCondition::None,
+            )
+            .await
+            .expect("commit");
+    }
+    empty_page_backend.return_empty_control_page_once();
+
+    let listing = service.listing_service("test-account");
+    let mut marker = None;
+    let mut actual = Vec::new();
+    loop {
+        let page = listing
+            .list_blobs(
+                "container",
+                &ListRequest::new(String::new(), String::new(), marker, Some(50), Vec::new())
+                    .expect("request"),
+                &principal(),
+            )
+            .await
+            .expect("page");
+        actual.extend(page.entries.into_iter().map(|entry| match entry {
+            BlobListEntry::Blob(blob) => blob.name,
+            BlobListEntry::Prefix(_) => panic!("unexpected prefix"),
+        }));
+        marker = page.next_marker;
+        if marker.is_none() {
+            break;
+        }
+    }
+
     assert_eq!(actual, expected);
 }
 

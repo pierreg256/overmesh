@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::manifest::{ManifestError, ManifestSigner, SignatureDomain, SignedDocument};
 
-const TOKEN_API_VERSION: &str = "overmesh.io/continuation-token/v1";
+const TOKEN_API_VERSION: &str = "overmesh.io/continuation-token/v2";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
