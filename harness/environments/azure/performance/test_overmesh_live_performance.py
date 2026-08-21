@@ -6,6 +6,7 @@ from pathlib import Path
 
 from overmesh_live_performance import (
     fixture_hash_matches,
+    fixture_blob_names,
     fixture_manifest_sha256,
     latency_metrics,
     load_contract,
@@ -62,6 +63,25 @@ class PerformanceContractTests(unittest.TestCase):
         self.assertTrue(fixture_hash_matches(f"sha256:{digest}", digest))
         self.assertFalse(fixture_hash_matches(None, digest))
         self.assertFalse(fixture_hash_matches(f"sha256:{'b' * 64}", digest))
+
+    def test_blob_fixture_targets_use_disjoint_namespaces(self) -> None:
+        contract = load_contract(Path("harness/performance/live-v5.toml"))
+        fixture = next(
+            fixture
+            for fixture in contract.fixtures
+            if fixture.id == "list-flat-100"
+        )
+
+        direct = fixture_blob_names(fixture, "direct")
+        gateway = fixture_blob_names(fixture, "gateway")
+
+        self.assertTrue(set(direct).isdisjoint(gateway))
+        self.assertTrue(
+            all("/direct/" in name for name in direct)
+        )
+        self.assertTrue(
+            all("/gateway/" in name for name in gateway)
+        )
 
     def test_repository_contract_expands_to_unique_cases(self) -> None:
         baseline = load_contract(Path("harness/performance/live-v1.toml"))

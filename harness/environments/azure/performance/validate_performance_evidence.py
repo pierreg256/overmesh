@@ -128,8 +128,32 @@ def validate_document(
             fixture.id: fixture.manifest_sha256
             for fixture in contract.fixtures
         }
+        fixture_namespaces = {
+            fixture.get("id"): fixture.get("targetNamespaces")
+            for fixture in fixture_setup.get("fixtures", [])
+            if isinstance(fixture, dict)
+        }
+        expected_namespaces = {
+            fixture.id: {
+                target: (
+                    f"{fixture.prefix}/{target}"
+                    if fixture.kind == "blobs"
+                    else f"{target}/fixture.bin"
+                )
+                for target in ("direct", "gateway")
+            }
+            for fixture in contract.fixtures
+        }
+        manifest_scopes = {
+            fixture.get("id"): fixture.get("manifestScope")
+            for fixture in fixture_setup.get("fixtures", [])
+            if isinstance(fixture, dict)
+        }
         if (
             fixture_manifests != expected_manifests
+            or fixture_namespaces != expected_namespaces
+            or set(manifest_scopes.values())
+            != {"canonical-target-independent"}
             or fixture_setup.get("wallSeconds", 0) <= 0
             or fixture_setup.get("backendRequests", {}).get("count", 0) <= 0
         ):

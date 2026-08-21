@@ -229,7 +229,11 @@ contract does not publish one.
 V5 adds flat, hierarchical, paginated, and container listing, complete staged
 block upload sequences, and committed block-list reads. Listing fixtures are
 persistent and their sorted logical-name manifest, payload size, and content
-hashes are checked before measurement. The 20 container fixtures
+hashes are checked before measurement. Direct and Gateway fixtures use
+disjoint target namespaces under the same canonical manifest so a direct
+physical upload cannot bypass or collide with the Gateway catalogue. The
+signed fixture evidence records both target namespaces and identifies the
+manifest as canonical and target-independent. The 20 container fixtures
 must be pre-created on every backend replica; the runner writes their sentinel
 through both the direct and Gateway targets so both surfaces are validated.
 Fixture setup time and Gateway backend request count are campaign evidence but

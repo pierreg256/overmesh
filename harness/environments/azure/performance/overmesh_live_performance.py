@@ -870,9 +870,23 @@ def fixture_payload(fixture: Fixture) -> bytes:
     return (seed * repeats)[: fixture.payload_size_bytes]
 
 
-def fixture_blob_names(fixture: Fixture) -> list[str]:
+def fixture_target_namespace(fixture: Fixture, target: str) -> str:
+    if fixture.kind == "blobs":
+        return f"{fixture.prefix}/{target}"
+    return f"{target}/fixture.bin"
+
+
+def fixture_blob_names(
+    fixture: Fixture,
+    target: str | None = None,
+) -> list[str]:
     if fixture.kind != "blobs":
         return []
+    prefix = (
+        fixture_target_namespace(fixture, target)
+        if target is not None
+        else fixture.prefix
+    )
     if fixture.prefixes:
         if fixture.blob_count % fixture.prefixes != 0:
             raise ValueError(
@@ -880,12 +894,12 @@ def fixture_blob_names(fixture: Fixture) -> list[str]:
             )
         per_prefix = fixture.blob_count // fixture.prefixes
         return [
-            f"{fixture.prefix}/{prefix_index:02d}/{blob_index:05d}"
+            f"{prefix}/{prefix_index:02d}/{blob_index:05d}"
             for prefix_index in range(fixture.prefixes)
             for blob_index in range(per_prefix)
         ]
     return [
-        f"{fixture.prefix}/{index:05d}"
+        f"{prefix}/{index:05d}"
         for index in range(fixture.blob_count)
     ]
 
@@ -1130,9 +1144,12 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                 payload = fixture_payload(fixture)
                 payload_sha256 = sha256_bytes(payload)
                 if fixture.kind == "blobs":
-                    expected_names = fixture_blob_names(fixture)
-                    expected_set = set(expected_names)
                     for target in contract.target_order:
+                        target_prefix = fixture_target_namespace(
+                            fixture, target
+                        )
+                        expected_names = fixture_blob_names(fixture, target)
+                        expected_set = set(expected_names)
                         active_service = listing_services[
                             (target, fixture_timeout_seconds)
                         ]
@@ -1143,7 +1160,7 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                             lambda: [
                                 item
                                 for page in container_client.list_blobs(
-                                    name_starts_with=fixture.prefix + "/",
+                                    name_starts_with=target_prefix + "/",
                                     include=["metadata"],
                                     results_per_page=FIXTURE_SETUP_PAGE_SIZE,
                                 ).by_page()
@@ -1193,7 +1210,7 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                             lambda: [
                                 item
                                 for page in container_client.list_blobs(
-                                    name_starts_with=fixture.prefix + "/",
+                                    name_starts_with=target_prefix + "/",
                                     include=["metadata"],
                                     results_per_page=FIXTURE_SETUP_PAGE_SIZE,
                                 ).by_page()
@@ -1265,7 +1282,8 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                             expected_containers
                         ):
                             blob_client = service.get_blob_client(
-                                fixture_container, "fixture.bin"
+                                fixture_container,
+                                fixture_target_namespace(fixture, target),
                             )
                             try:
                                 properties = retry_fixture_read(
@@ -1387,6 +1405,11 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                         "blobCount": fixture.blob_count,
                         "containerCount": fixture.container_count,
                         "manifestSha256": fixture.manifest_sha256,
+                        "manifestScope": "canonical-target-independent",
+                        "targetNamespaces": {
+                            target: fixture_target_namespace(fixture, target)
+                            for target in contract.target_order
+                        },
                     }
                 )
             fixture_setup_finished_at = utc_now()
@@ -1646,7 +1669,10 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                 )
                             pages = container_client.list_blobs(
                                 name_starts_with=(
-                                    benchmark_case.fixture.prefix + "/"
+                                    fixture_target_namespace(
+                                        benchmark_case.fixture, target
+                                    )
+                                    + "/"
                                 ),
                                 results_per_page=benchmark_case.max_results,
                                 **sdk_request_options(current_request_id),
@@ -1655,7 +1681,7 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                 item.name for page in pages for item in page
                             ]
                             expected = fixture_blob_names(
-                                benchmark_case.fixture
+                                benchmark_case.fixture, target
                             )
                             if names != expected:
                                 raise RuntimeError(
@@ -1674,7 +1700,10 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
 
                             pages = container_client.walk_blobs(
                                 name_starts_with=(
-                                    benchmark_case.fixture.prefix + "/"
+                                    fixture_target_namespace(
+                                        benchmark_case.fixture, target
+                                    )
+                                    + "/"
                                 ),
                                 delimiter="/",
                                 results_per_page=benchmark_case.max_results,
@@ -1685,7 +1714,7 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                             ]
                             expected = [
                                 (
-                                    f"{benchmark_case.fixture.prefix}/"
+                                    f"{fixture_target_namespace(benchmark_case.fixture, target)}/"
                                     f"{prefix_index:02d}/"
                                 )
                                 for prefix_index in range(

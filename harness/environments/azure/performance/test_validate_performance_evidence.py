@@ -396,6 +396,17 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
                         {
                             "id": fixture.id,
                             "manifestSha256": fixture.manifest_sha256,
+                            "manifestScope": (
+                                "canonical-target-independent"
+                            ),
+                            "targetNamespaces": {
+                                target: (
+                                    f"{fixture.prefix}/{target}"
+                                    if fixture.kind == "blobs"
+                                    else f"{target}/fixture.bin"
+                                )
+                                for target in ("direct", "gateway")
+                            },
                         }
                         for fixture in contract.fixtures
                     ],
