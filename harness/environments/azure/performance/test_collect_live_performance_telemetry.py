@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timezone
+from subprocess import CalledProcessError
 from unittest.mock import patch
 
 from collect_live_performance_telemetry import (
@@ -448,9 +449,36 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
             [{"Scope": "case-a"}, {"Scope": "case-b"}],
         )
         self.assertEqual(
-            [call.args[2] for call in query_repeated_aggregates.call_args_list],
-            [[{"id": "case-a"}], [{"id": "case-b"}]],
+            {
+                tuple(call.args[2][0].items())
+                for call in query_repeated_aggregates.call_args_list
+            },
+            {
+                (("id", "case-a"),),
+                (("id", "case-b"),),
+            },
         )
+
+    @patch("collect_live_performance_telemetry.time.sleep")
+    @patch(
+        "collect_live_performance_telemetry.query_repeated_aggregates"
+    )
+    def test_repeated_aggregate_batch_retries_query_failures(
+        self,
+        query_repeated_aggregates,
+        sleep,
+    ) -> None:
+        query_repeated_aggregates.side_effect = [
+            CalledProcessError(1, ["az"]),
+            [{"Scope": "case-a"}],
+        ]
+        rows = query_repeated_aggregate_batches(
+            "workspace",
+            "gateway",
+            [{"id": "case-a"}],
+        )
+        self.assertEqual(rows, [{"Scope": "case-a"}])
+        sleep.assert_called_once_with(5)
 
     def test_fingerprint_vector_must_be_complete_before_stabilizing(
         self,

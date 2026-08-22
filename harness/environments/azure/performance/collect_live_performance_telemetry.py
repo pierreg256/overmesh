@@ -10,12 +10,15 @@ import re
 import subprocess
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 FIELD = re.compile(r"\b([a-z_]+)=(\"[^\"]*\"|\S+)")
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+AGGREGATE_QUERY_ATTEMPTS = 3
+AGGREGATE_QUERY_WORKERS = 4
 LOG_TIMESTAMP = re.compile(
     r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\b"
 )
@@ -391,15 +394,28 @@ def query_repeated_aggregate_batches(
     app_names: str | list[str],
     gateway_cases: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    return [
-        row
-        for benchmark_case in gateway_cases
-        for row in query_repeated_aggregates(
-            workspace,
-            app_names,
-            [benchmark_case],
-        )
-    ]
+    if not gateway_cases:
+        return []
+
+    def query_case(benchmark_case: dict[str, Any]) -> list[dict[str, Any]]:
+        for attempt in range(1, AGGREGATE_QUERY_ATTEMPTS + 1):
+            try:
+                return query_repeated_aggregates(
+                    workspace,
+                    app_names,
+                    [benchmark_case],
+                )
+            except subprocess.CalledProcessError:
+                if attempt == AGGREGATE_QUERY_ATTEMPTS:
+                    raise
+                time.sleep(5 * attempt)
+        raise AssertionError("aggregate query attempts exhausted")
+
+    with ThreadPoolExecutor(
+        max_workers=min(AGGREGATE_QUERY_WORKERS, len(gateway_cases))
+    ) as executor:
+        batches = executor.map(query_case, gateway_cases)
+        return [row for batch in batches for row in batch]
 
 
 def repeated_aggregate_metrics(
