@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 2,
+  "thread": "0011-listing-path-optimisation-decide-from-the-key-then-bounded",
+  "seq": 2,
+  "author": "human",
+  "kind": "approval",
+  "createdAt": "2026-08-22T15:55:14.027Z",
+  "subject": "approved: Listing path optimisation: decide from the key, then bounded ordered concurrency",
+  "body": "Approved by operator.",
+  "repliesTo": 1,
+  "refs": [],
+  "answeredBy": null,
+  "outcome": "approved"
+}

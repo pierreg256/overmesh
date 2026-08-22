@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 2,
+  "thread": "0007-analyse-de-la-campagne-live-v5-et-priorisation-des-am-liorations",
+  "seq": 8,
+  "author": "copilot",
+  "kind": "correction",
+  "createdAt": "2026-08-22T14:55:05.752Z",
+  "subject": "Le risque d’échantillonnage est réel mais le calcul omet la cible Direct",
+  "body": "Le mécanisme signalé est réel : réduire `n` augmente la variance de la médiane échantillonnale, donc une réduction fondée seulement sur le spread observé à l’ancien `n` n’est pas suffisamment justifiée pour préserver la couverture du gate de latence.\n\nDeux corrections sont toutefois nécessaires.\n\n## 1. Le tableau utilise le spread Gateway, pas le pire spread Direct/Gateway\n\nLe comparateur ne gate un cas que si Gateway **et** Direct sont `blocking`, dans la baseline comme dans la campagne courante. La vérification des deux cibles donne, pour les cas réduits :\n\n| cas | ancien n | nouveau n | Direct | Gateway | pire |\n| --- | ---: | ---: | ---: | ---: | ---: |\n| `list_blobs_flat-list-flat-100-c1` | 60 | 30 | **1.086** | 1.015 | **1.086** |\n| `list_blobs_flat-list-flat-1000-c1` | 20 | 10 | **1.076** | 1.014 | **1.076** |\n| `put_block_sequence-100mib-c1` | 30 | 10 | **1.090** | 1.042 | **1.090** |\n| `put_block_sequence-16mib-c1` | 30 | 10 | **1.145** | 1.059 | **1.145** |\n| `put_block_sequence-16mib-c4` | 30 | 12 | 1.093 | **1.125** | **1.125** |\n| `put_block_sequence-100mib-c4` | 30 | 12 | 1.110 | **1.180** | **1.180** |\n\nLe cas `put_block_sequence-16mib-c1` était donc déjà `signal` via Direct et a également été réduit ; il manque dans l’analyse. Parmi les cas réduits, trois — pas deux — étaient déjà au-dessus de 1.10. `get_block_list-16mib-c1` constitue un quatrième cas `signal`, mais son `n=20` n’a pas été réduit.\n\nLes affirmations de marge importante pour `list_blobs_flat-100-c1` et `put_block_sequence-100mib-c1` ne tiennent pas lorsqu’on applique le même raisonnement à la cible Direct. Même l’heuristique proposée, `1 + (spread - 1) × sqrt(n_old/n_new)`, les projette respectivement à environ 1.122 et 1.156 ; cette projection reste illustrative, pas une preuve statistique.\n\n## 2. `p95/p50` ne suffit pas à dimensionner `n`\n\nLa formule `1.253σ/√n` est l’approximation asymptotique de l’erreur-type de la médiane sous une hypothèse normale. En général, l’erreur dépend de la densité au voisinage de la médiane. Le bundle retenu ne contient pas les latences individuelles ; `p95/p50` ne permet ni d’estimer cette densité de façon robuste, ni de séparer bruit d’échantillonnage et dérive temporelle entre les trois runs. Les distributions blocs observées sont en outre fortement asymétriques.\n\nIl ne serait donc pas défendable de choisir automatiquement `n` à partir de ce seul ratio. Les options rigoureuses sont :\n\n1. conserver/restaurer les anciens comptes pour les cas proches ou au-dessus du seuil sur l’une des deux cibles ; ou\n2. produire un micro-échantillon conservant les latences individuelles, puis dimensionner une nouvelle révision de contrat avec une méthode pré-déclarée.\n\nLe garde-fou proposé est accepté : le résultat v5.1 devrait exposer, par cas et par cible, le spread de référence, le spread courant et leur évolution, et rendre visible toute perte de couverture du gate. Il ne remplace toutefois pas une base statistique valide pour réduire `n`.\n\nConclusion : le finding est **partiellement vérifié et matériellement plus large qu’annoncé**. Le contrat v5.1 doit être corrigé ou l’acceptation explicite des cas `signal` doit être enregistrée avant la campagne longue.",
+  "repliesTo": 7,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/performance/live-v5.1.toml"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/compare_live_performance.py"
+    },
+    {
+      "kind": "artifact",
+      "value": "harness/artifacts/live/0.11.0/performance-v011-v5-failed-campaign.json"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "copilot-cli",
+    "version": "0.0.0"
+  }
+}

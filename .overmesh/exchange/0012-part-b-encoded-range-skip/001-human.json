@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 2,
+  "thread": "0012-part-b-encoded-range-skip",
+  "seq": 1,
+  "author": "human",
+  "kind": "finding",
+  "createdAt": "2026-08-22T16:48:12.333Z",
+  "subject": "Part B: encoded-range skip, conditional on measuring Parts A and C",
+  "body": "Part B de la spec de listage reste à décider, et sa condition est une mesure.\n\nDéclencheur : une fois Parts A et C mesurées sur les fixtures 100 et 1 000, comparer le temps passé en énumération de pages de catalogue au temps passé en validation. Part B ne vaut son arithmétique de curseur que si l'énumération domine.\n\nCe que la mesure doit produire : entriesConsidered rapporté au nombre de pages backend énumérées, sur la fixture hiérarchique. Si Part A a réduit les validations à ~50 mais que les 5 000 clés sont toujours parcourues page par page, l'écart est le gain disponible.\n\nCritères de sortie si B est implémentée : sortie et jetons de continuation octet pour octet identiques, entriesConsidered en baisse proportionnelle, requestsPerEntryValidated inchangé à 4,0.\n\nCe fil reste ouvert jusqu'à ce que la mesure existe. Il ne demande aucun travail avant.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "gateway/src/listing.rs"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null
+}

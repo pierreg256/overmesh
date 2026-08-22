@@ -10,7 +10,13 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use p256::{
+    ecdsa::{Signature, VerifyingKey, signature::hazmat::PrehashVerifier},
+    pkcs8::DecodePublicKey,
+};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 const TRACEABILITY_PATH: &str = "docs/traceability.toml";
@@ -52,6 +58,9 @@ struct DocumentationAssertion {
     document: String,
     metric: String,
     pattern: String,
+    source: Option<String>,
+    case: Option<String>,
+    label: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,6 +78,8 @@ struct Roadmap {
 #[derive(Debug, Deserialize)]
 struct RoadmapMilestone {
     version: String,
+    #[serde(default)]
+    name: String,
     status: String,
 }
 
@@ -716,17 +727,37 @@ fn check_assertions(
 ) -> Result<()> {
     let metrics = documentation_metrics(repository_root)?;
     for assertion in &traceability.assertion {
-        let Some(value) = metrics.get(&assertion.metric) else {
-            report.push(
-                "R7",
-                TRACEABILITY_PATH,
-                None,
-                format!("unknown metric {:?}", assertion.metric),
-                "use unit_test_count, scenario_count, adr_count, process_suite_count, active_milestone, or project_version",
-            );
-            continue;
+        let value = if assertion.source.is_some() {
+            match retained_performance_metric(repository_root, assertion) {
+                Ok(value) => value,
+                Err(error) => {
+                    report.push(
+                        "R7",
+                        TRACEABILITY_PATH,
+                        None,
+                        format!(
+                            "invalid retained-evidence assertion for {:?}: {error:#}",
+                            assertion.metric
+                        ),
+                        "use a signed certified performance bundle and a supported evidence metric",
+                    );
+                    continue;
+                }
+            }
+        } else {
+            let Some(value) = metrics.get(&assertion.metric) else {
+                report.push(
+                    "R7",
+                    TRACEABILITY_PATH,
+                    None,
+                    format!("unknown metric {:?}", assertion.metric),
+                    "use a repository metric or declare a signed retained-evidence source",
+                );
+                continue;
+            };
+            value.clone()
         };
-        let expected = assertion.pattern.replacen("{}", value, 1);
+        let expected = assertion.pattern.replacen("{}", &value, 1);
         let path = repository_root.join(&assertion.document);
         if !path.is_file() {
             continue;
@@ -747,6 +778,187 @@ fn check_assertions(
         }
     }
     Ok(())
+}
+
+fn retained_performance_metric(
+    repository_root: &Path,
+    assertion: &DocumentationAssertion,
+) -> Result<String> {
+    let source = assertion.source.as_deref().context("missing source")?;
+    if !source.starts_with("harness/artifacts/live/")
+        || Path::new(source)
+            .components()
+            .any(|component| component == Component::ParentDir)
+    {
+        anyhow::bail!("source must be a retained live artifact");
+    }
+    let source_path = repository_root.join(source);
+    let source_bytes =
+        fs::read(&source_path).with_context(|| format!("failed to read {source}"))?;
+    let source_digest = Sha256::digest(&source_bytes);
+    let source_sha256 = hex::encode(source_digest);
+    let signature_path = source_path.with_file_name(format!(
+        "{}.sig.json",
+        source_path
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .context("source must have a UTF-8 file stem")?
+    ));
+    let signature: serde_json::Value =
+        serde_json::from_slice(&fs::read(&signature_path).with_context(|| {
+            format!(
+                "failed to read detached signature {}",
+                signature_path.display()
+            )
+        })?)
+        .context("failed to parse detached signature")?;
+    if signature.get("sha256").and_then(serde_json::Value::as_str) != Some(source_sha256.as_str())
+        || signature
+            .get("apiVersion")
+            .and_then(serde_json::Value::as_str)
+            != Some("evidence.overmesh.io/detached-signature/v1")
+        || signature
+            .get("algorithm")
+            .and_then(serde_json::Value::as_str)
+            != Some("ES256")
+        || signature
+            .get("verifiedByKeyVault")
+            .and_then(serde_json::Value::as_bool)
+            != Some(true)
+    {
+        anyhow::bail!("detached signature does not certify the source bytes");
+    }
+    let public_key_path = source_path
+        .parent()
+        .context("retained evidence has no parent directory")?
+        .join("manifest-v090-public.pem");
+    let public_key_pem = fs::read_to_string(&public_key_path).with_context(|| {
+        format!(
+            "failed to read evidence public key {}",
+            public_key_path.display()
+        )
+    })?;
+    let verifying_key = VerifyingKey::from_public_key_pem(public_key_pem.trim())
+        .context("evidence public key is invalid")?;
+    let encoded_signature = signature
+        .get("signature")
+        .and_then(serde_json::Value::as_str)
+        .context("detached signature has no signature bytes")?;
+    let signature_bytes = URL_SAFE_NO_PAD
+        .decode(encoded_signature)
+        .context("detached signature is not base64url")?;
+    let parsed_signature =
+        Signature::from_slice(&signature_bytes).context("detached signature is not ES256")?;
+    verifying_key
+        .verify_prehash(&source_digest, &parsed_signature)
+        .context("detached evidence signature verification failed")?;
+
+    let evidence: serde_json::Value =
+        serde_json::from_slice(&source_bytes).context("failed to parse performance evidence")?;
+    let comparison = evidence
+        .get("historicalComparison")
+        .context("performance evidence has no historical comparison")?;
+    let status = comparison.get("status").and_then(serde_json::Value::as_str);
+    let gate_status = comparison
+        .get("nonRegression")
+        .and_then(|value| value.get("gateStatus"))
+        .and_then(serde_json::Value::as_str);
+    let baseline_eligible = evidence
+        .get("contract")
+        .and_then(|value| value.get("baselineEligible"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    let certified = matches!(
+        (status, gate_status),
+        (Some("baseline-established"), Some("baseline-established"))
+            | (Some("compared"), Some("passed"))
+    );
+    if !baseline_eligible
+        || !certified
+        || comparison
+            .get("nonRegression")
+            .and_then(|value| value.get("blockingRegressions"))
+            .and_then(serde_json::Value::as_array)
+            .is_none_or(|values| !values.is_empty())
+    {
+        anyhow::bail!("performance source is not a certified campaign");
+    }
+
+    match assertion.metric.as_str() {
+        "performance_case_p50_row" => {
+            let case_id = assertion.case.as_deref().context("missing case")?;
+            let label = assertion.label.as_deref().context("missing label")?;
+            let cases = evidence
+                .get("cases")
+                .and_then(serde_json::Value::as_array)
+                .context("performance evidence has no cases")?;
+            let direct = performance_case(cases, case_id, "direct")?;
+            let gateway = performance_case(cases, case_id, "gateway")?;
+            let direct_p50 = median_p50(direct)?;
+            let gateway_p50 = median_p50(gateway)?;
+            let requests = gateway
+                .get("serverTelemetry")
+                .and_then(|value| value.get("backendRequests"))
+                .and_then(|value| value.get("count"))
+                .and_then(serde_json::Value::as_u64)
+                .context("gateway case has no backend request count")?;
+            let iterations = gateway
+                .get("iterations")
+                .and_then(serde_json::Value::as_u64)
+                .context("gateway case has no iteration count")?;
+            if iterations == 0 || requests % iterations != 0 {
+                anyhow::bail!("gateway request budget is not an exact integer");
+            }
+            Ok(format!(
+                "{label} | {direct_p50:.2} ms | {gateway_p50:.2} ms | {}",
+                requests / iterations
+            ))
+        }
+        metric => anyhow::bail!("unsupported retained-evidence metric {metric:?}"),
+    }
+}
+
+fn performance_case<'a>(
+    cases: &'a [serde_json::Value],
+    case_id: &str,
+    target: &str,
+) -> Result<&'a serde_json::Value> {
+    cases
+        .iter()
+        .find(|case| {
+            case.get("id").and_then(serde_json::Value::as_str) == Some(case_id)
+                && case.get("target").and_then(serde_json::Value::as_str) == Some(target)
+        })
+        .with_context(|| format!("missing {target} case {case_id}"))
+}
+
+fn median_p50(case: &serde_json::Value) -> Result<f64> {
+    let materialized = case
+        .get("repeatability")
+        .and_then(|value| value.get("medianP50Ms"))
+        .and_then(serde_json::Value::as_f64);
+    let mut values = case
+        .get("repeatability")
+        .and_then(|value| value.get("p50MsPerRun"))
+        .and_then(serde_json::Value::as_array)
+        .context("case has no p50 values per run")?
+        .iter()
+        .map(|value| value.as_f64().context("p50 per run must be numeric"))
+        .collect::<Result<Vec<_>>>()?;
+    if values.is_empty() {
+        anyhow::bail!("case has no p50 values per run");
+    }
+    values.sort_by(f64::total_cmp);
+    let middle = values.len() / 2;
+    let calculated = if values.len() % 2 == 0 {
+        (values[middle - 1] + values[middle]) / 2.0
+    } else {
+        values[middle]
+    };
+    if materialized.is_some_and(|value| (value - calculated).abs() > 1e-9) {
+        anyhow::bail!("materialized medianP50Ms does not match p50MsPerRun");
+    }
+    Ok(materialized.unwrap_or(calculated))
 }
 
 fn check_retained_artifact_redaction(
@@ -1037,6 +1249,12 @@ fn documentation_metrics(repository_root: &Path) -> Result<BTreeMap<String, Stri
         .find(|milestone| milestone.status == "active")
         .map(|milestone| milestone.version.clone())
         .unwrap_or_default();
+    let active_milestone_name = roadmap
+        .milestones
+        .iter()
+        .find(|milestone| milestone.status == "active")
+        .map(|milestone| milestone.name.clone())
+        .unwrap_or_default();
     let project_version = fs::read_to_string(repository_root.join("VERSION"))
         .context("failed to read VERSION")?
         .trim()
@@ -1051,6 +1269,7 @@ fn documentation_metrics(repository_root: &Path) -> Result<BTreeMap<String, Stri
             process_suite_count.to_string(),
         ),
         ("active_milestone".to_owned(), active_milestone),
+        ("active_milestone_name".to_owned(), active_milestone_name),
         ("project_version".to_owned(), project_version),
     ]))
 }
@@ -1222,6 +1441,10 @@ fn contains_test_function(content: &str, test_name: &str) -> bool {
 mod tests {
     use std::process::Command;
 
+    use p256::{
+        ecdsa::{SigningKey, signature::hazmat::PrehashSigner},
+        pkcs8::{EncodePublicKey, LineEnding},
+    };
     use tempfile::TempDir;
 
     use super::*;
@@ -1306,6 +1529,157 @@ fn helper() {}
         let fixture = documentation_fixture();
         let report = check(fixture.path()).expect("check fixture");
         assert_eq!(report.violations, Vec::new());
+    }
+
+    #[test]
+    fn retained_performance_assertions_require_certified_campaigns() {
+        let fixture = tempfile::tempdir().expect("temporary repository");
+        let source = "harness/artifacts/live/0.11.0/performance-diagnostic.json";
+        let evidence = serde_json::json!({
+            "historicalComparison": {
+                "status": "failed",
+                "nonRegression": {
+                    "gateStatus": "failed",
+                    "blockingRegressions": ["case"]
+                }
+            }
+        });
+        let source_bytes = serde_json::to_vec(&evidence).expect("serialize evidence");
+        write(
+            fixture.path(),
+            source,
+            std::str::from_utf8(&source_bytes).expect("UTF-8 evidence"),
+        );
+        let signing_key = SigningKey::from_bytes((&[7_u8; 32]).into()).expect("signing key");
+        let digest = Sha256::digest(&source_bytes);
+        let signature: Signature = signing_key
+            .sign_prehash(&digest)
+            .expect("sign evidence digest");
+        write(
+            fixture.path(),
+            "harness/artifacts/live/0.11.0/manifest-v090-public.pem",
+            &signing_key
+                .verifying_key()
+                .to_public_key_pem(LineEnding::LF)
+                .expect("public key PEM"),
+        );
+        write(
+            fixture.path(),
+            "harness/artifacts/live/0.11.0/performance-diagnostic.sig.json",
+            &serde_json::json!({
+                "apiVersion": "evidence.overmesh.io/detached-signature/v1",
+                "algorithm": "ES256",
+                "sha256": hex::encode(digest),
+                "signature": URL_SAFE_NO_PAD.encode(signature.to_bytes()),
+                "verifiedByKeyVault": true
+            })
+            .to_string(),
+        );
+        let assertion = DocumentationAssertion {
+            document: "docs/WHY_OVERMESH.md".to_owned(),
+            metric: "performance_case_p50_row".to_owned(),
+            pattern: "| {} |".to_owned(),
+            source: Some(source.to_owned()),
+            case: Some("case".to_owned()),
+            label: Some("Case".to_owned()),
+        };
+
+        let error = retained_performance_metric(fixture.path(), &assertion)
+            .expect_err("diagnostic must not source an assertion");
+        assert!(error.to_string().contains("not a certified campaign"));
+
+        let mut certified = serde_json::json!({
+            "contract": {
+                "baselineEligible": false
+            },
+            "historicalComparison": {
+                "status": "compared",
+                "nonRegression": {
+                    "gateStatus": "passed",
+                    "blockingRegressions": []
+                }
+            },
+            "cases": [
+                {
+                    "id": "case",
+                    "target": "direct",
+                    "repeatability": {
+                        "p50MsPerRun": [9.0, 10.0, 11.0],
+                        "medianP50Ms": 10.0
+                    }
+                },
+                {
+                    "id": "case",
+                    "target": "gateway",
+                    "iterations": 3,
+                    "repeatability": {
+                        "p50MsPerRun": [99.0, 100.0, 101.0],
+                        "medianP50Ms": 100.0
+                    },
+                    "serverTelemetry": {
+                        "backendRequests": {"count": 12}
+                    }
+                }
+            ]
+        });
+        let certified_bytes = serde_json::to_vec(&certified).expect("serialize campaign");
+        write(
+            fixture.path(),
+            source,
+            std::str::from_utf8(&certified_bytes).expect("UTF-8 evidence"),
+        );
+        let certified_digest = Sha256::digest(&certified_bytes);
+        let certified_signature: Signature = signing_key
+            .sign_prehash(&certified_digest)
+            .expect("sign certified evidence digest");
+        write(
+            fixture.path(),
+            "harness/artifacts/live/0.11.0/performance-diagnostic.sig.json",
+            &serde_json::json!({
+                "apiVersion": "evidence.overmesh.io/detached-signature/v1",
+                "algorithm": "ES256",
+                "sha256": hex::encode(certified_digest),
+                "signature": URL_SAFE_NO_PAD.encode(
+                    certified_signature.to_bytes()
+                ),
+                "verifiedByKeyVault": true
+            })
+            .to_string(),
+        );
+        let error = retained_performance_metric(fixture.path(), &assertion)
+            .expect_err("non-baseline campaign must not source an assertion");
+        assert!(error.to_string().contains("not a certified campaign"));
+
+        certified["contract"]["baselineEligible"] = serde_json::json!(true);
+        let certified_bytes = serde_json::to_vec(&certified).expect("serialize campaign");
+        write(
+            fixture.path(),
+            source,
+            std::str::from_utf8(&certified_bytes).expect("UTF-8 evidence"),
+        );
+        let certified_digest = Sha256::digest(&certified_bytes);
+        let certified_signature: Signature = signing_key
+            .sign_prehash(&certified_digest)
+            .expect("sign certified evidence digest");
+        write(
+            fixture.path(),
+            "harness/artifacts/live/0.11.0/performance-diagnostic.sig.json",
+            &serde_json::json!({
+                "apiVersion": "evidence.overmesh.io/detached-signature/v1",
+                "algorithm": "ES256",
+                "sha256": hex::encode(certified_digest),
+                "signature": URL_SAFE_NO_PAD.encode(
+                    certified_signature.to_bytes()
+                ),
+                "verifiedByKeyVault": true
+            })
+            .to_string(),
+        );
+        assert_eq!(
+            retained_performance_metric(fixture.path(), &assertion)
+                .expect("certified campaign metric"),
+            "Case | 10.00 ms | 100.00 ms | 4"
+        );
     }
 
     #[test]

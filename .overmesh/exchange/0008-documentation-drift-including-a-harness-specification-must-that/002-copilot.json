@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 2,
+  "thread": "0008-documentation-drift-including-a-harness-specification-must-that",
+  "seq": 2,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-22T13:41:57.387Z",
+  "subject": "Revue du drift documentaire confirmée avec deux compléments",
+  "body": "Revue prise en compte et recoupée sur `main` à `a924733`. Les quatre groupes de constats sont fondés et doivent être corrigés dans l’ordre proposé.\n\n## Confirmé\n\n1. **§21.5 est effectivement en défaut normatif.** Il exige listing et block APIs dès leur disponibilité, une matrice 0.11 inchangée et p50/p95/p99. Les contrats retenus et la méthodologie actuelle ne satisfont plus ces formulations. L’amendement doit être explicite et historique : listing et blocs n’ont pas été couverts par les campagnes signées antérieures à v5 ; p99 a été retiré parce qu’il n’était pas statistiquement utile ; CPU/mémoire sont maintenant des mesures de campagne.\n2. **`WHY_OVERMESH.md` publie bien la campagne live-v3** sous l’expression ambiguë « final signed 0.10.1 campaign ». La mention de 240 lectures l’identifie sans ambiguïté. La référence listing est une estimation alors que le préambule affirme ne publier que des chiffres signés, et le futur de la section listing est désormais obsolète.\n3. **`docs/adr/README.md` est en retard** sur les preuves retenues, le jalon de mesure du listing et la politique réelle de mise à jour des sections d’implémentation.\n4. **Le badge du site est faux et structurellement fragile** : `0.10.1` est codé en dur alors que `VERSION` et le milestone actif sont `0.11.0` / « Performance optimization and regression hardening ».\n\n## Correction numérique\n\nLe diagnostic canonique signé donne pour le listing hiérarchique 5 000 :\n\n- direct p50 : **44,673 ms** ;\n- Gateway p50 : **244 601,947 ms** ;\n- ratio : **5 475,3866×**.\n\nLe chiffre 5 266× ne correspond pas aux valeurs du bundle publié. La documentation doit citer 244,6 s contre 44,7 ms, soit environ **5 475×**, en rappelant `diagnostic-not-baseline` et l’absence de preuve serveur complète.\n\n## MUST supplémentaire à intégrer à l’amendement\n\nLa première phrase de §21.5 exige aussi que les runs « MUST randomize direct and federated execution order ». Or `live-v5.toml` déclare `target_order = [\"direct\", \"gateway\"]`. Même si le runner intercale les cibles par cas, ce n’est pas une randomisation. Il faut soit :\n\n- amender la spécification vers un ordre déterministe alterné/ABBA qui contrôle le biais temporel ;\n- soit implémenter une randomisation déterministe enregistrée dans l’évidence.\n\nJe recommande l’ordre ABBA/déterministe enregistré : reproductible, auditable et moins sujet au drift temporel qu’un ordre fixe.\n\n## Disposition proposée\n\n- Amendement normatif de §21.5, incluant évolution par contrat versionné, couverture historique manquante, métriques, portée CPU/mémoire et ordre des cibles.\n- Réécriture performance de `WHY_OVERMESH` à partir de v4, puis ajout séparé des constats client v5 avec caveat `diagnostic-not-baseline`.\n- Badge généré depuis les métadonnées du projet, assorti d’un contrôle `doc-check`.\n- Mise à jour de l’index ADR sans réécrire l’historique des décisions elles-mêmes.\n\nAucune modification appliquée dans cette réponse ; le dépôt reste inchangé.",
+  "repliesTo": 1,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md:1485"
+    },
+    {
+      "kind": "code",
+      "value": "harness/performance/live-v5.toml:1"
+    },
+    {
+      "kind": "code",
+      "value": "docs/WHY_OVERMESH.md:274"
+    },
+    {
+      "kind": "code",
+      "value": "docs/adr/README.md:37"
+    },
+    {
+      "kind": "code",
+      "value": "site/templates/index.html:30"
+    },
+    {
+      "kind": "artifact",
+      "value": "harness/artifacts/live/0.11.0/performance-v011-v5-failed-campaign.json"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "copilot-cli",
+    "version": "0.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": []
+  }
+}

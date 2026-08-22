@@ -78,13 +78,14 @@ impl ReconcilerEngine {
         })
     }
 
-    pub(super) async fn discover_blob_path(
+    pub(super) async fn discover_blob_paths(
         &self,
         head_object: &str,
         token: &ControlToken,
-    ) -> Result<Option<LogicalBlobId>> {
+    ) -> Result<(Option<LogicalBlobId>, Option<LogicalBlobId>)> {
         let expected_hash = head_hash(head_object)?;
-        let mut discovered = None;
+        let mut trusted = None;
+        let mut lock_hint = None;
         for backend in self.backends.values() {
             let Some(value) = backend.control_get_object(head_object, token).await? else {
                 continue;
@@ -92,6 +93,21 @@ impl ReconcilerEngine {
             let Ok(head) = SignedDocument::<CommitManifest>::from_bytes(&value.bytes) else {
                 continue;
             };
+            let Ok(logical_blob) = parse_signed_logical_blob(&head.payload.blob, "committed head")
+            else {
+                continue;
+            };
+            if logical_blob.path_hash() != expected_hash {
+                continue;
+            }
+            if let Some(existing) = &lock_hint {
+                ensure!(
+                    existing == &logical_blob,
+                    "head hash resolves to conflicting blob paths"
+                );
+            } else {
+                lock_hint = Some(logical_blob.clone());
+            }
             if head
                 .verify(
                     SignatureDomain::CommitManifest,
@@ -103,22 +119,15 @@ impl ReconcilerEngine {
             {
                 continue;
             }
-            let Ok(logical_blob) = parse_signed_logical_blob(&head.payload.blob, "committed head")
-            else {
-                continue;
-            };
-            if logical_blob.path_hash() != expected_hash {
-                continue;
-            }
-            if let Some(existing) = &discovered {
+            if let Some(existing) = &trusted {
                 ensure!(
                     existing == &logical_blob,
                     "head hash resolves to conflicting signed blob paths"
                 );
             } else {
-                discovered = Some(logical_blob);
+                trusted = Some(logical_blob);
             }
         }
-        Ok(discovered)
+        Ok((trusted, lock_hint))
     }
 }

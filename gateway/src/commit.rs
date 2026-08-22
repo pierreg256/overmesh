@@ -97,12 +97,14 @@ pub struct CommitService {
     pub(crate) signer: Arc<dyn ManifestSigner>,
     pub(crate) control_tokens: SharedControlTokenProvider,
     listing_token_lifetime: Duration,
+    listing_validation_concurrency: usize,
     staging_lifetime: Duration,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct CommitServiceOptions {
     pub listing_token_lifetime: Duration,
+    pub listing_validation_concurrency: usize,
     pub staging_lifetime: Duration,
 }
 
@@ -110,6 +112,7 @@ impl Default for CommitServiceOptions {
     fn default() -> Self {
         Self {
             listing_token_lifetime: Duration::from_secs(15 * 60),
+            listing_validation_concurrency: 32,
             staging_lifetime: Duration::from_secs(7 * 24 * 60 * 60),
         }
     }
@@ -235,6 +238,7 @@ impl CommitService {
             signer,
             control_tokens,
             listing_token_lifetime: options.listing_token_lifetime,
+            listing_validation_concurrency: options.listing_validation_concurrency,
             staging_lifetime: options.staging_lifetime,
         }
     }
@@ -271,6 +275,7 @@ impl CommitService {
             self.signer.clone(),
             self.control_tokens.clone(),
             self.listing_token_lifetime,
+            self.listing_validation_concurrency,
         )
     }
 

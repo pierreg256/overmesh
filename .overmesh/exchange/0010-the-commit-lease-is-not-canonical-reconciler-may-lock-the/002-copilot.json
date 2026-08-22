@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 2,
+  "thread": "0010-the-commit-lease-is-not-canonical-reconciler-may-lock-the",
+  "seq": 2,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-22T16:17:17.425Z",
+  "subject": "Implemented: Reconciler commit lease is canonical for identifiable heads",
+  "body": "Implemented the canonical-lease prerequisite. `reconcile_head` now separates trusted blob discovery from a fail-closed routing hint: a canonical logical blob whose SHA-256 matches the head key routes `locks/{path_hash}` to the current Ring primary even when the head signature is invalid. The untrusted hint is used only for lease placement and is never promoted to committed state. Heads that cannot identify any canonical logical blob remain isolated on the discovery backend because they cannot map to Gateway-owned logical state. Added a regression test proving that an anomalous head present only on the secondary acquires the lease on the deterministic primary and is quarantined. Updated ADR-0012 implementation status and the ADR index; the merged commit-state document itself remains unimplemented.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "reconciler/src/engine/discovery.rs"
+    },
+    {
+      "kind": "code",
+      "value": "reconciler/src/engine/orchestration.rs"
+    },
+    {
+      "kind": "code",
+      "value": "reconciler/src/engine/tests/orchestration.rs"
+    },
+    {
+      "kind": "record",
+      "value": "docs/adr/0012-consolidate-gateway-owned-commit-state.md"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "copilot-cli",
+    "version": "0.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review",
+      "tests-executed"
+    ],
+    "commands": [
+      "cargo test -p overmesh-reconciler --quiet",
+      "cargo test --workspace --quiet",
+      "cargo clippy -p overmesh-gateway -p overmesh-reconciler --all-targets -- -D warnings",
+      "make doc-check",
+      "git diff --check"
+    ]
+  }
+}

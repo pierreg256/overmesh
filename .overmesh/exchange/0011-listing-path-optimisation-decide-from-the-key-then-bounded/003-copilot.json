@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 2,
+  "thread": "0011-listing-path-optimisation-decide-from-the-key-then-bounded",
+  "seq": 3,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-22T16:17:33.942Z",
+  "subject": "Implemented Parts F, A, C and D; Part B remains deferred",
+  "body": "Implemented the approved listing sequence except the deliberately deferred encoded-range skip. Part F: runtime and v5.1 evidence now split `entriesConsidered`, `entriesValidated`, and `entriesReturned`; `requestsPerEntryValidated` is the blocking exact 4.0 invariant, validation concurrency is retained, and legacy live-v5 `entriesScanned` evidence remains readable without reinterpretation. Part A: hierarchical listing decodes catalog keys before backend validation and skips descendants only after a prefix has been established by a fully validated entry; internal names are also rejected before validation. Part C: flat catalog entries are validated with configurable bounded concurrency (default 32), buffered and emitted in catalog-key order; fan-out is capped by remaining output capacity (with one ordered probe only when needed to preserve existing has-more semantics), earliest-key backend errors are preserved, and continuation state is not advanced past unemitted work. Part D: per-container validation/authorization work uses the same ordered bound, while authorization still runs per container and concurrently across every backend. Added exact local tests for hierarchical considered/validated counts, four reads per validation, ordered concurrent errors, continuation, and per-backend authorization. Part B remains deferred pending measurement of these changes.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "gateway/src/listing.rs"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/commit/tests.rs"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/config.rs"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/collect_live_performance_telemetry.py"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/validate_performance_evidence.py"
+    },
+    {
+      "kind": "code",
+      "value": "harness/performance/live-v5.1-listing-confirmation.toml"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "copilot-cli",
+    "version": "0.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review",
+      "tests-executed"
+    ],
+    "commands": [
+      "cargo test -p overmesh-gateway --quiet",
+      "make performance-contract-check",
+      "cargo test --workspace --quiet",
+      "cargo clippy -p overmesh-gateway -p overmesh-reconciler --all-targets -- -D warnings",
+      "make doc-check",
+      "git diff --check"
+    ]
+  }
+}

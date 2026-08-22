@@ -1484,27 +1484,49 @@ region. The latter two cases MUST prevent Gateway readiness.
 
 ### 21.5 Live Performance Baselines
 
-Milestone `0.10.0` MUST execute equivalent operations directly against each
-Azure Storage Account and through Overmesh from the same private benchmark
-host. Runs MUST randomize direct and federated execution order and keep client,
-token, API version, payload, network path, and concurrency settings equivalent.
+Beginning with the `live-v5` contract, every performance campaign MUST execute
+equivalent operations directly against each Azure Storage Account and through
+Overmesh from the same private benchmark host. Beginning with `live-v5.1`, the
+contract MUST use a deterministic counterbalanced target order, and every run
+MUST record the order actually executed. Client, token, API version, payload,
+network path, and concurrency settings MUST remain equivalent between targets.
 
-The matrix MUST include representative `PUT`, `HEAD`, full `GET`, range `GET`,
-`DELETE`, listing, and block API operations after those APIs are available.
-It MUST cover multiple payload sizes and concurrency levels and report at least
-p50, p95, and p99 latency, throughput, backend request counts, Key Vault signing
-latency, process CPU, peak memory, and transferred bytes.
+Beginning with `live-v5`, the matrix MUST include representative `PUT`, `HEAD`,
+full `GET`, range `GET`, `DELETE`, listing, and block API operations. It MUST
+cover multiple payload sizes and concurrency levels and report at least p50 and
+p95 latency, throughput, backend request counts, Key Vault signing latency, and
+transferred bytes. Process CPU and peak memory MUST be reported at campaign
+scope. For repeated campaigns, the median of the per-run p50 values is the
+normative p50 comparison statistic; a percentile over pooled samples MAY be
+retained only as a separately identified diagnostic.
+
+Each measured case MUST carry an independent validity result. Evidence from
+valid cases MAY be retained when another case is invalid, but a canonical
+baseline is atomic: any invalid mandatory case MUST fail the campaign. An
+exclusion MUST be declared and justified in the signed contract before
+execution; an observed failure MUST NOT be reclassified as an exclusion.
 
 Every result set MUST be stored as a signed machine-readable artifact containing
 the source commit, project version, Ring version and hash, deployment identity,
 Storage API version, client versions, benchmark topology, warm-up policy,
-sample count, and UTC interval. Results MUST be retained in a versioned
-historical series so later releases can be compared with the original baseline.
+sample count, actual target order, per-case validity, and UTC interval. Results
+MUST be retained in a versioned historical series so later releases can be
+compared with the original baseline.
 
-Milestone `0.11.0` MUST use the unchanged `0.10.0` matrix to measure every
-optimization. Optimizations MUST NOT weaken consistency, authorization,
-signature validation, replay protection, or destructive-operation safeguards.
-Stable measurements SHOULD become explicit performance regression budgets.
+An optimization comparison MUST use the same signed contract on both sides.
+Contract evolution, including iteration-count recalibration, MUST create a new
+versioned contract and record the retained evidence used as its basis.
+An explicitly non-baseline diagnostic contract MAY reduce iteration counts and
+defer declared expensive cases to a separately signed confirmation contract.
+Such evidence MUST identify its diagnostic purpose, MUST set baseline
+eligibility to false, and MUST NOT establish or replace a release
+non-regression baseline. When latency-gate coverage is intentionally reduced,
+the evidence MUST retain either the individual latency samples or a
+pre-declared histogram sufficient to size the later baseline from observed
+distributions.
+Optimizations MUST NOT weaken consistency, authorization, signature validation,
+replay protection, or destructive-operation safeguards. Stable measurements
+SHOULD become explicit performance regression budgets.
 
 ## 22. V1 Release Criteria
 

@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 2,
+  "thread": "0010-the-commit-lease-is-not-canonical-reconciler-may-lock-the",
+  "seq": 1,
+  "author": "claude",
+  "kind": "finding",
+  "createdAt": "2026-08-22T15:44:21.502Z",
+  "subject": "The commit lease is not canonical: Reconciler may lock the discovering replica",
+  "body": "Both components use the same lock key, `locks/{path_hash}`, but not always on the same backend.\n\nThe Gateway always acquires it on the deterministic primary — `gateway/src/commit/locking.rs`, `self.primary.control_acquire_lock(&lock_key, ...)`. The telemetry agrees: `control_acquire_lock` is exactly 1.0 per operation, so a single lease covers a commit across both replicas.\n\nThe Reconciler acquires the same key on `replicas[0]` in its recovery path, which matches. But in `reconcile_head`:\n\n```rust\nself.backend(&replicas[0].id)?\n} else {\n    self.backend(&candidate.discovered_on)?\n};\n```\n\nWhen reconciliation acts on a head discovered on the secondary, it takes the lease **on the secondary**. The Gateway holds the primary's. In that branch the two components do not exclude one another on the same logical blob.\n\n**Why this matters more than it looks.** With separate control objects each component writes through its own conditional path, so the asymmetry is survivable and has never surfaced. It stops being survivable under ADR-0012: a merged document containing the high-water is written by the Gateway during commit and updated by the Reconciler during repair, so two components holding different leases produce a write conflict that does not exist today with separate objects.\n\nIt also determines whether the write path may read Reconciler-owned state once per commit instead of twice. Today the quarantine record and the compaction checkpoint are loaded at the start of a commit and again before the recovery floor is published — 4 of the 28 control reads. That second read is redundant **only if** the Reconciler cannot modify either document while the commit lease is held, which the `discovered_on` branch currently makes untrue.\n\nThe operator has decided this is a defect rather than a design: the commit lease is a single canonical lease, taken on the deterministic primary of the Ring, by every component that writes Gateway-owned commit state.\n\n**Two decision records have been written and registered against this.** ADR-0012 carries the canonical lease as an unmet prerequisite and defines the consolidated commit document. ADR-0010 gains an amendment stating that reading its safety state once per request rather than twice is not the caching it forbids — no time-to-live, no staleness window, bounded by a lease held for exactly the duration in which the value is used.\n\n**That amendment is separable and is the cheapest gain available.** It depends only on the canonical lease, not on the merge, and it removes duplicate reads worth roughly ten of the 28 control reads on a first `PUT` once the same treatment is applied to Gateway-owned documents.\n\n**And all of it is verifiable under Azurite before any campaign.** The blocking metric is `backendRequestsPerOperation`, `gateway/src/commit/tests.rs::first_put_control_reads_have_a_closed_object_level_budget` already asserts the per-replica budget, and the exit criterion for each step is an exact integer. The live campaign is needed for latency, not for the gated quantity.\n\nSuggested order: correct the lease first, then the intra-request single read, then ADR-0012's merge, updating the asserted budget deliberately at each step rather than relaxing the equality gate.\n\nVerification method: source review of `gateway/src/commit/locking.rs`, `reconciler/src/engine/orchestration.rs` and `gateway/src/commit/high_water.rs`, with the read multiplicities cross-checked against the object-class table in ADR-0010 and the retained v4 evidence. No tests executed; no cargo toolchain is available in this environment.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "reconciler/src/engine/orchestration.rs:235"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/commit/locking.rs:26"
+    },
+    {
+      "kind": "record",
+      "value": "docs/adr/0012-consolidate-gateway-owned-commit-state.md"
+    },
+    {
+      "kind": "record",
+      "value": "docs/adr/0010-keep-reconciler-safety-state-on-the-read-path.md"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "local-agent-mode-overmesh-exchange",
+    "version": "1.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": []
+  }
+}

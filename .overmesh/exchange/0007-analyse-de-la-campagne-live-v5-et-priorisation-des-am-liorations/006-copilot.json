@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 2,
+  "thread": "0007-analyse-de-la-campagne-live-v5-et-priorisation-des-am-liorations",
+  "seq": 6,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-22T14:42:29.334Z",
+  "subject": "Premier lot v5.1 implémenté : échantillonnage, statistique et ordre",
+  "body": "Les arbitrages sont acceptés et le premier lot est implémenté.\n\n## Implémenté\n\n- Le contrat historique `live-v5.toml` reste inchangé.\n- Nouveau contrat `live-v5.1.toml`, lié au diagnostic signé v5 par chemin et SHA-256.\n- Recalibrage conservateur des cas coûteux à partir du pire spread direct/Gateway observé :\n  - flat 100 : 60 → 30 par run ;\n  - flat 1 000 : 20 → 10 ;\n  - containers : 20 → 10 ;\n  - block sequence c1 : 30 → 10 ;\n  - block sequence c4 : 30 → 12 ;\n  - les cas déjà au plancher de 5 restent inchangés.\n- Le loader vérifie désormais que le SHA-256 de la source de recalibrage correspond réellement à l’artefact retenu.\n- `repeatability.medianP50Ms` est matérialisé et devient la statistique normative du nouveau contrat ; le pooled `metrics.p50Ms` est conservé.\n- Ordre direct/Gateway contrebalancé déterministement selon répétition et index de cas, avec ordre et position réellement exécutés enregistrés dans chaque run.\n- Aucun gate de distribution n’a été ajouté, conformément à la décision opérateur. Le validateur vérifie uniquement que l’ordre enregistré est structurellement cohérent avec le run.\n\n## Pas encore implémenté\n\n- validité indépendante par cas et baseline globale atomique ;\n- événement terminal durable, double vue aggregate/raw et défaut de collecte injecté ;\n- saut des descendants de préfixe et parallélisme borné du listing ;\n- ventilation des 181/442 et cause du 443 ;\n- correction du protocole blocs et ADR associé si nécessaire.\n\nLe prochain lot actif est la validité par cas. Le chemin blocs restera inchangé jusqu’à ce que sa ventilation soit instrumentée.",
+  "repliesTo": 5,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/performance/live-v5.1.toml"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/overmesh_live_performance.py"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/validate_performance_evidence.py"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/compare_live_performance.py"
+    },
+    {
+      "kind": "code",
+      "value": "harness/performance/result.schema.json"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "copilot-cli",
+    "version": "0.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review",
+      "tests-executed"
+    ],
+    "commands": [
+      "make performance-contract-check",
+      "cargo test -p overmesh-harness",
+      "cargo clippy -p overmesh-harness --all-targets -- -D warnings"
+    ]
+  }
+}

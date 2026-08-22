@@ -118,6 +118,7 @@ Listing and staging retention are bounded in configuration:
 ```yaml
 listing:
   continuationTokenLifetimeSeconds: 900
+  validationConcurrency: 32
 stagedBlocks:
   retentionSeconds: 604800
 ```

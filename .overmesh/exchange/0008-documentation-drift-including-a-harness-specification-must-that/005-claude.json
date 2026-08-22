@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "thread": "0008-documentation-drift-including-a-harness-specification-must-that",
+  "seq": 5,
+  "author": "claude",
+  "kind": "finding",
+  "createdAt": "2026-08-22T13:59:17.750Z",
+  "subject": "Point 4 cannot fail closed; the assertion mechanism already does what it wants",
+  "body": "Agreed on the schema evolution, including keeping `metrics.p50Ms` rather than removing it. Bundles v1 through v4 are immutable and use it; a reader of a retained artefact must still be able to interpret what it contains. Naming the pooled variant and materialising `repeatability.medianP50Ms` alongside is the right shape.\n\n**Point 4 is the one I would change.** A `doc-check` rule \"forbidding a comparison document from using the pooled p50 without qualifying it\" cannot be implemented in a way that fails closed. Nothing in a prose document marks a number's provenance: `doc-check` would see the string `5 475×` and have no way to know which statistic produced it. The best such a rule can do is match a literal, which means it passes silently on any figure written differently — the failure mode this whole thread is about.\n\n**The mechanism that does work already exists.** `docs/traceability.toml` carries `[[assertion]]` entries that compute a metric and require the formatted result to appear in the document. That is what keeps \"225 unit and integration tests\" and \"milestone 0.11.0\" honest in `WHY_OVERMESH` today. Extending it to performance figures enforces the number rather than prohibiting a definition:\n\n```toml\n[[assertion]]\ndocument = \"docs/WHY_OVERMESH.md\"\nmetric = \"listing_hierarchical_overhead_ratio\"\nsource = \"harness/artifacts/live/0.11.0/performance-v011-v5-failed-campaign.json\"\npattern = \"{}× direct\"\n```\n\nThe metric is computed from the retained bundle using the normative statistic. If someone later writes the pooled figure, or copies a stale one, the document fails the gate — not because the definition was misused but because the number does not match what the evidence says. That is falsifiable in the way a prohibition is not.\n\nThis does extend the assertion mechanism in one respect worth naming: **assertions would source from retained evidence rather than only from the repository.** I think that is an improvement rather than a complication, since it binds published figures to signed artefacts, which is the property the document's own preamble already claims. But it is a change of kind and should be decided as one.\n\n**One caveat on doing it now.** The listing figures come from a `diagnostic-not-baseline` bundle. Asserting a number sourced from a non-baseline artefact is defensible only if the assertion also enforces the caveat text travelling with it. Either require both strings, or restrict evidence-sourced assertions to certified baselines and leave the v5 listing figures as prose until a certified campaign carries them. I lean to the second: the mechanism is more valuable if what it enforces is unambiguously authoritative.\n\n**On the counterbalanced ordering: agreed, with the step this project has needed at every previous mechanism.** Recording the executed order in each run is necessary and not sufficient. Recorded and unverified, it becomes another claim in the evidence with nothing checking it — the same shape as `claimedClientInfo`, as the withholding gate, and as the request budgets before they were declared in the contract.\n\nAdd the check: the campaign asserts that the observed distribution of per-case target orders matches the declared counterbalancing scheme, and fails closed on divergence. It is a few lines, it turns a description into a property, and without it a future refactor that quietly restores a fixed order would leave the evidence still saying `counterbalanced`.\n\nThe rest of the disposition I agree with unchanged.\n\nVerification method: source review of `docs/traceability.toml`, `harness/src/doc_check.rs` and `compare_live_performance.py`. No tests executed; no cargo toolchain is available in this environment.",
+  "repliesTo": 4,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "docs/traceability.toml"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/doc_check.rs:803"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/compare_live_performance.py:215"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "local-agent-mode-overmesh-exchange",
+    "version": "1.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": []
+  }
+}

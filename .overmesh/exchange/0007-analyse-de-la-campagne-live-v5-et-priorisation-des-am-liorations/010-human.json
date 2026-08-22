@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 2,
+  "thread": "0007-analyse-de-la-campagne-live-v5-et-priorisation-des-am-liorations",
+  "seq": 10,
+  "author": "human",
+  "kind": "finding",
+  "createdAt": "2026-08-22T15:05:32.500Z",
+  "subject": "Operator decision: fast contract under one hour, precision restored after optimisation",
+  "body": "Décision finale sur l'échantillonnage. Priorité à la vitesse d'itération.\n\nConstat : on passe plus de temps à mesurer qu'à corriger, alors que plusieurs optimisations sont déjà évidentes. Le contrat doit servir à valider des correctifs, pas à produire une référence statistique — celle-ci viendra après.\n\n1. Objectif : une campagne complète en moins d'une heure, fixtures exclues puisqu'elles persistent.\n\n2. Les quatre cas à 5 000 entrées sortent du contrat rapide. À une itération par passe, ils coûtent déjà 38 minutes à eux seuls : ils sont incompatibles avec l'objectif, quel que soit l'échantillonnage. Ils deviennent une passe de confirmation, lancée une seule fois lorsque le correctif de listage atterrit. La linéarité du coût par entrée reste démontrée par 100 et 1 000.\n\n3. Échantillonnage retenu ailleurs, par passe : lectures 20, écritures et suppressions 10, listage 100 entrées 10, listage 1 000 entrées 3, containers 5, séquences de blocs 5, get_block_list 10. Estimation depuis les coûts par opération mesurés en v5 : environ 37 minutes, gateway et direct cumulés.\n\n4. J'enregistre explicitement l'acceptation des cas sans signal de latence. Le gate bloquant reste backendRequestsPerOperation et requestsPerEntryScanned, exacts à tout échantillonnage, et tous les critères de sortie P0 sont des entiers. La perte de couverture du gate p50 est assumée pour cette phase.\n\n5. Le contrat rapide n'est pas un baseline. Il est marqué comme tel dans son évidence. Aucune campagne exécutée sous cet échantillonnage ne peut devenir la référence de non-régression de 0.11.\n\n6. Une fois les optimisations implémentées — saut de préfixe, parallélisme borné, ventilation du chemin blocs — nous reprenons des campagnes à itérations élevées pour établir la référence. Le dimensionnement de n se fera alors sur des distributions réelles, ce qui suppose de conserver les latences individuelles ou un histogramme par cas dès maintenant.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/performance/live-v5.1.toml"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null
+}

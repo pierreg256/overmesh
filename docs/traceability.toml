@@ -102,6 +102,18 @@ section = "decisions"
 title = "Use physical content HEADs for read authorization"
 weight = 110
 
+[[document]]
+path = "docs/adr/0012-consolidate-gateway-owned-commit-state.md"
+section = "decisions"
+title = "Consolidate gateway-owned commit state into one document"
+weight = 120
+
+[[document]]
+path = "docs/adr/0013-metadata-reads-stay-at-two-replicas.md"
+section = "decisions"
+title = "Metadata reads stay at two replicas"
+weight = 130
+
 # ---------------------------------------------------------------------------
 # Authored documents deliberately not published.
 # ---------------------------------------------------------------------------
@@ -182,6 +194,80 @@ pattern = "{} declarative"
 document = "docs/WHY_OVERMESH.md"
 metric = "active_milestone"
 pattern = "milestone {}"
+
+[[assertion]]
+document = "site/config.toml"
+metric = "project_version"
+pattern = 'project_version = "{}"'
+
+[[assertion]]
+document = "site/config.toml"
+metric = "active_milestone_name"
+pattern = 'active_milestone = "{}"'
+
+[[assertion]]
+document = "docs/WHY_OVERMESH.md"
+metric = "performance_case_p50_row"
+source = "harness/artifacts/live/0.11.0/performance-v011-v4-evidence.json"
+case = "put_blob-1kib-c1"
+label = "`Put Blob`, 1 KiB, c1"
+pattern = "| {} |"
+
+[[assertion]]
+document = "docs/WHY_OVERMESH.md"
+metric = "performance_case_p50_row"
+source = "harness/artifacts/live/0.11.0/performance-v011-v4-evidence.json"
+case = "put_blob-1mib-c1"
+label = "`Put Blob`, 1 MiB, c1"
+pattern = "| {} |"
+
+[[assertion]]
+document = "docs/WHY_OVERMESH.md"
+metric = "performance_case_p50_row"
+source = "harness/artifacts/live/0.11.0/performance-v011-v4-evidence.json"
+case = "put_blob-16mib-c1"
+label = "`Put Blob`, 16 MiB, c1"
+pattern = "| {} |"
+
+[[assertion]]
+document = "docs/WHY_OVERMESH.md"
+metric = "performance_case_p50_row"
+source = "harness/artifacts/live/0.11.0/performance-v011-v4-evidence.json"
+case = "delete_blob-1kib-c1"
+label = "`Delete Blob`, 1 KiB, c1"
+pattern = "| {} |"
+
+[[assertion]]
+document = "docs/WHY_OVERMESH.md"
+metric = "performance_case_p50_row"
+source = "harness/artifacts/live/0.11.0/performance-v011-v4-evidence.json"
+case = "get_blob-1mib-c1"
+label = "`Get Blob`, 1 MiB, c1"
+pattern = "| {} |"
+
+[[assertion]]
+document = "docs/WHY_OVERMESH.md"
+metric = "performance_case_p50_row"
+source = "harness/artifacts/live/0.11.0/performance-v011-v4-evidence.json"
+case = "get_blob-16mib-c1"
+label = "`Get Blob`, 16 MiB, c1"
+pattern = "| {} |"
+
+[[assertion]]
+document = "docs/WHY_OVERMESH.md"
+metric = "performance_case_p50_row"
+source = "harness/artifacts/live/0.11.0/performance-v011-v4-evidence.json"
+case = "get_range-16mib-c1"
+label = "`Range Get`, 1 MiB of 16 MiB, c1"
+pattern = "| {} |"
+
+[[assertion]]
+document = "docs/WHY_OVERMESH.md"
+metric = "performance_case_p50_row"
+source = "harness/artifacts/live/0.11.0/performance-v011-v4-evidence.json"
+case = "head_blob-1mib-c1"
+label = "`Head Blob`, 1 MiB, c1"
+pattern = "| {} |"
 
 # ---------------------------------------------------------------------------
 # Verified-by citations that look like references but are not.

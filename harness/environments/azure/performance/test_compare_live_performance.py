@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
-from compare_live_performance import build_comparison
+from compare_live_performance import build_comparison, main
 
 
 def campaign(run_id: str, latency_ratio: float, throughput_ratio: float) -> dict:
@@ -57,6 +61,73 @@ def campaign(run_id: str, latency_ratio: float, throughput_ratio: float) -> dict
 
 
 class CompareLivePerformanceTests(unittest.TestCase):
+    def test_invalid_case_fails_campaign_without_dropping_evidence(self) -> None:
+        current = campaign("invalid", 2.0, 0.5)
+        current["contract"]["baselineEligible"] = False
+        current["cases"][1]["validity"] = {
+            "status": "invalid",
+            "mandatory": True,
+            "expectedRuns": 3,
+            "completedRuns": 2,
+            "failures": [{"reason": "client-operation-failed"}],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            current_path = Path(directory) / "current.json"
+            output_path = Path(directory) / "output.json"
+            current_path.write_text(json.dumps(current), encoding="utf-8")
+            with patch(
+                "sys.argv",
+                [
+                    "compare_live_performance.py",
+                    "--current",
+                    str(current_path),
+                    "--output",
+                    str(output_path),
+                ],
+            ):
+                self.assertEqual(main(), 1)
+
+            result = json.loads(output_path.read_text(encoding="utf-8"))
+            comparison = result["historicalComparison"]
+            self.assertEqual(comparison["status"], "invalid-cases")
+            self.assertEqual(
+                comparison["nonRegression"]["gateStatus"], "failed"
+            )
+            self.assertEqual(
+                comparison["nonRegression"]["blockingRegressions"],
+                ["get-1k-c1"],
+            )
+
+    def test_non_baseline_contract_never_establishes_a_baseline(self) -> None:
+        current = campaign("diagnostic", 2.0, 0.5)
+        current["contract"]["baselineEligible"] = False
+        with tempfile.TemporaryDirectory() as directory:
+            current_path = Path(directory) / "current.json"
+            output_path = Path(directory) / "output.json"
+            current_path.write_text(json.dumps(current), encoding="utf-8")
+            with patch(
+                "sys.argv",
+                [
+                    "compare_live_performance.py",
+                    "--current",
+                    str(current_path),
+                    "--output",
+                    str(output_path),
+                ],
+            ):
+                self.assertEqual(main(), 0)
+
+            result = json.loads(output_path.read_text(encoding="utf-8"))
+            comparison = result["historicalComparison"]
+            self.assertEqual(
+                comparison["status"],
+                "diagnostic-not-baseline",
+            )
+            self.assertEqual(
+                comparison["nonRegression"]["gateStatus"],
+                "diagnostic-only",
+            )
+
     def test_comparison_tracks_overhead_and_server_metric_change(self) -> None:
         baseline = campaign("baseline", 2.0, 0.5)
         current = campaign("current", 3.0, 0.4)
@@ -143,6 +214,14 @@ class CompareLivePerformanceTests(unittest.TestCase):
             },
         )
 
+        for document in (baseline, current):
+            document["contract"]["p50GatePolicy"] = "signal-only"
+        comparison = build_comparison(current, baseline)
+        p50 = comparison["cases"][0]["nonRegression"]["p50Latency"]
+        self.assertEqual(p50["classification"], "signal")
+        self.assertEqual(p50["signalReasons"], ["diagnostic-policy"])
+        self.assertEqual(p50["status"], "not-gated")
+
     def test_latency_change_does_not_fail_the_blocking_gate(self) -> None:
         baseline = campaign("baseline", 2.0, 0.5)
         current = campaign("current", 4.0, 0.4)
@@ -154,6 +233,35 @@ class CompareLivePerformanceTests(unittest.TestCase):
         current = campaign("current", 2.0, 0.5)
         current["contract"]["sha256"] = "changed"
         with self.assertRaisesRegex(ValueError, "contract hashes"):
+            build_comparison(current, baseline)
+
+    def test_materialized_median_p50_must_match_per_run_values(self) -> None:
+        baseline = campaign("baseline", 2.0, 0.5)
+        current = campaign("current", 2.0, 0.5)
+        for document in (baseline, current):
+            document["contract"]["schemaVersion"] = 5
+            document["contract"]["nonRegression"] = {
+                "backendRequestsPerOperation": "blocking",
+                "requestsPerEntryScanned": "blocking",
+                "p50Latency": "derived",
+                "p50StabilitySpreadRatioThreshold": 1.1,
+                "p50RegressionRatioThreshold": 1.1,
+                "p95Latency": "informational",
+            }
+            for case in document["cases"]:
+                case["operation"] = "list_blobs_flat"
+                case["repeatability"] = {
+                    "p50MsPerRun": [10.0, 12.0, 11.0],
+                    "medianP50Ms": 11.0,
+                    "p50Classification": "blocking",
+                }
+            document["cases"][1]["listingBudget"] = {
+                "requestsPerEntryScanned": 4.0
+            }
+
+        build_comparison(current, baseline)
+        current["cases"][1]["repeatability"]["medianP50Ms"] = 11.5
+        with self.assertRaisesRegex(ValueError, "inconsistent medianP50Ms"):
             build_comparison(current, baseline)
 
     def test_client_observed_campaign_is_rejected(self) -> None:
@@ -256,6 +364,38 @@ class CompareLivePerformanceTests(unittest.TestCase):
                 "totalCases": 1,
                 "signalCases": [],
             },
+        )
+
+    def test_v51_listing_gates_requests_per_entry_validated(self) -> None:
+        baseline = campaign("baseline", 2.0, 0.5)
+        current = campaign("current", 2.0, 0.5)
+        for document, per_entry in ((baseline, 4.0), (current, 4.25)):
+            document["contract"]["schemaVersion"] = 5
+            document["contract"]["nonRegression"] = {
+                "backendRequestsPerOperation": "blocking",
+                "requestsPerEntryValidated": "blocking",
+                "p50Latency": "derived",
+                "p50StabilitySpreadRatioThreshold": 1.1,
+                "p50RegressionRatioThreshold": 1.1,
+                "p95Latency": "informational",
+            }
+            for case in document["cases"]:
+                case["operation"] = "list_blobs_flat"
+                case["repeatability"] = {
+                    "p50MsPerRun": [10.0, 10.1, 10.2],
+                    "p50Classification": "blocking",
+                }
+            document["cases"][1]["listingBudget"] = {
+                "requestsPerEntryValidated": per_entry
+            }
+        comparison = build_comparison(current, baseline)
+        gate = comparison["cases"][0]["nonRegression"][
+            "requestsPerEntryValidated"
+        ]
+        self.assertEqual(gate["status"], "failed")
+        self.assertEqual(
+            comparison["nonRegression"]["blockingRegressions"],
+            ["get-1k-c1"],
         )
 
 

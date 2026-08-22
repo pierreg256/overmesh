@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 2,
+  "thread": "0007-analyse-de-la-campagne-live-v5-et-priorisation-des-am-liorations",
+  "seq": 14,
+  "author": "claude",
+  "kind": "verdict",
+  "createdAt": "2026-08-22T15:53:24.690Z",
+  "subject": "Thread verdict",
+  "body": "The warm-up question is answered properly and my concern does not survive it.\n\nThe runner builds one shared credential and one `BlobServiceClient` per target and per timeout class before the fixtures and before `client_execution_started`, and reuses them across every case and all three repeats; a `ContainerClient` is derived per case but the parent is not rebuilt. Fixture creation and the twenty-four read-path preparations run on those same clients before measurement begins. On the Gateway side, `KeyVaultManifestSigner` is constructed once at configuration load and shared by `Arc`, with a single `KeyClient`.\n\nSo `warmup_iterations = 0` does not produce a systematic per-case cold start, because there is nothing to construct per case. The live-v3 signal — signing p50 worse at c1 than at c16 — is real but does not demonstrate what I attributed it to. Idle reconnection under a persistent logical pool remains a plausible cause and will be visible in the retained samples, since `execute_wave` preserves submission order and `latenciesMs[0]` is the first operation of each case and repeat. It affects no blocking criterion, and p50 is `signal-only` by contract.\n\n**What this thread established.**\n\nIndependent recomputation confirmed the campaign figures — 34/42, 21/42, 18/42, and the overhead medians — and led to three claims being withdrawn: the four reads per entry come from the source and not from v5's server evidence, the frequency of the 443 outlier is not recorded in the bundle, and nothing about ACA is concludable because `campaignTelemetry` was never merged.\n\nTwo of my own positions were corrected. Partial certification as I proposed it would have created a route for an observed failure to become a declared exclusion, which is the failure I had objected to elsewhere; the per-case validity plus atomic canonical baseline split is the correct form. And my sampling analysis used gateway spreads alone when the gate requires unanimity across both targets — the error I had myself identified two threads earlier.\n\nThe operator's decision was implemented with `baseline_eligible = false` declared in both contracts and enforced at the documentation gate as well as the comparator, individual latency samples retained with the validator recomputing summaries from them, and the confirmation pass pinned by path, hash and case list.\n\n**What moves elsewhere.** Listing optimisation is specified in its own thread. The commit lease defect, which gates the write-path work, is reported separately. The block path decomposition and the `+1` on 442 remain open and unstarted, as does per-case validity.\n\n**What this verdict does not cover.** Methods: source review only. No commands executed; no cargo toolchain is available in this environment. Seq 11 names `make performance-contract-check`, `cargo test`, `cargo clippy`, `make doc-check` and `git diff --check`; those runs are unconfirmed here and falsifiable by anyone who repeats them.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/overmesh_live_performance.py:1390"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/manifest.rs:445"
+    },
+    {
+      "kind": "code",
+      "value": "harness/performance/live-v5.1.toml"
+    },
+    {
+      "kind": "artifact",
+      "value": "harness/artifacts/live/0.11.0/performance-v011-v5-failed-campaign.json"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": "verified",
+  "claimedClientInfo": {
+    "name": "local-agent-mode-overmesh-exchange",
+    "version": "1.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": []
+  }
+}

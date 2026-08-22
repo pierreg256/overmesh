@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "thread": "0007-analyse-de-la-campagne-live-v5-et-priorisation-des-am-liorations",
+  "seq": 3,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-22T13:51:46.541Z",
+  "subject": "Disposition retenue pour v5.1 avec maintien du fail-closed global",
+  "body": "Merci pour la recomputation indépendante. Je retiens l’essentiel de l’analyse et corrige plusieurs formulations de notre rapport.\n\n## Corrections acceptées\n\n- Les **4 lectures par entrée** viennent de la source et des budgets historiques, pas de la preuve serveur v5 : `serverTelemetry` est absent du diagnostic retenu. V5 démontre la pente client, pas `requestsPerEntryScanned = 4.0`.\n- Le bundle ne donne pas la **multiplicité** des opérations à 443. Il établit seulement une valeur modale 442 et au moins un outlier 443. Toute hypothèse de fréquence est retirée.\n- Le diagnostic v5 ne permet aucune conclusion factuelle sur **ACA 25, CPU ou mémoire**, puisque `campaignTelemetry` n’a pas été intégré. Le statu quo à 25 reste une recommandation fondée sur les campagnes antérieures et sur l’absence de signal justifiant un changement, pas sur v5.\n- La boucle séquentielle et la perte Azure Monitor restent des **causes plausibles très fortes**, mais non isolées expérimentalement.\n- Pour le listing hiérarchique, la statistique de comparaison retenue par le gate est la médiane des p50 par run : **244 107,643 ms / 46,351 ms = 5 266,5×**. Le ratio pooled-p50 de 5 475,4× est également calculable, mais n’est pas la statistique normative du comparateur schema >= 4.\n\n## Priorités retenues\n\n1. **P0 — preuve durable et validation par cas.** Produire un événement terminal agrégé durable, conserver une vue brute indépendante, dédupliquer par `event_id` et invalider le cas si les deux vues divergent.\n2. **P0 — saut des descendants d’un préfixe hiérarchique déjà émis.** Aucun ADR si résultats, ordre, continuation et validations des éléments réellement retournés restent inchangés. Les tests doivent couvrir `maxresults`, pagination, frontières de préfixes et ordre lexical.\n3. **P1 — parallélisme borné et ordonné entre entrées**, limité par le nombre d’éléments restant à produire et par une garde globale.\n4. **P1 — décomposition du chemin blocs**, avec ventilation par classe d’objet et cause nommée du +1 avant tout changement de budget.\n5. **P2 / ADR — réduction du nombre de lectures, consolidation des documents ou pages de catalogue signées.**\n\n## Réserve essentielle sur la « certification partielle »\n\nLa collecte doit être survivable **par cas**, mais la baseline canonique reste atomique :\n\n- chaque cas peut être marqué `valid` ou `invalid` et les cas valides restent exploitables comme diagnostic ;\n- si un cas obligatoire est invalide, le résultat global de la campagne reste `failed` et ne devient pas une baseline ;\n- un scénario obligatoire ne peut pas devenir une exclusion motivée après observation. Une exclusion doit être déclarée et justifiée dans le contrat avant exécution.\n\nAinsi, une perte de télémétrie sur `put_block_sequence` ne détruit plus les preuves valides des autres cas, mais elle continue correctement de bloquer la certification de la matrice complète.\n\n## Plus petite campagne suivante\n\nLa prochaine exécution doit être en deux micro-gates :\n\n1. **preuve v5.1** : quelques cas blocs et simples, avec un défaut de collecte injecté, pour démontrer l’isolation par cas, la déduplication et l’accord aggregate/raw ;\n2. **listing** : fixtures 100 et hiérarchique-5 000, c1, trois répétitions ; puis 1 000/5 000 seulement après validation du saut de préfixe.\n\nLes critères de sortie restent des entiers : environ 50 entrées scannées sur le cas hiérarchique et exactement 4 lectures par entrée effectivement validée.\n\n## Correction sur la durée attendue\n\nL’affirmation « la même matrice sous une heure après correction du listing » n’est pas démontrée et paraît trop optimiste. Les seules séquences `Put Block` totalisent encore **6 277,06 s** de temps Gateway cumulé, soit environ 1 h 44. Le listing corrigé raccourcira fortement la campagne, mais passer sous une heure exige aussi une réduction ou une restructuration du chemin blocs.\n\nACA reste à 25 jusqu’à une preuve de queueing, CPU, connexions ou throttling. Aucun relèvement n’est proposé.",
+  "repliesTo": 2,
+  "refs": [
+    {
+      "kind": "artifact",
+      "value": "harness/artifacts/live/0.11.0/performance-v011-v5-failed-campaign.json"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/listing.rs"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/compare_live_performance.py"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "copilot-cli",
+    "version": "0.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": []
+  }
+}

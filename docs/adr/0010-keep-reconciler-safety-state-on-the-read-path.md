@@ -5,6 +5,26 @@
 - **Milestone:** 0.10.1
 - **Supersedes:** —
 - **Superseded by:** —
+- **Amended by:** ADR-0012
+
+> **Amendment, 2026-08-22.** This record forbids removing, caching or
+> aggregating the quarantine and compaction-checkpoint reads without a
+> replacement decision. Reading each of them **once per request instead of
+> twice** is not covered by that prohibition and does not require one.
+>
+> The write path currently loads both at the start of a commit and again
+> before publishing the recovery floor. Once the commit lease is canonical —
+> taken on the deterministic primary by every component, as ADR-0012 requires —
+> the Reconciler cannot modify either document inside a commit, so the second
+> read observes state that cannot have changed.
+>
+> There is no time-to-live, no staleness window and no invalidation: the read
+> is bounded by a lease the Gateway holds for exactly the duration in which the
+> value is used. The four replicated reads this record protects remain four,
+> once per replica, on every metadata preparation path.
+>
+> The prohibition still applies in full to any scheme that carries a value
+> **between** requests.
 
 ## Context
 

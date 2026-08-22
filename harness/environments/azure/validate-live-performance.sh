@@ -20,7 +20,7 @@ required=(
 )
 for name in "${required[@]}"; do
   if [[ -z "${!name:-}" ]]; then
-    echo "$name is required for the live performance baseline." >&2
+    echo "$name is required for the live performance campaign." >&2
     exit 2
   fi
 done
@@ -30,7 +30,7 @@ if [[ "$OVERMESH_LIVE_PERFORMANCE_ISOLATED_ENVIRONMENT" != "true" ]]; then
 fi
 
 if [[ "$(uname -s)" != "Linux" ]]; then
-  echo "The live performance baseline only supports Linux hosts." >&2
+  echo "The live performance campaign only supports Linux hosts." >&2
   exit 2
 fi
 
@@ -43,7 +43,8 @@ validator="$script_dir/performance/validate_performance_evidence.py"
 requirements="$script_dir/performance/requirements.txt"
 builder="$script_dir/build-live-evidence.py"
 signer="$script_dir/sign-live-evidence.sh"
-contract=${OVERMESH_LIVE_PERFORMANCE_CONTRACT:-"$repo_root/harness/performance/live-v5.toml"}
+contract=${OVERMESH_LIVE_PERFORMANCE_CONTRACT:-"$repo_root/harness/performance/live-v5.1.toml"}
+contract_id=$(basename "$contract" .toml)
 install_root=${OVERMESH_LIVE_PERFORMANCE_ROOT:-/opt/overmesh-live/performance}
 export AZURE_EXTENSION_DIR=${OVERMESH_LIVE_PERFORMANCE_AZURE_EXTENSION_DIR:-"$install_root/az-extensions"}
 log_analytics_extension_version=${OVERMESH_LIVE_PERFORMANCE_LOG_ANALYTICS_EXTENSION_VERSION:-1.0.0b1}
@@ -56,7 +57,7 @@ work_dir=${OVERMESH_LIVE_PERFORMANCE_WORK_DIR:-"$repo_root/.harness/live-perform
 raw_output=${OVERMESH_LIVE_PERFORMANCE_RAW_EVIDENCE_PATH:-"$work_dir/raw-performance.json"}
 client_output="$work_dir/client-performance.json"
 evidence_dir=${OVERMESH_LIVE_PERFORMANCE_EVIDENCE_DIRECTORY:-"$work_dir/signed"}
-bundle_name=${OVERMESH_LIVE_PERFORMANCE_BUNDLE_NAME:-performance-v011-v4-evidence.json}
+bundle_name=${OVERMESH_LIVE_PERFORMANCE_BUNDLE_NAME:-"performance-v011-${contract_id#live-}-evidence.json"}
 evidence="$evidence_dir/$bundle_name"
 signature="$evidence_dir/${bundle_name%.json}.sig.json"
 checksums="$evidence_dir/SHA256SUMS"
@@ -157,18 +158,15 @@ if [[ -n "${OVERMESH_LIVE_PERFORMANCE_BASELINE_EVIDENCE:-}" ]]; then
     --baseline "$OVERMESH_LIVE_PERFORMANCE_BASELINE_EVIDENCE"
   )
 fi
-"$venv/bin/python" "$comparator" "${comparison_arguments[@]}"
+comparison_status=0
+"$venv/bin/python" "$comparator" "${comparison_arguments[@]}" ||
+  comparison_status=$?
 
 python3 "$builder" \
   --raw-bundle "$raw_output" \
   --output-directory "$evidence_dir" \
   --bundle-name "$(basename "$evidence")" \
   --public-key "$OVERMESH_LIVE_PERFORMANCE_PUBLIC_KEY"
-
-"$venv/bin/python" "$validator" \
-  --evidence "$evidence" \
-  --contract "$contract" \
-  --canonical
 
 export OVERMESH_LIVE_EVIDENCE_PATH=$evidence
 export OVERMESH_LIVE_EVIDENCE_SIGNATURE_PATH=$signature
@@ -190,3 +188,14 @@ output.write_text("\n".join(entries) + "\n", encoding="utf-8")
 PY
 
 echo "Signed live performance evidence: $evidence_dir"
+
+validation_status=0
+"$venv/bin/python" "$validator" \
+  --evidence "$evidence" \
+  --contract "$contract" \
+  --canonical ||
+  validation_status=$?
+if ((validation_status != 0)); then
+  exit "$validation_status"
+fi
+exit "$comparison_status"

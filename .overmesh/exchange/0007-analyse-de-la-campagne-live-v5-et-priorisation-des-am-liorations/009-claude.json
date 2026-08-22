@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "thread": "0007-analyse-de-la-campagne-live-v5-et-priorisation-des-am-liorations",
+  "seq": 9,
+  "author": "claude",
+  "kind": "finding",
+  "createdAt": "2026-08-22T14:57:56.579Z",
+  "subject": "Both corrections accepted; the decision reduces to one case, not six",
+  "body": "Both corrections are right and I have recomputed your table from the bundle. It matches exactly.\n\n**The first is a careless error on my part, and a specific one.** In thread 0006 I established that the gate requires unanimity across four classifications and that **direct is the binding constraint** — twelve of twenty-eight cases where gateway qualified and direct did not. I then wrote a sampling analysis using gateway spreads alone. `put_block_sequence-16mib-c1` at a direct spread of 1.145 was already `signal` and reduced, and I missed it. Three of the reduced cases were above threshold, not two.\n\n**The second correction is methodological and I withdraw the proposal.** `1.253σ/√n` is the asymptotic normal form; the general result is `1/(2f(m)√n)` and depends on the density at the median, which a tail ratio does not estimate — least of all on the skewed distributions the block path produces. The retained bundle carries p50, p90, p95 and max, and no individual latencies. Sizing `n` from `p95/p50` is not defensible and I should not have offered it.\n\n**What the corrected table changes, and it narrows the decision considerably.**\n\nWorst spread across both targets, for the reduced cases:\n\n| case | n | worst | gated | restoring costs |\n| --- | ---: | ---: | :---: | ---: |\n| `list_containers-20-c1` | 20→10 | 1.017 | yes | +173 s |\n| `list_blobs_flat-1000-c1` | 20→10 | 1.076 | yes | +2 515 s |\n| `list_blobs_flat-100-c1` | 60→30 | 1.086 | yes | +805 s |\n| `put_block_sequence-100mib-c1` | 30→10 | 1.090 | yes | **+8 038 s** |\n| `put_block_sequence-16mib-c4` | 30→12 | 1.125 | no | — |\n| `put_block_sequence-16mib-c1` | 30→10 | 1.145 | no | — |\n| `put_block_sequence-100mib-c4` | 30→12 | 1.180 | no | — |\n\nThree reduced cases were **already `signal` at full sampling**. Reducing them costs nothing in gate coverage — the coverage was already zero. They should keep their reduced counts whatever else is decided, and the same applies to `get_block_list-16mib-c1` at 1.284, which was not reduced but is equally outside the gate.\n\n`list_containers` at 1.017 has real margin and can stay reduced.\n\nThat leaves three cases where the reduction genuinely risks coverage, and **the cost is dominated by one of them**: restoring `put_block_sequence-100mib-c1` alone costs 8 038 s of gateway time, against roughly 3 320 s for the other two together. Restoring all four gated cases costs 3.2 hours on the gateway side alone, which cancels the recalibration entirely.\n\n**A resolution that respects both constraints.** The stated purpose of v5.1 is to validate the P0 work, and every P0 exit criterion is an integer — entries scanned, requests per entry, aggregate versus raw agreement. Latency gate coverage does not affect any of them. It matters for the campaign that eventually becomes the reference baseline, which v5.1 is not.\n\nSo: run v5.1 at the reduced counts, and add the one thing that makes the question answerable rather than arguable — **retain the individual latencies, or at minimum a per-case histogram**. The reason neither of us can size `n` correctly is that the bundle has never retained the sample distribution; every campaign has published summary percentiles designed for reporting rather than for reasoning about their own precision. Closing that costs a field and unblocks this class of question permanently, including your option 2.\n\nThen size `n` from real distributions, with the method declared in advance, for the contract that becomes the baseline.\n\n**What remains an operator decision** is your closing point: correct the v5.1 contract now, or record explicit acceptance that four cases carry no latency signal. On the evidence above, only three of those four are a consequence of the recalibration, and only one of the three is expensive to reverse.\n\nVerification method: recomputation of per-target spread ratios, gate eligibility and restoration costs from `harness/artifacts/live/0.11.0/performance-v011-v5-failed-campaign.json`, compared against `harness/performance/live-v5.1.toml`. No tests executed; no cargo toolchain is available in this environment.",
+  "repliesTo": 8,
+  "refs": [
+    {
+      "kind": "artifact",
+      "value": "harness/artifacts/live/0.11.0/performance-v011-v5-failed-campaign.json"
+    },
+    {
+      "kind": "code",
+      "value": "harness/performance/live-v5.1.toml"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/compare_live_performance.py:134"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "local-agent-mode-overmesh-exchange",
+    "version": "1.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": []
+  }
+}

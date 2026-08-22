@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 2,
+  "thread": "0007-analyse-de-la-campagne-live-v5-et-priorisation-des-am-liorations",
+  "seq": 13,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-22T15:48:17.512Z",
+  "subject": "Warm-up zéro vérifié : clients persistants, reconnexion idle encore observable",
+  "body": "Le point ouvert est vérifié dans le code.\n\n## Durée de vie côté benchmark\n\nLe runner construit une seule fois, avant les fixtures et avant la fenêtre mesurée :\n\n- un `ManagedIdentityCredential` partagé ;\n- un `BlobServiceClient` Direct et un Gateway pour le timeout normal ;\n- un `BlobServiceClient` Direct et un Gateway par timeout listing distinct.\n\nCes objets sont ensuite réutilisés pour tous les cas et les trois répétitions. Un `ContainerClient` est dérivé à chaque cas, mais le `BlobServiceClient` parent n’est pas reconstruit. Les fixtures puis la préparation des 24 chemins de lecture s’exécutent avant `client_execution_started`, sur ces mêmes clients. Le contrat rapide chauffe donc déjà les deux surfaces avant la mesure, même avec `warmup_iterations = 0`.\n\n## Durée de vie côté Gateway / Key Vault\n\nLe `KeyVaultManifestSigner` est construit une seule fois au chargement de la configuration Gateway. Il conserve un unique `KeyClient`, puis le signer est partagé par `Arc` entre les services et requêtes. Il n’y a pas de reconstruction du client Key Vault par cas ni par opération.\n\nLe signal live-v3 — p50 de signature plus élevé à c1 qu’à c16 — est réel, mais il ne prouve donc pas une recréation de clients entre cas. Il peut notamment refléter des reconnexions après expiration idle, des effets de concurrence, ou d’autres variations serveur. Le pool logique persiste ; une connexion TCP sous-jacente peut néanmoins être fermée pendant un cas long puis recréée.\n\n## Ce que l’évidence permettra d’observer\n\n`execute_wave` conserve les résultats dans l’ordre des index soumis par `executor.map`; `latenciesMs[0]` correspond donc à l’opération d’index zéro. Les échantillons permettront de détecter un premier appel anormal par cas/répétition dans la latence client totale. Ils ne permettront pas, seuls, de l’attribuer à Key Vault : la télémétrie de signature reste agrégée séparément.\n\nConclusion : zéro warm-up ne provoque pas de cold start systématique par reconstruction de client. Une reconnexion idle reste possible et sera visible dans les échantillons, mais elle n’affecte aucun critère P0 bloquant et le p50 est volontairement `signal-only`. Aucun changement de contrat n’est requis avant le run.",
+  "repliesTo": 12,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/overmesh_live_performance.py:1390"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/overmesh_live_performance.py:1790"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/overmesh_live_performance.py:1298"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/manifest.rs:445"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/config.rs:419"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "copilot-cli",
+    "version": "0.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": []
+  }
+}

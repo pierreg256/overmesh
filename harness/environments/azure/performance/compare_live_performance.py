@@ -45,7 +45,10 @@ def p50_signal_reasons(
     current_direct: dict[str, Any],
     baseline_gateway: dict[str, Any] | None = None,
     baseline_direct: dict[str, Any] | None = None,
+    p50_gate_policy: str | None = None,
 ) -> list[str]:
+    if p50_gate_policy == "signal-only":
+        return ["diagnostic-policy"]
     campaigns = (
         (
             ("baseline", baseline_gateway, baseline_direct),
@@ -67,6 +70,7 @@ def p50_gate_coverage(
     current_cases: dict[tuple[str, str], dict[str, Any]],
     case_ids: list[str],
     baseline_cases: dict[tuple[str, str], dict[str, Any]] | None = None,
+    p50_gate_policy: str | None = None,
 ) -> dict[str, Any]:
     signal_cases = []
     for case_id in sorted(case_ids):
@@ -83,6 +87,7 @@ def p50_gate_coverage(
                 if baseline_cases is not None
                 else None
             ),
+            p50_gate_policy,
         )
         if reasons:
             signal_cases.append({"case": case_id, "reasons": reasons})
@@ -91,6 +96,22 @@ def p50_gate_coverage(
         "totalCases": len(case_ids),
         "signalCases": signal_cases,
     }
+
+
+def normative_p50(case: dict[str, Any], schema_version: int) -> float:
+    if schema_version < 4:
+        return float(case["metrics"]["p50Ms"])
+    repeatability = case["repeatability"]
+    calculated = round(
+        float(statistics.median(repeatability["p50MsPerRun"])),
+        3,
+    )
+    materialized = repeatability.get("medianP50Ms")
+    if materialized is not None and float(materialized) != calculated:
+        raise ValueError(
+            f"case {case['id']} has inconsistent medianP50Ms"
+        )
+    return calculated if materialized is None else float(materialized)
 
 
 def build_comparison(
@@ -107,6 +128,7 @@ def build_comparison(
     if schema_version != baseline["contract"]["schemaVersion"]:
         raise ValueError("performance contract schema versions do not match")
     policy = current["contract"].get("nonRegression")
+    p50_gate_policy = current["contract"].get("p50GatePolicy")
     if policy != baseline["contract"].get("nonRegression"):
         raise ValueError("performance non-regression policies do not match")
     percentiles = (
@@ -149,17 +171,19 @@ def build_comparison(
             schema_version == 5
             and current_gateway["operation"].startswith("list_")
         )
+        listing_metric = (
+            "requestsPerEntryValidated"
+            if "requestsPerEntryValidated"
+            in current_gateway.get("listingBudget", {})
+            else "requestsPerEntryScanned"
+        )
         current_listing_requests = (
-            current_gateway.get("listingBudget", {}).get(
-                "requestsPerEntryScanned"
-            )
+            current_gateway.get("listingBudget", {}).get(listing_metric)
             if is_listing
             else None
         )
         baseline_listing_requests = (
-            baseline_gateway.get("listingBudget", {}).get(
-                "requestsPerEntryScanned"
-            )
+            baseline_gateway.get("listingBudget", {}).get(listing_metric)
             if is_listing
             else None
         )
@@ -187,6 +211,7 @@ def build_comparison(
         p50_classification = (
             "blocking"
             if schema_version >= 4
+            and p50_gate_policy != "signal-only"
             and current_gateway["repeatability"]["p50Classification"]
             == "blocking"
             and baseline_gateway["repeatability"]["p50Classification"]
@@ -207,24 +232,13 @@ def build_comparison(
                 current_direct,
                 baseline_gateway,
                 baseline_direct,
+                p50_gate_policy,
             )
             if schema_version >= 5
             else []
         )
-        baseline_p50 = (
-            statistics.median(
-                baseline_gateway["repeatability"]["p50MsPerRun"]
-            )
-            if schema_version >= 4
-            else baseline_gateway["metrics"]["p50Ms"]
-        )
-        current_p50 = (
-            statistics.median(
-                current_gateway["repeatability"]["p50MsPerRun"]
-            )
-            if schema_version >= 4
-            else current_gateway["metrics"]["p50Ms"]
-        )
+        baseline_p50 = normative_p50(baseline_gateway, schema_version)
+        current_p50 = normative_p50(current_gateway, schema_version)
         baseline_p50_overhead = baseline_overhead[
             "gatewayToDirectLatencyRatio"
         ]["p50Ms"]
@@ -232,11 +246,13 @@ def build_comparison(
             "gatewayToDirectLatencyRatio"
         ]["p50Ms"]
         if schema_version >= 4:
-            baseline_direct_p50 = statistics.median(
-                baseline_direct["repeatability"]["p50MsPerRun"]
+            baseline_direct_p50 = normative_p50(
+                baseline_direct,
+                schema_version,
             )
-            current_direct_p50 = statistics.median(
-                current_direct["repeatability"]["p50MsPerRun"]
+            current_direct_p50 = normative_p50(
+                current_direct,
+                schema_version,
             )
             baseline_p50_overhead = baseline_p50 / baseline_direct_p50
             current_p50_overhead = current_p50 / current_direct_p50
@@ -269,7 +285,7 @@ def build_comparison(
                 ),
                 "serverTelemetryChange": {
                     (
-                        "requestsPerEntryScanned"
+                        listing_metric
                         if is_listing
                         else "backendRequestsPerOperation"
                     ): ratio(
@@ -293,13 +309,13 @@ def build_comparison(
                     {
                         "nonRegression": {
                             (
-                                "requestsPerEntryScanned"
+                                listing_metric
                                 if is_listing
                                 else "backendRequestsPerOperation"
                             ): {
                                 "classification": policy[
                                     (
-                                        "requestsPerEntryScanned"
+                                        listing_metric
                                         if is_listing
                                         else "backendRequestsPerOperation"
                                     )
@@ -399,6 +415,10 @@ def build_comparison(
             .get("status")
             == "failed"
             or result.get("nonRegression", {})
+            .get("requestsPerEntryValidated", {})
+            .get("status")
+            == "failed"
+            or result.get("nonRegression", {})
             .get("p50Latency", {})
             .get("status")
             == "failed"
@@ -440,6 +460,7 @@ def build_comparison(
                                 current_cases,
                                 sorted(current_comparisons),
                                 baseline_cases,
+                                p50_gate_policy,
                             )
                         }
                         if schema_version >= 5
@@ -463,7 +484,31 @@ def main() -> int:
 
     current = json.loads(arguments.current.read_text(encoding="utf-8"))
     require_isolated_api(current, "current evidence")
-    if arguments.baseline is None:
+    baseline_eligible = current["contract"].get("baselineEligible", True)
+    p50_gate_policy = current["contract"].get("p50GatePolicy")
+    invalid_cases = sorted(
+        {
+            case["id"]
+            for case in current["cases"]
+            if case.get("validity", {}).get("status", "valid") != "valid"
+        }
+    )
+    if invalid_cases:
+        current["historicalComparison"] = {
+            "status": "invalid-cases",
+            "apiVersion": "performance.overmesh.io/comparison/v1",
+            "contractSha256": current["contract"]["sha256"],
+            "current": {
+                "runId": current["campaign"]["runId"],
+                "commit": current["campaign"]["commit"],
+            },
+            "nonRegression": {
+                "policy": current["contract"].get("nonRegression"),
+                "gateStatus": "failed",
+                "blockingRegressions": invalid_cases,
+            },
+        }
+    elif arguments.baseline is None:
         policy = current["contract"].get("nonRegression")
         schema_version = current["contract"]["schemaVersion"]
         current_cases = {
@@ -475,7 +520,11 @@ def main() -> int:
             if target == "gateway"
         )
         current["historicalComparison"] = {
-            "status": "baseline-established",
+            "status": (
+                "baseline-established"
+                if baseline_eligible
+                else "diagnostic-not-baseline"
+            ),
             "apiVersion": "performance.overmesh.io/comparison/v1",
             "contractSha256": current["contract"]["sha256"],
             "current": {
@@ -486,13 +535,18 @@ def main() -> int:
                 {
                     "nonRegression": {
                         "policy": policy,
-                        "gateStatus": "baseline-established",
+                        "gateStatus": (
+                            "baseline-established"
+                            if baseline_eligible
+                            else "diagnostic-only"
+                        ),
                         "blockingRegressions": [],
                         **(
                             {
                                 "p50LatencyGateCoverage": p50_gate_coverage(
                                     current_cases,
                                     case_ids,
+                                    p50_gate_policy=p50_gate_policy,
                                 )
                             }
                             if schema_version >= 5
@@ -508,6 +562,10 @@ def main() -> int:
         baseline = json.loads(arguments.baseline.read_text(encoding="utf-8"))
         require_isolated_api(baseline, "baseline evidence")
         current["historicalComparison"] = build_comparison(current, baseline)
+        if not baseline_eligible:
+            current["historicalComparison"]["status"] = (
+                "diagnostic-compared"
+            )
         current["historicalComparison"]["baseline"][
             "evidenceSha256"
         ] = sha256(arguments.baseline)

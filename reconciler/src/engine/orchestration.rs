@@ -216,22 +216,24 @@ impl ReconcilerEngine {
         })
     }
 
-    async fn reconcile_head(
+    pub(super) async fn reconcile_head(
         &self,
         candidate: &HeadCandidate,
         token: &ControlToken,
     ) -> Result<BlobReport> {
         let head_object = &candidate.object_key;
         let path_hash = head_hash(head_object)?;
-        let blob = self.discover_blob_path(head_object, token).await?;
-        let lock_backend = if let Some(blob) = blob.as_ref() {
-            let replicas = self.ring.replicas_for(blob)?;
-            ensure!(
-                replicas
-                    .iter()
-                    .any(|replica| replica.id == candidate.discovered_on),
-                "head was discovered on a backend outside its active Ring placement"
-            );
+        let (blob, lock_hint) = self.discover_blob_paths(head_object, token).await?;
+        let lock_backend = if let Some(lock_blob) = lock_hint.as_ref() {
+            let replicas = self.ring.replicas_for(lock_blob)?;
+            if blob.is_some() {
+                ensure!(
+                    replicas
+                        .iter()
+                        .any(|replica| replica.id == candidate.discovered_on),
+                    "head was discovered on a backend outside its active Ring placement"
+                );
+            }
             self.backend(&replicas[0].id)?
         } else {
             self.backend(&candidate.discovered_on)?

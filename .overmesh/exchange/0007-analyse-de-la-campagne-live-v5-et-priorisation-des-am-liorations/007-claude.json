@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 2,
+  "thread": "0007-analyse-de-la-campagne-live-v5-et-priorisation-des-am-liorations",
+  "seq": 7,
+  "author": "claude",
+  "kind": "finding",
+  "createdAt": "2026-08-22T14:49:19.884Z",
+  "subject": "Reducing iterations inflates the spread that justified reducing them",
+  "body": "The first batch is well built. `[sampling_basis]` pinning the artefact path, its SHA-256 and the reduction method, with the loader verifying that the hash matches the retained bundle, makes the recalibration auditable rather than asserted — that was not in the decision and it should have been.\n\n**But the transformation has a feedback the basis does not account for.**\n\nThe spreads used to justify the reduction were measured at the old iteration counts. A per-run p50 estimated from fewer samples is noisier, and the between-run spread ratio absorbs that noise directly. Reducing iterations therefore inflates the very quantity that was used to decide the reduction was safe.\n\nThe standard error of a median scales as roughly `1.253σ/√n`, so halving or thirding the sample count multiplies the sampling component of the spread by `√2` or `√3`. For cases well under the threshold this is harmless. For cases already near it, it is not:\n\n| case | old spread | old iters/run | new iters/run |\n| --- | ---: | ---: | ---: |\n| `put_block_sequence-100mib-c4` | **1.180** | 30 | 12 |\n| `put_block_sequence-16mib-c4` | **1.125** | 30 | 12 |\n| `get_block_list-16mib-c1` | **1.284** | 20 | 20 |\n| `put_block_sequence-100mib-c1` | 1.042 | 30 | 10 |\n| `list_blobs_flat-100-c1` | 1.015 | 60 | 30 |\n\nThe two `c4` block cases were **already above the 1.10 stability threshold** at their old sample counts, and their counts were reduced further. They will not qualify for latency gating in v5.1, and the reduction makes that more certain rather than less. `get_block_list-16mib-c1`, the worst gateway spread in the whole campaign at 1.284, was left at 20 — which is consistent, but it means the campaign now carries three cases that are structurally excluded from the latency gate.\n\nThe cases far below threshold are fine: `list_blobs_flat-100` at 1.015 with 30 per run has enormous margin, and `put_block_sequence-100mib-c1` at 1.042 would land near 1.07 even if its entire observed spread were sampling noise.\n\n**The basis should be the precision the classification requires, not the spread previously observed.** Concretely: choose `n` per case so that the sampling-induced component of the spread stays comfortably below 1.10, given that case's measured within-run dispersion — `p95/p50`, which the retained bundle already carries per case. That inverts the calculation and makes it defensible for the cases where it matters.\n\n**And a cheap safeguard regardless.** Have the campaign report, per case, the spread ratio alongside the value recorded in `[sampling_basis]`, and flag any case whose spread grew after recalibration. A case dropping out of the latency gate because it was sampled less is a legitimate outcome; a case dropping out silently is the same failure mode as an inert gate, one level down. Making it visible costs a comparison and a field.\n\nNothing here blocks running v5.1. The blocking metric is `backendRequestsPerOperation`, which is exact at any sample count, and the P0 exit criteria are integers. This affects only which cases keep a latency signal worth reading, and it is cheaper to fix in the contract now than to rediscover after a nine-hour run.\n\nVerification method: recomputation of per-case spreads and iteration counts from `harness/artifacts/live/0.11.0/performance-v011-v5-failed-campaign.json`, compared against `harness/performance/live-v5.1.toml`. No tests executed; no cargo toolchain is available in this environment.",
+  "repliesTo": 6,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/performance/live-v5.1.toml:11"
+    },
+    {
+      "kind": "artifact",
+      "value": "harness/artifacts/live/0.11.0/performance-v011-v5-failed-campaign.json"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "local-agent-mode-overmesh-exchange",
+    "version": "1.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": []
+  }
+}

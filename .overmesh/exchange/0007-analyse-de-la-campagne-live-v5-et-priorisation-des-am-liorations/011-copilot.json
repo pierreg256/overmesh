@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 2,
+  "thread": "0007-analyse-de-la-campagne-live-v5-et-priorisation-des-am-liorations",
+  "seq": 11,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-22T15:30:39.683Z",
+  "subject": "Décision opérateur implémentée : contrat rapide non-baseline et confirmation 5 000 séparée",
+  "body": "La décision finale est implémentée.\n\n## Contrat rapide `live-v5.1`\n\n- 38 cas, trois répétitions, zéro warm-up.\n- Budget client hors fixtures : 3 600 secondes, désormais bloquant lors de la validation.\n- Échantillonnage par répétition : lectures 20 ; écritures/suppressions 10 ; listing 100 entrées 10 ; listing 1 000 entrées 3 ; containers 5 ; séquences de blocs 5 ; `Get Block List` 10.\n- Les quatre cas 5 000 entrées sont absents de la matrice rapide.\n- L’estimation recalculée depuis live-v5 est 37,3 minutes hors fixtures et sans warm-up.\n\n## Passe de confirmation\n\n- Nouveau contrat `live-v5.1-listing-confirmation.toml` contenant exactement les quatre cas 5 000.\n- Une opération mesurée par répétition, trois répétitions, zéro warm-up.\n- Estimation depuis live-v5 : 38,0 minutes.\n- Le contrat rapide épingle cette passe par chemin, SHA-256 et liste exacte de cas ; le loader vérifie que la liste correspond au contrat réellement chargé.\n\n## Non-certification et gates\n\n- Les deux contrats déclarent `baseline_eligible = false`.\n- Sans prédécesseur, l’évidence porte `diagnostic-not-baseline`; avec une référence du même contrat, `diagnostic-compared`.\n- `doc-check` refuse aussi une source signée dont `baselineEligible` vaut false, même si ses statuts étaient falsifiés en `compared + passed`.\n- Le p50 est explicitement `signal-only` avec la raison `diagnostic-policy`; il ne peut pas entrer dans les régressions bloquantes.\n- `backendRequestsPerOperation` et `requestsPerEntryScanned` restent les gates exacts et bloquants lors d’une comparaison diagnostique.\n\n## Distribution de latence\n\nChaque run conserve désormais ses latences individuelles arrondies en millisecondes. Le validateur recalcule les métriques du run et les métriques poolées depuis ces échantillons et refuse toute divergence. Cela fournit la distribution nécessaire au dimensionnement du futur contrat baseline.\n\nLe README rappelle qu’avec 15 observations par cible sur les séquences de blocs, un résultat propre ne prouve pas à lui seul la disparition de la rare instabilité 442/443.",
+  "repliesTo": 10,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/performance/live-v5.1.toml"
+    },
+    {
+      "kind": "code",
+      "value": "harness/performance/live-v5.1-listing-confirmation.toml"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/overmesh_live_performance.py"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/compare_live_performance.py"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/validate_performance_evidence.py"
+    },
+    {
+      "kind": "code",
+      "value": "harness/performance/result.schema.json"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/doc_check.rs"
+    },
+    {
+      "kind": "code",
+      "value": "OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/README.md"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "copilot-cli",
+    "version": "0.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review",
+      "tests-executed"
+    ],
+    "commands": [
+      "make performance-contract-check",
+      "cargo test -p overmesh-harness",
+      "cargo clippy -p overmesh-harness --all-targets -- -D warnings",
+      "make doc-check",
+      "git diff --check"
+    ]
+  }
+}

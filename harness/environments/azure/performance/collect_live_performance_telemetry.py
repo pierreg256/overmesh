@@ -337,12 +337,14 @@ let Base = materialize(
   | extend SignSuccess = extract(@'success=\"?([^\" ]+)', 1, CleanMessage)
   | extend SignDomain = extract(@'domain=\"?([^\" ]+)', 1, CleanMessage)
   | extend EntriesReturned = tolong(extract(@'entries_returned=\"?([^\" ]+)', 1, CleanMessage))
-  | extend EntriesScanned = tolong(extract(@'entries_scanned=\"?([^\" ]+)', 1, CleanMessage))
+  | extend EntriesConsidered = tolong(extract(@'entries_considered=\"?([^\" ]+)', 1, CleanMessage))
+  | extend EntriesValidated = tolong(extract(@'entries_validated=\"?([^\" ]+)', 1, CleanMessage))
+  | extend ValidationConcurrency = tolong(extract(@'validation_concurrency=\"?([^\" ]+)', 1, CleanMessage))
 );
 let Scoped = materialize(
   union
-    (Base | project ScopeType='run', Scope=RunKey, Event, Fingerprint, BackendId, Operation, ObjectClass, Status, TransportSuccess, HeaderDurationUs, SignDurationUs, SignSuccess, SignDomain, EntriesReturned, EntriesScanned),
-    (Base | project ScopeType='case', Scope=CaseId, Event, Fingerprint, BackendId, Operation, ObjectClass, Status, TransportSuccess, HeaderDurationUs, SignDurationUs, SignSuccess, SignDomain, EntriesReturned, EntriesScanned)
+    (Base | project ScopeType='run', Scope=RunKey, Event, Fingerprint, BackendId, Operation, ObjectClass, Status, TransportSuccess, HeaderDurationUs, SignDurationUs, SignSuccess, SignDomain, EntriesReturned, EntriesConsidered, EntriesValidated, ValidationConcurrency),
+    (Base | project ScopeType='case', Scope=CaseId, Event, Fingerprint, BackendId, Operation, ObjectClass, Status, TransportSuccess, HeaderDurationUs, SignDurationUs, SignSuccess, SignDomain, EntriesReturned, EntriesConsidered, EntriesValidated, ValidationConcurrency)
 );
 let Backend = materialize(Scoped | where Event == 'overmesh_backend_request');
 let Signing = materialize(Scoped | where Event == 'overmesh_manifest_sign');
@@ -357,7 +359,7 @@ union
   (Backend | summarize Count=count() by ScopeType, Scope, Key1=ObjectClass, Key2=Status | extend RowType='object-class-status'),
   (Signing | summarize Count=count(), Failures=countif(SignSuccess != 'true'), TotalDurationUs=sum(SignDurationUs), P50DurationUs=tolong(percentile(SignDurationUs, 50)), P95DurationUs=tolong(percentile(SignDurationUs, 95)), P99DurationUs=tolong(percentile(SignDurationUs, 99)), MaxDurationUs=max(SignDurationUs) by ScopeType, Scope | extend RowType='signing-summary'),
   (Signing | summarize Count=count() by ScopeType, Scope, Key1=SignDomain | extend RowType='signing-domain'),
-  (Listing | summarize Count=count(), EntriesReturned=sum(EntriesReturned), EntriesScanned=sum(EntriesScanned) by ScopeType, Scope | extend RowType='listing-summary'),
+  (Listing | summarize Count=count(), EntriesReturned=sum(EntriesReturned), EntriesConsidered=sum(EntriesConsidered), EntriesValidated=sum(EntriesValidated), ValidationConcurrency=max(ValidationConcurrency) by ScopeType, Scope | extend RowType='listing-summary'),
   (Backend | where ScopeType == 'run' | summarize Count=count() by ScopeType, Scope, Key1=Fingerprint | extend RowType='fingerprint'),
   (Backend | where ScopeType == 'run' | summarize Count=count() by ScopeType, Scope, Key1=Fingerprint, Key2=BackendId | extend RowType='fingerprint-backend')
 """
@@ -454,7 +456,9 @@ def repeated_aggregate_metrics(
                 "listingScan": {
                     "pages": 0,
                     "entriesReturned": 0,
-                    "entriesScanned": 0,
+                    "entriesConsidered": 0,
+                    "entriesValidated": 0,
+                    "validationConcurrency": 0,
                 },
             },
         )
@@ -555,8 +559,14 @@ def repeated_aggregate_metrics(
                 "entriesReturned": int(
                     row.get("EntriesReturned") or 0
                 ),
-                "entriesScanned": int(
-                    row.get("EntriesScanned") or 0
+                "entriesConsidered": int(
+                    row.get("EntriesConsidered") or 0
+                ),
+                "entriesValidated": int(
+                    row.get("EntriesValidated") or 0
+                ),
+                "validationConcurrency": int(
+                    row.get("ValidationConcurrency") or 0
                 ),
             }
         elif row_type == "fingerprint":
@@ -763,7 +773,9 @@ def aggregate_events(messages: list[str]) -> dict[str, Any]:
     client_request_fingerprints: set[str] = set()
     unattributed_requests = 0
     listing_entries_returned = 0
-    listing_entries_scanned = 0
+    listing_entries_considered = 0
+    listing_entries_validated = 0
+    listing_validation_concurrency = 0
     listing_pages = 0
     for message in messages:
         fields = parse_fields(message)
@@ -812,7 +824,16 @@ def aggregate_events(messages: list[str]) -> dict[str, Any]:
         elif event == "overmesh_listing_scan":
             try:
                 listing_entries_returned += int(fields["entries_returned"])
-                listing_entries_scanned += int(fields["entries_scanned"])
+                listing_entries_considered += int(
+                    fields["entries_considered"]
+                )
+                listing_entries_validated += int(
+                    fields["entries_validated"]
+                )
+                listing_validation_concurrency = max(
+                    listing_validation_concurrency,
+                    int(fields["validation_concurrency"]),
+                )
             except (KeyError, ValueError):
                 continue
             listing_pages += 1
@@ -844,7 +865,9 @@ def aggregate_events(messages: list[str]) -> dict[str, Any]:
         "listingScan": {
             "pages": listing_pages,
             "entriesReturned": listing_entries_returned,
-            "entriesScanned": listing_entries_scanned,
+            "entriesConsidered": listing_entries_considered,
+            "entriesValidated": listing_entries_validated,
+            "validationConcurrency": listing_validation_concurrency,
         },
     }
 
@@ -925,9 +948,12 @@ def listing_budget_from_metrics(
     operation: str | None = None,
 ) -> dict[str, int | float]:
     scan = metrics["listingScan"]
-    entries_scanned = scan["entriesScanned"]
-    if entries_scanned <= 0:
-        raise RuntimeError("listing telemetry has no scanned entries")
+    entries_considered = scan["entriesConsidered"]
+    entries_validated = scan["entriesValidated"]
+    if entries_considered <= 0 or entries_validated <= 0:
+        raise RuntimeError(
+            "listing telemetry has no considered or validated entries"
+        )
     operation_classes = metrics["backendRequests"][
         "byOperationAndObjectClass"
     ]
@@ -936,22 +962,15 @@ def listing_budget_from_metrics(
         control_gets.get(object_class, 0)
         for object_class in ("catalogue", "head")
     )
-    if operation == "list_containers":
-        backend_requests += operation_classes.get(
-            "authorize_container_list", {}
-        ).get("container", 0)
     return {
+        "entriesConsidered": entries_considered,
+        "entriesValidated": entries_validated,
         "entriesReturned": scan["entriesReturned"],
-        "entriesScanned": entries_scanned,
         "backendRequests": backend_requests,
-        "requestsPerEntryReturned": round(
-            backend_requests / scan["entriesReturned"], 6
-        )
-        if scan["entriesReturned"]
-        else 0.0,
-        "requestsPerEntryScanned": round(
-            backend_requests / entries_scanned, 6
+        "requestsPerEntryValidated": round(
+            backend_requests / entries_validated, 6
         ),
+        "validationConcurrency": scan["validationConcurrency"],
     }
 
 
@@ -1457,6 +1476,8 @@ def main() -> int:
         benchmark_case
         for benchmark_case in evidence["cases"]
         if benchmark_case["target"] == "gateway"
+        and benchmark_case.get("validity", {}).get("status", "valid")
+        == "valid"
     ]
     campaign = evidence["campaign"]
     fixture_setup = campaign.get("fixtureSetup")
@@ -1574,17 +1595,17 @@ def main() -> int:
                             "differ"
                         )
                     expected_per_entry = benchmark_case.get(
-                        "expectedRequestsPerEntryScanned"
+                        "expectedRequestsPerEntryValidated"
                     )
                     if (
                         expected_per_entry is not None
-                        and budget["requestsPerEntryScanned"]
+                        and budget["requestsPerEntryValidated"]
                         != expected_per_entry
                     ):
                         raise RuntimeError(
                             f"case {benchmark_case['id']} repeat "
-                            f"{run['repeat']} requests per entry scanned is "
-                            f"{budget['requestsPerEntryScanned']}, expected "
+                            f"{run['repeat']} requests per entry validated is "
+                            f"{budget['requestsPerEntryValidated']}, expected "
                             f"{expected_per_entry}"
                         )
                     listing_budgets.append(budget)
@@ -1629,7 +1650,7 @@ def main() -> int:
                 run["serverTelemetry"] = run_metrics
             if is_listing:
                 per_entry = [
-                    budget["requestsPerEntryScanned"]
+                    budget["requestsPerEntryValidated"]
                     for budget in listing_budgets
                 ]
                 if len(set(per_entry)) != 1:
@@ -1642,7 +1663,7 @@ def main() -> int:
                     benchmark_case["operation"],
                 )
                 benchmark_case["repeatability"][
-                    "requestsPerEntryScannedPerRun"
+                    "requestsPerEntryValidatedPerRun"
                 ] = per_entry
             else:
                 if len(set(requests_per_operation_per_run)) != 1:

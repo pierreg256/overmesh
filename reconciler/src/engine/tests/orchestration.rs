@@ -63,6 +63,58 @@ fn test_head(
 }
 
 #[tokio::test]
+async fn anomalous_head_discovered_on_secondary_locks_deterministic_primary() {
+    let fixture = Fixture::new(
+        &[ManifestState::Committed],
+        &[1],
+        std::time::Duration::from_secs(60),
+    )
+    .await;
+    let replicas = fixture
+        .engine
+        .ring
+        .replicas_for(&fixture.logical_blob)
+        .expect("placement");
+    let primary_id = replicas[0].id.clone();
+    let secondary_id = replicas[1].id.clone();
+    let primary = if fixture.first.id() == primary_id {
+        &fixture.first
+    } else {
+        &fixture.second
+    };
+    let secondary = if fixture.first.id() == secondary_id {
+        &fixture.first
+    } else {
+        &fixture.second
+    };
+    let mut anomalous = fixture.history[0].signed.clone();
+    anomalous.signature = "invalid-signature".to_owned();
+    secondary.put_control(
+        &fixture.head_object,
+        anomalous.canonical_bytes().expect("anomalous head bytes"),
+    );
+
+    let report = fixture
+        .engine
+        .reconcile_head(
+            &HeadCandidate {
+                object_key: fixture.head_object.clone(),
+                discovered_on: secondary_id,
+            },
+            &test_token().await,
+        )
+        .await
+        .expect("quarantine anomalous head");
+
+    assert_eq!(report.health_after, HealthState::Quarantined);
+    assert_eq!(
+        primary.acquired_locks(),
+        [format!("locks/{}", fixture.logical_blob.path_hash())]
+    );
+    assert!(secondary.acquired_locks().is_empty());
+}
+
+#[tokio::test]
 async fn catalog_backfill_and_one_sided_repair_copy_exact_current_head_bytes() {
     let fixture = Fixture::new(
         &[ManifestState::Committed],

@@ -36,6 +36,7 @@ struct TestState {
     delete_calls: AtomicUsize,
     list_calls: AtomicUsize,
     head_get_calls: Mutex<HashMap<String, usize>>,
+    acquired_locks: Mutex<Vec<String>>,
     etag: AtomicUsize,
 }
 
@@ -140,6 +141,14 @@ impl TestBackend {
             .expect("head call lock")
             .get(key)
             .unwrap_or(&0)
+    }
+
+    fn acquired_locks(&self) -> Vec<String> {
+        self.state
+            .acquired_locks
+            .lock()
+            .expect("acquired locks")
+            .clone()
     }
 
     fn put(
@@ -375,6 +384,11 @@ impl ReplicaBackend for TestBackend {
         object_key: &str,
         _control_token: &ControlToken,
     ) -> Result<BackendLease, BackendError> {
+        self.state
+            .acquired_locks
+            .lock()
+            .expect("acquired locks")
+            .push(object_key.to_owned());
         Ok(BackendLease {
             object_key: object_key.to_owned(),
             lease_id: "test-lease".to_owned(),

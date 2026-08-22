@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 2,
+  "thread": "0008-documentation-drift-including-a-harness-specification-must-that",
+  "seq": 7,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-22T14:42:29.291Z",
+  "subject": "Arbitrages documentaires implémentés et liés aux preuves certifiées",
+  "body": "Les trois arbitrages opérateur sont implémentés.\n\n## §21.5\n\n- Portée datée à partir du contrat `live-v5`, sans commentaire rétrospectif sur les campagnes antérieures.\n- Couverture listing/blocs explicitement applicable à partir de cette date.\n- p50 normatif défini comme médiane des p50 par run ; pooled p50 conservé comme diagnostic qualifié.\n- CPU/mémoire placés au niveau campagne.\n- Sémantique validité-par-cas / baseline atomique / exclusions préalables écrite dans la même passe.\n- Ordre contrebalancé déterministe et ordre réellement exécuté requis dans l’évidence ; aucun gate de distribution ajouté.\n\n## Documentation publiée\n\n- `WHY_OVERMESH` utilise maintenant la baseline certifiée live-v4 et la statistique normative.\n- Les chiffres client live-v5 sont séparés et qualifiés `diagnostic-not-baseline` : flat 5 000 ≈ 151× ; hiérarchique 5 000 = 5 266,5× selon la médiane des p50 par run.\n- Aucun compteur serveur, CPU, mémoire ou Key Vault v5 n’est présenté comme certifié.\n- L’index ADR ne décrit plus 0.9 comme l’état courant et ne présente plus les sections d’implémentation comme des snapshots nécessairement figés.\n- Le badge du site est rendu depuis `site/config.toml`, lui-même lié à `VERSION` et au nom du milestone actif par `doc-check`.\n\n## Traceability\n\n- Les assertions peuvent désormais calculer une ligne de performance depuis un bundle retenu.\n- La source doit être une campagne `baseline-established` ou `compared + passed`, sans régression bloquante.\n- Les bytes, le SHA-256 et la signature ES256 sont vérifiés cryptographiquement avec la clé publique retenue ; le booléen `verifiedByKeyVault` seul ne suffit pas.\n- Le diagnostic v5 est refusé comme source d’assertion. Les huit lignes de la table certifiée sont liées au bundle live-v4.\n\nLa construction Zola rend bien `Version 0.11.0 · Performance optimization and regression hardening milestone`.",
+  "repliesTo": 6,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md"
+    },
+    {
+      "kind": "code",
+      "value": "docs/WHY_OVERMESH.md"
+    },
+    {
+      "kind": "code",
+      "value": "docs/adr/README.md"
+    },
+    {
+      "kind": "code",
+      "value": "docs/traceability.toml"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/doc_check.rs"
+    },
+    {
+      "kind": "code",
+      "value": "site/config.toml"
+    },
+    {
+      "kind": "code",
+      "value": "site/templates/index.html"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "copilot-cli",
+    "version": "0.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review",
+      "tests-executed"
+    ],
+    "commands": [
+      "make doc-check",
+      "cargo test -p overmesh-harness",
+      "ZOLA=/Users/pierregilot/.copilot/session-state/32540dd5-6ccb-40e9-9b7e-3180e4552d69/files/zola-0.23.3 make site-build"
+    ]
+  }
+}

@@ -104,6 +104,7 @@ class BenchmarkCase:
     max_results: int | None = None
     block_size_bytes: int | None = None
     expected_requests_per_entry_scanned: float | str | None = None
+    expected_requests_per_entry_validated: float | str | None = None
 
     @property
     def id(self) -> str:
@@ -125,6 +126,7 @@ class NonRegressionPolicy:
     p50_latency: str | None
     p95_latency: str
     requests_per_entry_scanned: str | None = None
+    requests_per_entry_validated: str | None = None
     p50_stability_spread_ratio_threshold: float | None = None
     p50_regression_ratio_threshold: float | None = None
 
@@ -138,6 +140,10 @@ class NonRegressionPolicy:
         if self.requests_per_entry_scanned is not None:
             document["requestsPerEntryScanned"] = (
                 self.requests_per_entry_scanned
+            )
+        if self.requests_per_entry_validated is not None:
+            document["requestsPerEntryValidated"] = (
+                self.requests_per_entry_validated
             )
         if self.p50_stability_spread_ratio_threshold is not None:
             document["p50Latency"] = "derived"
@@ -153,10 +159,20 @@ class NonRegressionPolicy:
 @dataclass(frozen=True)
 class Contract:
     schema_version: int
+    revision: str | None
+    campaign_purpose: str | None
+    baseline_eligible: bool
+    client_wall_time_budget_seconds: int | None
+    latency_evidence: str | None
+    p50_gate_policy: str | None
+    confirmation_pass: dict[str, Any] | None
     warmup_iterations: int
     measured_iterations: int | None
     request_timeout_seconds: int
     target_order: tuple[str, ...]
+    target_order_policy: str
+    p50_comparison_statistic: str | None
+    sampling_basis: dict[str, str] | None
     cases: tuple[BenchmarkCase, ...]
     exclusions: tuple[Exclusion, ...]
     non_regression: NonRegressionPolicy | None
@@ -186,6 +202,18 @@ def sha256_path(path: Path) -> str:
     return sha256_bytes(path.read_bytes())
 
 
+def resolve_repository_file(contract_path: Path, relative_path: str) -> Path:
+    roots = (Path.cwd(), *contract_path.resolve().parents)
+    for root in roots:
+        candidate = root / relative_path
+        if candidate.is_file():
+            return candidate
+    raise ValueError(
+        f"repository file {relative_path!r} referenced by the contract "
+        "does not exist"
+    )
+
+
 def endpoint_fingerprint(endpoint: str) -> str:
     host = urlsplit(endpoint).netloc.lower()
     return "endpoint-" + hashlib.sha256(host.encode("utf-8")).hexdigest()[:16]
@@ -194,6 +222,12 @@ def endpoint_fingerprint(endpoint: str) -> str:
 def require_positive_integer(value: object, name: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ValueError(f"{name} must be a positive integer")
+    return value
+
+
+def require_nonnegative_integer(value: object, name: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
     return value
 
 
@@ -252,6 +286,166 @@ def load_contract(path: Path) -> Contract:
     target_order = tuple(document.get("target_order", []))
     if sorted(target_order) != ["direct", "gateway"]:
         raise ValueError("target_order must contain direct and gateway exactly once")
+    revision = document.get("contract_revision")
+    if revision is not None and revision != "v5.1":
+        raise ValueError("contract_revision must be v5.1 when present")
+    target_order_policy = document.get("target_order_policy", "fixed")
+    if target_order_policy not in {"fixed", "counterbalanced"}:
+        raise ValueError(
+            "target_order_policy must be fixed or counterbalanced"
+        )
+    p50_comparison_statistic = document.get(
+        "p50_comparison_statistic"
+    )
+    if (
+        p50_comparison_statistic is not None
+        and p50_comparison_statistic != "median-per-run"
+    ):
+        raise ValueError(
+            "p50_comparison_statistic must be median-per-run when present"
+        )
+    sampling_basis = document.get("sampling_basis")
+    campaign_purpose = document.get("campaign_purpose")
+    baseline_eligible = document.get("baseline_eligible", True)
+    client_wall_time_budget_seconds = document.get(
+        "client_wall_time_budget_seconds"
+    )
+    latency_evidence = document.get("latency_evidence")
+    p50_gate_policy = document.get("p50_gate_policy")
+    confirmation_pass = document.get("confirmation_pass")
+    if revision == "v5.1":
+        expected_sampling_keys = {"artifact", "sha256", "method"}
+        if campaign_purpose not in {
+            "diagnostic-fast",
+            "listing-confirmation",
+        }:
+            raise ValueError(
+                "contract_revision v5.1 requires a supported campaign_purpose"
+            )
+        if baseline_eligible is not False:
+            raise ValueError(
+                "contract_revision v5.1 campaigns must not be baseline eligible"
+            )
+        client_wall_time_budget_seconds = require_positive_integer(
+            client_wall_time_budget_seconds,
+            "client_wall_time_budget_seconds",
+        )
+        if latency_evidence != "individual-samples":
+            raise ValueError(
+                "contract_revision v5.1 requires individual latency samples"
+            )
+        if p50_gate_policy != "signal-only":
+            raise ValueError(
+                "contract_revision v5.1 requires signal-only p50 gating"
+            )
+        if schema_version != 5:
+            raise ValueError("contract_revision v5.1 requires schema_version 5")
+        if target_order_policy != "counterbalanced":
+            raise ValueError(
+                "contract_revision v5.1 requires counterbalanced target order"
+            )
+        if p50_comparison_statistic != "median-per-run":
+            raise ValueError(
+                "contract_revision v5.1 requires median-per-run p50 comparison"
+            )
+        if (
+            not isinstance(sampling_basis, dict)
+            or set(sampling_basis) != expected_sampling_keys
+            or not all(
+                isinstance(value, str) and value
+                for value in sampling_basis.values()
+            )
+        ):
+            raise ValueError(
+                "contract_revision v5.1 requires a complete sampling_basis"
+            )
+        if (
+            len(sampling_basis["sha256"]) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in sampling_basis["sha256"]
+            )
+        ):
+            raise ValueError("sampling_basis.sha256 must be SHA-256 hex")
+        if Path(sampling_basis["artifact"]).is_absolute() or ".." in Path(
+            sampling_basis["artifact"]
+        ).parts:
+            raise ValueError(
+                "sampling_basis.artifact must be a repository-relative path"
+            )
+        sampling_artifact = resolve_repository_file(
+            path,
+            sampling_basis["artifact"],
+        )
+        if sha256_path(sampling_artifact) != sampling_basis["sha256"]:
+            raise ValueError(
+                "sampling_basis.sha256 does not match the retained artifact"
+            )
+        if campaign_purpose == "diagnostic-fast":
+            expected_confirmation_keys = {
+                "contract",
+                "sha256",
+                "trigger",
+                "case_ids",
+            }
+            if (
+                not isinstance(confirmation_pass, dict)
+                or set(confirmation_pass) != expected_confirmation_keys
+                or confirmation_pass.get("trigger")
+                != "after-listing-optimization"
+                or not isinstance(confirmation_pass.get("case_ids"), list)
+            ):
+                raise ValueError(
+                    "diagnostic-fast requires a complete confirmation_pass"
+                )
+            confirmation_path = Path(str(confirmation_pass["contract"]))
+            if confirmation_path.is_absolute() or ".." in confirmation_path.parts:
+                raise ValueError(
+                    "confirmation_pass.contract must be repository-relative"
+                )
+            resolved_confirmation = resolve_repository_file(
+                path,
+                str(confirmation_pass["contract"]),
+            )
+            if sha256_path(resolved_confirmation) != confirmation_pass["sha256"]:
+                raise ValueError(
+                    "confirmation_pass.sha256 does not match its contract"
+                )
+            confirmation_contract = load_contract(resolved_confirmation)
+            confirmation_case_ids = {
+                case.id for case in confirmation_contract.cases
+            }
+            if (
+                confirmation_contract.campaign_purpose
+                != "listing-confirmation"
+                or set(confirmation_pass["case_ids"])
+                != confirmation_case_ids
+            ):
+                raise ValueError(
+                    "confirmation_pass.case_ids do not match its contract"
+                )
+        elif confirmation_pass is not None:
+            raise ValueError(
+                "confirmation_pass is valid only for diagnostic-fast"
+            )
+    elif any(
+        value is not None
+        for value in (
+            revision,
+            document.get("target_order_policy"),
+            p50_comparison_statistic,
+            sampling_basis,
+            campaign_purpose,
+            document.get("baseline_eligible"),
+            client_wall_time_budget_seconds,
+            latency_evidence,
+            p50_gate_policy,
+            confirmation_pass,
+        )
+    ):
+        raise ValueError(
+            "v5.1 contract metadata requires contract_revision = v5.1"
+        )
 
     policy_document = document.get("non_regression")
     non_regression = None
@@ -275,7 +469,11 @@ def load_contract(path: Path) -> Contract:
             "p95_latency",
         }
         if schema_version == 5:
-            expected_keys.add("requests_per_entry_scanned")
+            expected_keys.add(
+                "requests_per_entry_validated"
+                if revision == "v5.1"
+                else "requests_per_entry_scanned"
+            )
         if not isinstance(policy_document, dict) or set(policy_document) != expected_keys:
             raise ValueError(
                 f"schema_version {schema_version} non_regression must declare exact request "
@@ -291,17 +489,31 @@ def load_contract(path: Path) -> Contract:
             )
         if (
             schema_version == 5
-            and policy_document["requests_per_entry_scanned"] != "blocking"
+            and policy_document[
+                (
+                    "requests_per_entry_validated"
+                    if revision == "v5.1"
+                    else "requests_per_entry_scanned"
+                )
+            ]
+            != "blocking"
         ):
             raise ValueError(
-                "schema_version 5 requires blocking requests per entry scanned"
+                "schema_version 5 requires a blocking per-entry request metric"
             )
         non_regression = NonRegressionPolicy(
             backend_requests_per_operation="blocking",
             p50_latency=None,
             p95_latency="informational",
             requests_per_entry_scanned=(
-                "blocking" if schema_version == 5 else None
+                "blocking"
+                if schema_version == 5 and revision != "v5.1"
+                else None
+            ),
+            requests_per_entry_validated=(
+                "blocking"
+                if schema_version == 5 and revision == "v5.1"
+                else None
             ),
             p50_stability_spread_ratio_threshold=require_ratio(
                 policy_document["p50_stability_spread_ratio_threshold"],
@@ -480,7 +692,7 @@ def load_contract(path: Path) -> Contract:
             ):
                 raise ValueError(
                     f"workload[{workload_index}] listing operation must use "
-                    "requests_per_entry_scanned"
+                    "the per-entry request metric"
                 )
             if (
                 operation not in LISTING_OPERATIONS
@@ -511,9 +723,12 @@ def load_contract(path: Path) -> Contract:
             raise ValueError(
                 "block_size_bytes is valid only for put_block_sequence"
             )
-        expected_per_entry = workload.get(
-            "requests_per_entry_scanned"
+        per_entry_key = (
+            "requests_per_entry_validated"
+            if revision == "v5.1"
+            else "requests_per_entry_scanned"
         )
+        expected_per_entry = workload.get(per_entry_key)
         if expected_per_entry == "establish":
             if schema_version != 5:
                 raise ValueError(
@@ -526,7 +741,7 @@ def load_contract(path: Path) -> Contract:
                 or expected_per_entry <= 0
             ):
                 raise ValueError(
-                    f"workload[{workload_index}].requests_per_entry_scanned "
+                    f"workload[{workload_index}].{per_entry_key} "
                     "must be positive"
                 )
             expected_per_entry = float(expected_per_entry)
@@ -556,7 +771,12 @@ def load_contract(path: Path) -> Contract:
                     request_timeout_seconds=request_timeout_seconds,
                     max_results=max_results,
                     block_size_bytes=block_size_bytes,
-                    expected_requests_per_entry_scanned=expected_per_entry,
+                    expected_requests_per_entry_scanned=(
+                        expected_per_entry if revision != "v5.1" else None
+                    ),
+                    expected_requests_per_entry_validated=(
+                        expected_per_entry if revision == "v5.1" else None
+                    ),
                 )
                 if schema_version == 4:
                     expected_iterations = (
@@ -583,7 +803,48 @@ def load_contract(path: Path) -> Contract:
                             f"{expected_budget} for {benchmark_case.id}"
                         )
                 elif schema_version == 5:
-                    if operation in READ_OPERATIONS:
+                    if (
+                        revision == "v5.1"
+                        and campaign_purpose == "diagnostic-fast"
+                    ):
+                        if operation in READ_OPERATIONS:
+                            expected_iterations = 20
+                        elif operation in {
+                            "put_blob",
+                            "overwrite_blob",
+                            "delete_blob",
+                        }:
+                            expected_iterations = 10
+                        elif operation == "list_blobs_flat":
+                            expected_iterations = {
+                                100: 10,
+                                1_000: 3,
+                            }.get(fixture.blob_count if fixture else 0)
+                        elif operation == "list_containers":
+                            expected_iterations = 5
+                        elif operation == "put_block_sequence":
+                            expected_iterations = 5
+                        elif operation == "get_block_list":
+                            expected_iterations = 10
+                        else:
+                            expected_iterations = None
+                    elif (
+                        revision == "v5.1"
+                        and campaign_purpose == "listing-confirmation"
+                    ):
+                        expected_iterations = (
+                            1
+                            if operation
+                            in {
+                                "list_blobs_flat",
+                                "list_blobs_hierarchical",
+                                "list_blobs_paginated",
+                            }
+                            and fixture is not None
+                            and fixture.blob_count == 5_000
+                            else None
+                        )
+                    elif operation in READ_OPERATIONS:
                         expected_iterations = 60
                     elif operation in {
                         "put_blob",
@@ -666,7 +927,11 @@ def load_contract(path: Path) -> Contract:
                 reason=reason.strip(),
             )
         )
-    if schema_version >= 2 and not exclusions:
+    if (
+        schema_version >= 2
+        and not exclusions
+        and campaign_purpose != "listing-confirmation"
+    ):
         raise ValueError("schema_version 2 or later requires explicit exclusions")
 
     if schema_version in {4, 5}:
@@ -690,9 +955,46 @@ def load_contract(path: Path) -> Contract:
         campaign_repeats = 1
         read_path_pool_size = None
 
+    if revision == "v5.1":
+        expected_case_ids = (
+            {
+                "list_blobs_flat-list-flat-5000-c1",
+                "list_blobs_flat-list-flat-5000-c4",
+                "list_blobs_hierarchical-list-hierarchical-5000-c1",
+                "list_blobs_paginated-list-flat-5000-c1",
+            }
+            if campaign_purpose == "listing-confirmation"
+            else set(confirmation_pass["case_ids"])
+        )
+        actual_case_ids = {case.id for case in cases}
+        if campaign_purpose == "listing-confirmation":
+            if actual_case_ids != expected_case_ids:
+                raise ValueError(
+                    "listing-confirmation must contain exactly four 5000-entry cases"
+                )
+        elif actual_case_ids & expected_case_ids:
+            raise ValueError(
+                "diagnostic-fast must defer all confirmation-pass cases"
+            )
+        if campaign_purpose == "diagnostic-fast" and len(cases) != 38:
+            raise ValueError(
+                "diagnostic-fast must contain the approved 38-case matrix"
+            )
+
     return Contract(
         schema_version=schema_version,
+        revision=revision,
+        campaign_purpose=campaign_purpose,
+        baseline_eligible=baseline_eligible,
+        client_wall_time_budget_seconds=client_wall_time_budget_seconds,
+        latency_evidence=latency_evidence,
+        p50_gate_policy=p50_gate_policy,
+        confirmation_pass=confirmation_pass,
         warmup_iterations=require_positive_integer(
+            document.get("warmup_iterations"), "warmup_iterations"
+        )
+        if revision != "v5.1"
+        else require_nonnegative_integer(
             document.get("warmup_iterations"), "warmup_iterations"
         ),
         measured_iterations=measured_iterations,
@@ -700,6 +1002,9 @@ def load_contract(path: Path) -> Contract:
             document.get("request_timeout_seconds"), "request_timeout_seconds"
         ),
         target_order=target_order,
+        target_order_policy=target_order_policy,
+        p50_comparison_statistic=p50_comparison_statistic,
+        sampling_basis=sampling_basis,
         cases=tuple(cases),
         exclusions=tuple(exclusions),
         non_regression=non_regression,
@@ -712,6 +1017,37 @@ def load_contract(path: Path) -> Contract:
 def plan(contract: Contract) -> dict[str, Any]:
     return {
         "schemaVersion": contract.schema_version,
+        **({"revision": contract.revision} if contract.revision else {}),
+        **(
+            {"campaignPurpose": contract.campaign_purpose}
+            if contract.campaign_purpose is not None
+            else {}
+        ),
+        "baselineEligible": contract.baseline_eligible,
+        **(
+            {
+                "clientWallTimeBudgetSeconds": (
+                    contract.client_wall_time_budget_seconds
+                )
+            }
+            if contract.client_wall_time_budget_seconds is not None
+            else {}
+        ),
+        **(
+            {"latencyEvidence": contract.latency_evidence}
+            if contract.latency_evidence is not None
+            else {}
+        ),
+        **(
+            {"p50GatePolicy": contract.p50_gate_policy}
+            if contract.p50_gate_policy is not None
+            else {}
+        ),
+        **(
+            {"confirmationPass": contract.confirmation_pass}
+            if contract.confirmation_pass is not None
+            else {}
+        ),
         "warmupIterations": contract.warmup_iterations,
         **(
             {"measuredIterations": contract.measured_iterations}
@@ -720,6 +1056,21 @@ def plan(contract: Contract) -> dict[str, Any]:
         ),
         "requestTimeoutSeconds": contract.request_timeout_seconds,
         "targetOrder": list(contract.target_order),
+        "targetOrderPolicy": contract.target_order_policy,
+        **(
+            {
+                "p50ComparisonStatistic": (
+                    contract.p50_comparison_statistic
+                )
+            }
+            if contract.p50_comparison_statistic is not None
+            else {}
+        ),
+        **(
+            {"samplingBasis": contract.sampling_basis}
+            if contract.sampling_basis is not None
+            else {}
+        ),
         "campaignRepeats": contract.campaign_repeats,
         **(
             {"readPathPoolSize": contract.read_path_pool_size}
@@ -803,8 +1154,24 @@ def plan(contract: Contract) -> dict[str, Any]:
                     else {}
                 ),
                 **(
+                    {
+                        "requestsPerEntryValidated": (
+                            benchmark_case.expected_requests_per_entry_validated
+                        )
+                    }
+                    if isinstance(
+                        benchmark_case.expected_requests_per_entry_validated,
+                        float,
+                    )
+                    else {}
+                ),
+                **(
                     {"listingRequestBudget": "establish"}
-                    if benchmark_case.expected_requests_per_entry_scanned
+                    if (
+                        benchmark_case.expected_requests_per_entry_validated
+                        if contract.revision == "v5.1"
+                        else benchmark_case.expected_requests_per_entry_scanned
+                    )
                     == "establish"
                     else {}
                 ),
@@ -839,6 +1206,18 @@ def plan(contract: Contract) -> dict[str, Any]:
             for exclusion in contract.exclusions
         ],
     }
+
+
+def target_order_for_case(
+    contract: Contract,
+    repeat_index: int,
+    case_index: int,
+) -> tuple[str, ...]:
+    if contract.target_order_policy == "fixed":
+        return contract.target_order
+    if (repeat_index + case_index) % 2 == 0:
+        return contract.target_order
+    return tuple(reversed(contract.target_order))
 
 
 def percentile(values: list[float], quantile: float) -> float:
@@ -1124,10 +1503,16 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
 
     started_at = ""
     finished_at = ""
+    client_wall_seconds = 0.0
     run_results: dict[
         tuple[str, str],
         list[tuple[dict[str, Any], list[float]]],
     ] = {
+        (benchmark_case.id, target): []
+        for benchmark_case in contract.cases
+        for target in contract.target_order
+    }
+    run_failures: dict[tuple[str, str], list[dict[str, Any]]] = {
         (benchmark_case.id, target): []
         for benchmark_case in contract.cases
         for target in contract.target_order
@@ -1469,8 +1854,9 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                         )
 
         started_at = utc_now()
+        client_execution_started = time.perf_counter()
         for repeat_index in range(contract.campaign_repeats):
-            for benchmark_case in contract.cases:
+            for case_index, benchmark_case in enumerate(contract.cases):
                 payload = deterministic_payload(benchmark_case.payload)
                 bytes_per_operation = (
                     benchmark_case.range_bytes
@@ -1485,7 +1871,15 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                     }
                     else 0
                 )
-                for target in contract.target_order:
+                executed_target_order = target_order_for_case(
+                    contract,
+                    repeat_index,
+                    case_index,
+                )
+                for target_position, target in enumerate(
+                    executed_target_order,
+                    1,
+                ):
                     active_service = (
                         listing_services[
                             (
@@ -1521,59 +1915,64 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                         }
                         else set()
                     )
-                    if (
-                        (
-                            contract.read_path_pool_size is None
-                            and benchmark_case.operation in READ_OPERATIONS
-                        )
-                        or benchmark_case.operation == "get_block_list"
-                    ):
-                        if benchmark_case.operation == "get_block_list":
-                            seed_client = container_client.get_blob_client(
-                                seed_blob
+                    attempt_started_at = utc_now()
+                    setup_failure: Exception | None = None
+                    try:
+                        if (
+                            (
+                                contract.read_path_pool_size is None
+                                and benchmark_case.operation in READ_OPERATIONS
                             )
-                            seed_block_size = 4 * 1024 * 1024
-                            seed_block_ids = block_ids(
-                                len(payload), seed_block_size
-                            )
-                            seed_request = setup_request_id(
-                                run_id,
-                                target,
-                                benchmark_case.id,
-                                0,
-                                repeat_index,
-                            )
-                            for block_index, block_id in enumerate(
-                                seed_block_ids
-                            ):
-                                offset = block_index * seed_block_size
-                                seed_client.stage_block(
-                                    block_id,
-                                    payload[
-                                        offset : offset + seed_block_size
-                                    ],
+                            or benchmark_case.operation == "get_block_list"
+                        ):
+                            if benchmark_case.operation == "get_block_list":
+                                seed_client = (
+                                    container_client.get_blob_client(seed_blob)
+                                )
+                                seed_block_size = 4 * 1024 * 1024
+                                seed_block_ids = block_ids(
+                                    len(payload), seed_block_size
+                                )
+                                seed_request = setup_request_id(
+                                    run_id,
+                                    target,
+                                    benchmark_case.id,
+                                    0,
+                                    repeat_index,
+                                )
+                                for block_index, block_id in enumerate(
+                                    seed_block_ids
+                                ):
+                                    offset = block_index * seed_block_size
+                                    seed_client.stage_block(
+                                        block_id,
+                                        payload[
+                                            offset : offset + seed_block_size
+                                        ],
+                                        **sdk_request_options(seed_request),
+                                    )
+                                seed_client.commit_block_list(
+                                    seed_block_ids,
                                     **sdk_request_options(seed_request),
                                 )
-                            seed_client.commit_block_list(
-                                seed_block_ids,
-                                **sdk_request_options(seed_request),
-                            )
-                        else:
-                            container_client.upload_blob(
-                                seed_blob,
-                                payload,
-                                overwrite=False,
-                                **sdk_request_options(
-                                    setup_request_id(
-                                        run_id,
-                                        target,
-                                        benchmark_case.id,
-                                        0,
-                                        repeat_index,
-                                    )
-                                ),
-                            )
-                        write_cleanup.add(seed_blob)
+                            else:
+                                container_client.upload_blob(
+                                    seed_blob,
+                                    payload,
+                                    overwrite=False,
+                                    **sdk_request_options(
+                                        setup_request_id(
+                                            run_id,
+                                            target,
+                                            benchmark_case.id,
+                                            0,
+                                            repeat_index,
+                                        )
+                                    ),
+                                )
+                            write_cleanup.add(seed_blob)
+                    except Exception as error:
+                        setup_failure = error
 
                     listing_entries = [0] * (
                         contract.warmup_iterations
@@ -1804,7 +2203,10 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                 f"{benchmark_case.operation}"
                             )
 
+                    failure_phase = "setup"
                     try:
+                        if setup_failure is not None:
+                            raise setup_failure
                         if benchmark_case.operation in {
                             "overwrite_blob",
                             "delete_blob",
@@ -1831,11 +2233,13 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                         )
                                     ),
                                 )
+                        failure_phase = "warmup"
                         execute_wave(
                             invoke,
                             contract.warmup_iterations,
                             benchmark_case.concurrency,
                         )
+                        failure_phase = "measurement"
                         case_started_at = utc_now()
                         latencies, wall_seconds = execute_wave(
                             lambda index: invoke(
@@ -1844,15 +2248,37 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                             benchmark_case.measured_iterations,
                             benchmark_case.concurrency,
                         )
+                        latencies = [
+                            round(latency, 3) for latency in latencies
+                        ]
                         case_finished_at = utc_now()
                         run_results[(benchmark_case.id, target)].append(
                             (
                                 {
                                     "repeat": repeat_index + 1,
+                                    **(
+                                        {
+                                            "targetOrder": list(
+                                                executed_target_order
+                                            ),
+                                            "targetOrderPosition": (
+                                                target_position
+                                            ),
+                                        }
+                                        if contract.target_order_policy
+                                        == "counterbalanced"
+                                        else {}
+                                    ),
                                     "startedAt": case_started_at,
                                     "finishedAt": case_finished_at,
                                     "iterations": (
                                         benchmark_case.measured_iterations
+                                    ),
+                                    **(
+                                        {"latenciesMs": latencies}
+                                        if contract.latency_evidence
+                                        == "individual-samples"
+                                        else {}
                                     ),
                                     "metrics": measured_metrics(
                                         latencies,
@@ -1876,6 +2302,19 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                 latencies,
                             )
                         )
+                    except Exception as error:
+                        run_failures[(benchmark_case.id, target)].append(
+                            {
+                                "repeat": repeat_index + 1,
+                                "targetOrder": list(executed_target_order),
+                                "targetOrderPosition": target_position,
+                                "startedAt": attempt_started_at,
+                                "finishedAt": utc_now(),
+                                "phase": failure_phase,
+                                "reason": "client-operation-failed",
+                                "exceptionClass": type(error).__name__,
+                            }
+                        )
                     finally:
                         for cleanup_index, blob_name in enumerate(
                             sorted(write_cleanup)
@@ -1896,6 +2335,10 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                             except ResourceNotFoundError:
                                 pass
         finished_at = utc_now()
+        client_wall_seconds = round(
+            time.perf_counter() - client_execution_started,
+            6,
+        )
     finally:
         for cleanup_index, (
             container_client,
@@ -1928,6 +2371,55 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
         for target in contract.target_order:
             completed_runs = run_results[(benchmark_case.id, target)]
             runs = [run for run, _ in completed_runs]
+            failures = run_failures[(benchmark_case.id, target)]
+            if failures:
+                timestamps = [
+                    timestamp
+                    for item in [*runs, *failures]
+                    for timestamp in (item["startedAt"], item["finishedAt"])
+                ]
+                total_iterations = sum(run["iterations"] for run in runs)
+                invalid_result: dict[str, Any] = {
+                    "id": benchmark_case.id,
+                    "target": target,
+                    "targetFingerprint": endpoint_fingerprint(
+                        endpoints[target]
+                    ),
+                    "operation": benchmark_case.operation,
+                    "payload": benchmark_case.payload.id,
+                    "payloadBytes": benchmark_case.payload.size_bytes,
+                    "concurrency": benchmark_case.concurrency,
+                    "startedAt": min(timestamps),
+                    "finishedAt": max(timestamps),
+                    "warmupIterations": (
+                        contract.warmup_iterations * len(runs)
+                    ),
+                    "iterations": total_iterations,
+                    "metrics": {
+                        "successCount": total_iterations,
+                        "errorCount": len(failures),
+                    },
+                    "validity": {
+                        "status": "invalid",
+                        "mandatory": True,
+                        "expectedRuns": contract.campaign_repeats,
+                        "completedRuns": len(runs),
+                        "failures": failures,
+                    },
+                }
+                if runs:
+                    invalid_result["runs"] = runs
+                if benchmark_case.fixture is not None:
+                    invalid_result.update(
+                        {
+                            "fixture": benchmark_case.fixture.id,
+                            "fixtureManifestSha256": (
+                                benchmark_case.fixture.manifest_sha256
+                            ),
+                        }
+                    )
+                results.append(invalid_result)
+                continue
             all_latencies = [
                 latency
                 for _, latencies in completed_runs
@@ -1959,6 +2451,11 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                 "p50MsPerRun": p50_per_run,
                 "p50SpreadRatio": spread,
             }
+            if contract.p50_comparison_statistic == "median-per-run":
+                repeatability["medianP50Ms"] = round(
+                    float(statistics.median(p50_per_run)),
+                    3,
+                )
             if stability_threshold is not None:
                 repeatability["p50Classification"] = (
                     "blocking" if spread < stability_threshold else "signal"
@@ -1982,6 +2479,14 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                     bytes_per_operation,
                 ),
             }
+            if contract.revision == "v5.1":
+                result["validity"] = {
+                    "status": "valid",
+                    "mandatory": True,
+                    "expectedRuns": contract.campaign_repeats,
+                    "completedRuns": len(runs),
+                    "failures": [],
+                }
             if contract.schema_version in {4, 5}:
                 result.update(
                     {
@@ -2024,9 +2529,21 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                 )
                 if (
                     isinstance(
-                        benchmark_case.expected_requests_per_entry_scanned,
+                        benchmark_case.expected_requests_per_entry_validated,
                         float,
                     )
+                ):
+                    result["expectedRequestsPerEntryValidated"] = (
+                        benchmark_case.expected_requests_per_entry_validated
+                    )
+                elif (
+                    benchmark_case.expected_requests_per_entry_validated
+                    == "establish"
+                ):
+                    result["listingRequestBudget"] = "establish"
+                elif isinstance(
+                    benchmark_case.expected_requests_per_entry_scanned,
+                    float,
                 ):
                     result["expectedRequestsPerEntryScanned"] = (
                         benchmark_case.expected_requests_per_entry_scanned
@@ -2045,6 +2562,11 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
     for benchmark_case in contract.cases:
         direct = by_case[(benchmark_case.id, "direct")]
         gateway = by_case[(benchmark_case.id, "gateway")]
+        if (
+            direct.get("validity", {}).get("status", "valid") != "valid"
+            or gateway.get("validity", {}).get("status", "valid") != "valid"
+        ):
+            continue
         comparisons.append(
             {
                 "case": benchmark_case.id,
@@ -2063,7 +2585,10 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
         )
 
     resolution = None
-    if contract.schema_version in {4, 5}:
+    if contract.schema_version in {4, 5} and all(
+        result.get("validity", {}).get("status", "valid") == "valid"
+        for result in results
+    ):
         gateway_results = [
             result for result in results if result["target"] == "gateway"
         ]
@@ -2078,27 +2603,51 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
             direct_results,
             key=lambda result: result["repeatability"]["p50SpreadRatio"],
         )
+        read_results = [
+            result
+            for result in gateway_results
+            if result["operation"] in READ_OPERATIONS
+        ]
+        write_results = [
+            result
+            for result in gateway_results
+            if result["operation"]
+            not in READ_OPERATIONS | LISTING_OPERATIONS
+        ]
+        listing_results = [
+            result
+            for result in gateway_results
+            if result["operation"] in LISTING_OPERATIONS
+        ]
         resolution = {
-            "readP50SpreadRatioMax": max(
-                result["repeatability"]["p50SpreadRatio"]
-                for result in gateway_results
-                if result["operation"] in READ_OPERATIONS
+            **(
+                {
+                    "readP50SpreadRatioMax": max(
+                        result["repeatability"]["p50SpreadRatio"]
+                        for result in read_results
+                    )
+                }
+                if read_results
+                else {}
             ),
-            "writeP50SpreadRatioMax": max(
-                result["repeatability"]["p50SpreadRatio"]
-                for result in gateway_results
-                if result["operation"]
-                not in READ_OPERATIONS | LISTING_OPERATIONS
+            **(
+                {
+                    "writeP50SpreadRatioMax": max(
+                        result["repeatability"]["p50SpreadRatio"]
+                        for result in write_results
+                    )
+                }
+                if write_results
+                else {}
             ),
             **(
                 {
                     "listingP50SpreadRatioMax": max(
                         result["repeatability"]["p50SpreadRatio"]
-                        for result in gateway_results
-                        if result["operation"] in LISTING_OPERATIONS
+                        for result in listing_results
                     )
                 }
-                if contract.schema_version == 5
+                if contract.schema_version == 5 and listing_results
                 else {}
             ),
             "worstCase": worst_case["id"],
@@ -2145,6 +2694,26 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
             "isolatedEnvironment": True,
             "storageApiVersion": next(iter(storage_api_versions.values())),
             **(
+                {
+                    "clientExecution": {
+                        "wallSecondsExcludingFixtures": (
+                            client_wall_seconds
+                        ),
+                        "budgetSeconds": (
+                            contract.client_wall_time_budget_seconds
+                        ),
+                        "status": (
+                            "passed"
+                            if client_wall_seconds
+                            <= contract.client_wall_time_budget_seconds
+                            else "failed"
+                        ),
+                    }
+                }
+                if contract.client_wall_time_budget_seconds is not None
+                else {}
+            ),
+            **(
                 {"fixtureSetup": fixture_setup}
                 if fixture_setup is not None
                 else {}
@@ -2154,6 +2723,52 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
             "id": contract_path.stem,
             "sha256": sha256_path(contract_path),
             "schemaVersion": contract.schema_version,
+            **({"revision": contract.revision} if contract.revision else {}),
+            **(
+                {"campaignPurpose": contract.campaign_purpose}
+                if contract.campaign_purpose is not None
+                else {}
+            ),
+            "baselineEligible": contract.baseline_eligible,
+            **(
+                {
+                    "clientWallTimeBudgetSeconds": (
+                        contract.client_wall_time_budget_seconds
+                    )
+                }
+                if contract.client_wall_time_budget_seconds is not None
+                else {}
+            ),
+            **(
+                {"latencyEvidence": contract.latency_evidence}
+                if contract.latency_evidence is not None
+                else {}
+            ),
+            **(
+                {"p50GatePolicy": contract.p50_gate_policy}
+                if contract.p50_gate_policy is not None
+                else {}
+            ),
+            **(
+                {"confirmationPass": contract.confirmation_pass}
+                if contract.confirmation_pass is not None
+                else {}
+            ),
+            "targetOrderPolicy": contract.target_order_policy,
+            **(
+                {
+                    "p50ComparisonStatistic": (
+                        contract.p50_comparison_statistic
+                    )
+                }
+                if contract.p50_comparison_statistic is not None
+                else {}
+            ),
+            **(
+                {"samplingBasis": contract.sampling_basis}
+                if contract.sampling_basis is not None
+                else {}
+            ),
             **(
                 {"nonRegression": contract.non_regression.document()}
                 if contract.non_regression is not None
@@ -2181,7 +2796,7 @@ def main() -> int:
     parser.add_argument(
         "--contract",
         type=Path,
-        default=Path("harness/performance/live-v5.toml"),
+        default=Path("harness/performance/live-v5.1.toml"),
     )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--plan", action="store_true")

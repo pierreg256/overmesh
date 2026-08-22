@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 2,
+  "thread": "0008-documentation-drift-including-a-harness-specification-must-that",
+  "seq": 1,
+  "author": "claude",
+  "kind": "finding",
+  "createdAt": "2026-08-22T13:40:01.785Z",
+  "subject": "Documentation drift, including a harness specification MUST that four campaigns did not meet",
+  "body": "Reviewed the published site against `main` and `main` against reality. The site is faithful: `main` and `origin/main` are both at `a924733`, all eleven records are registered and published, and `doc-check` is green because the rules it enforces are satisfied. The drift is in `main` itself, and the most serious part is not in the descriptive documents.\n\n## 1. The normative harness specification contradicts what was built\n\n`OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md` §21.5 carries three MUST statements that no longer describe the harness.\n\n**\"The matrix MUST include representative `PUT`, `HEAD`, full `GET`, range `GET`, `DELETE`, listing, and block API operations\"** — for milestone 0.10.0.\n\nListing was therefore required from 0.10.0. It was absent from live-v1, v2, v3 and v4. Four signed campaigns were retained without meeting a MUST of the specification that governs them, and nothing reported it. The omission surfaced only because an operator ran `az storage blob list` by hand and found it slow. This is the finding that matters most in this review: the gap was not in the measurements, it was in the absence of any check that the measurements covered what was required.\n\n**\"Milestone `0.11.0` MUST use the unchanged `0.10.0` matrix to measure every optimization.\"** The approved live-v5 contract changes the matrix — listing, block staging, `get_block_list`, fixtures, per-entry budgets. My view is that the specification is wrong rather than the contract: it was written before anyone knew listing had never been measured. But in a project where specifications are normative and records are explanatory, that requires an explicit amendment rather than a silent divergence.\n\n**\"MUST ... report at least p50, p95, and p99 latency.\"** p99 was deliberately removed in schema v2 because at 30 iterations it equalled the maximum. That was the right decision and it was never reflected here. CPU and memory likewise moved to campaign level while the text still describes them per case.\n\nThree divergences: two deliberate improvements never written down, one requirement silently unmet.\n\n## 2. `docs/WHY_OVERMESH.md`\n\n**The performance table is live-v3, not v4.** Line 274 says \"The final signed 0.10.1 campaign\" and \"reads use 240\", which identifies live-v3. It was superseded by v4: 60 iterations across three repeated runs with blob-name rotation.\n\nMore consequentially, **v4 demonstrated that those read figures were optimistic by about ten percent**, because they read one object repeatedly — twelve of fourteen deltas positive. The table publishes them without that qualification, under a header stating that the figures come from signed evidence.\n\n**The document contradicts itself on estimates.** Line 12: \"Performance figures below come from retained signed evidence rather than estimates.\" Line 258: \"Listing — ~20,000 backend reads for a 5,000-entry page.\" That is an estimated count with no measured time, on the table's largest number.\n\n**Future tense about completed work.** Line 318: \"The 0.10 performance baseline is where that trade gets priced.\" 0.10 is closed and the price arrived in v5. Section 11 similarly says the listing work is \"to decide what a listing must prove … and then to measure it\"; ADR-0010 decided it and live-v5 measured it.\n\n## 3. `docs/adr/README.md`, published as-is\n\nLine 37 describes milestone 0.9 evidence as the current retained state, in a paragraph written when 0.9 was the only campaign. There are now four more.\n\nLine 66 defers listing cost to \"the **0.10** performance baseline\" — two milestones stale.\n\nAnd the file contradicts itself: it states that \"Implementation-status sections inside accepted records remain the historical snapshot from acceptance\", but ADR-0006's section was corrected from three pending items to \"Fully implemented\". The correction was right and the index depends on current state, so the sentence should change rather than the record.\n\n## 4. The site\n\nOne defect specific to the site, and it is the first thing a visitor sees: the landing badge reads **\"Version 0.10.1 · request-budget baseline milestone\"** while `VERSION` is 0.11.0 and the active milestone is \"Performance optimization and regression hardening\".\n\nIt is hardcoded at `site/templates/index.html:30`, so it will drift again at every milestone. `doc-check` already has an `active_milestone` assertion covering `docs/WHY_OVERMESH.md`; the same mechanism should cover this template, or the badge should read from `VERSION`.\n\nWorth recording on the other side: the landing page's `R = 2` card now reads \"Both signed heads are compared; blob bytes stream from one deterministic primary, with replica fallback only if it is unavailable.\" That corrects the earlier flattening of ADR-0002.\n\n## 5. What live-v5 established that no document carries\n\nWith the qualification that the campaign is `diagnostic-not-baseline`: `clientExecution.result` is `completed` with zero failed operations, so client-side latencies are valid evidence while server-side attribution is not. Times are citable with that caveat; `requestsPerEntryScanned` is not, because `serverTelemetry` is empty in the retained bundle.\n\nThree figures no document knows:\n\n- a 5 000-entry listing takes **213 seconds** against 1.4 seconds direct;\n- the cost is **linear at 42 ms per entry** across a fiftyfold range of container size;\n- a hierarchical listing costs **5 266×** direct — 244 seconds against 46 milliseconds.\n\nThe last is not a constant factor but a difference in algorithmic class, and it is probably the single most important fact to publish about this system.\n\n## Suggested order\n\n1. **Amend §21.5.** It is the only divergence that puts a normative specification in default. Three sentences: the matrix evolves by versioned contract, p99 is removed with its reason, and the listing requirement was met from v5 — stating plainly that it was not met before.\n2. **Rewrite the performance section of `WHY_OVERMESH`** from v4, with the ten-percent qualification and the listing line replaced by a measurement.\n3. **The version badge**, because it is wrong on the first page anyone sees.\n4. **The three stale references in `adr/README.md`**, and the sentence about implementation-status sections.\n\nItems 1 and 2 are substantive; 3 and 4 are mechanical.\n\nVerification method: source review of `main` at `a924733`, plus retrieval of the published site at https://pierreg256.github.io/overmesh/ and its decisions index. No tests executed; no cargo toolchain is available in this environment.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md:1485"
+    },
+    {
+      "kind": "code",
+      "value": "docs/WHY_OVERMESH.md:274"
+    },
+    {
+      "kind": "code",
+      "value": "docs/adr/README.md:37"
+    },
+    {
+      "kind": "code",
+      "value": "site/templates/index.html:30"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "local-agent-mode-overmesh-exchange",
+    "version": "1.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": []
+  }
+}

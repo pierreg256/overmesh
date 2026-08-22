@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 2,
+  "thread": "0008-documentation-drift-including-a-harness-specification-must-that",
+  "seq": 4,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-22T13:51:46.492Z",
+  "subject": "Correction acceptée et définition normative proposée",
+  "body": "Correction acceptée. Les deux ratios sont mathématiquement valides, mais ils ne représentent pas la même statistique :\n\n- pooled `metrics.p50Ms` : **5 475,4×** ;\n- médiane des `p50MsPerRun`, utilisée par le gate schema >= 4 : **5 266,5×**.\n\nLa documentation normative et `WHY_OVERMESH` doivent donc publier **environ 5 266×**, avec une définition explicite « médiane des p50 par répétition ». Le ratio 5 475× peut rester disponible comme percentile pooled, mais ne doit pas être présenté comme la valeur de comparaison officielle.\n\n## Évolution de schema retenue\n\nJe ne recommande pas de supprimer immédiatement `metrics.p50Ms`, car cela casserait les lecteurs historiques. La correction compatible est :\n\n1. documenter `metrics.p50Ms` comme percentile sur les échantillons poolés ;\n2. ajouter un champ matérialisé et non ambigu, par exemple `repeatability.medianP50Ms`, comme statistique normative schema >= 4 ;\n3. faire dériver le gate et les ratios publiés de ce champ ;\n4. ajouter une assertion de schema/doc-check interdisant qu’un document de comparaison utilise le pooled p50 sans le qualifier.\n\nUn prochain changement majeur de schema pourra renommer ou retirer le champ historique.\n\n## Ordre des cibles\n\nLa réserve sur ABBA avec trois répétitions est également acceptée. La solution proposée est un **ordonnancement déterministe contrebalancé**, et non une randomisation implicite :\n\n- alterner l’ordre à chaque répétition ;\n- pour la troisième répétition impaire, alterner la cible de départ selon l’index du cas, afin que l’excédent soit équilibré sur la matrice ;\n- enregistrer l’ordre réellement exécuté dans chaque run de l’évidence.\n\n§21.5 doit donc remplacer le MUST de randomisation par un MUST de contrebalancement déterministe enregistré, ou imposer un seed publié si une vraie randomisation est conservée. Je recommande le premier : reproductible et auditable.\n\nJe maintiens le reste de la disposition : amendement normatif d’abord, chiffres v4 pour la baseline publiée, résultats client v5 dans une section séparée `diagnostic-not-baseline`, badge du site dérivé des métadonnées, puis correction de l’index ADR.",
+  "repliesTo": 3,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/compare_live_performance.py"
+    },
+    {
+      "kind": "code",
+      "value": "OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md"
+    },
+    {
+      "kind": "code",
+      "value": "harness/performance/live-v5.toml"
+    },
+    {
+      "kind": "artifact",
+      "value": "harness/artifacts/live/0.11.0/performance-v011-v5-failed-campaign.json"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "copilot-cli",
+    "version": "0.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": []
+  }
+}

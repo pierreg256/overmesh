@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     path::Path,
     sync::{
         Arc, Mutex,
@@ -37,12 +37,14 @@ impl ControlTokenProvider for TestControlTokenProvider {
 struct MemoryState {
     objects: Mutex<HashMap<String, ObjectValue>>,
     control_get_calls: Mutex<HashMap<String, u64>>,
+    control_get_failures: Mutex<HashSet<String>>,
     etag_counter: AtomicU64,
     digest_calls: AtomicU64,
     list_calls: AtomicU64,
     control_page_calls: AtomicU64,
     max_control_page_limit: AtomicU64,
     blob_read_auth_calls: AtomicU64,
+    container_list_auth_calls: AtomicU64,
     caller_head_calls: AtomicU64,
     blob_write_auth_calls: AtomicU64,
     caller_data_write_calls: AtomicU64,
@@ -74,6 +76,14 @@ impl MemoryBackend {
 
     fn clear_failure(&self) {
         *self.state.fail_prefix.lock().expect("failure lock") = None;
+    }
+
+    fn fail_control_get(&self, object_key: &str) {
+        self.state
+            .control_get_failures
+            .lock()
+            .expect("control get failures")
+            .insert(object_key.to_owned());
     }
 
     fn return_empty_control_page_once(&self) {
@@ -260,6 +270,9 @@ impl ReplicaBackend for MemoryBackend {
         container: &str,
         _caller_token: &CallerToken,
     ) -> Result<(), BackendError> {
+        self.state
+            .container_list_auth_calls
+            .fetch_add(1, Ordering::SeqCst);
         if self
             .state
             .containers
@@ -419,6 +432,17 @@ impl ReplicaBackend for MemoryBackend {
             .expect("control get call lock")
             .entry(object_key.to_owned())
             .or_default() += 1;
+        if self
+            .state
+            .control_get_failures
+            .lock()
+            .expect("control get failures")
+            .contains(object_key)
+        {
+            return Err(BackendError::InvalidResponse(format!(
+                "injected control GET failure for {object_key}"
+            )));
+        }
         Ok(self.object(object_key))
     }
 
@@ -777,6 +801,7 @@ fn service_fixture_parts_with_staging_lifetime(
         Arc::new(TestControlTokenProvider),
         CommitServiceOptions {
             listing_token_lifetime: Duration::from_secs(15 * 60),
+            listing_validation_concurrency: 32,
             staging_lifetime,
         },
     ));
@@ -828,6 +853,7 @@ fn three_backend_service_fixture() -> (Arc<CommitService>, Arc<MemoryBackend>) {
         Arc::new(TestControlTokenProvider),
         CommitServiceOptions {
             listing_token_lifetime: Duration::from_secs(15 * 60),
+            listing_validation_concurrency: 32,
             staging_lifetime: Duration::from_secs(7 * 24 * 60 * 60),
         },
     ));
@@ -1794,6 +1820,9 @@ async fn listing_uses_bounded_catalog_pages_without_blob_read_probes() {
         .await
         .expect("listing");
     assert_eq!(page.entries.len(), 2);
+    assert_eq!(page.entries_considered, 3);
+    assert_eq!(page.entries_validated, 3);
+    assert_eq!(page.validation_concurrency, 32);
     assert!(page.next_marker.is_some());
     assert!(
         page.entries
@@ -1930,8 +1959,120 @@ async fn list_containers_uses_visible_catalog_entries_without_account_listing() 
             .collect::<Vec<_>>(),
         ["visible-customer"]
     );
+    assert_eq!(page.entries_considered, 1);
+    assert_eq!(page.entries_validated, 1);
+    assert_eq!(
+        primary
+            .state
+            .container_list_auth_calls
+            .load(Ordering::SeqCst),
+        1
+    );
+    assert_eq!(
+        secondary
+            .state
+            .container_list_auth_calls
+            .load(Ordering::SeqCst),
+        1
+    );
     assert_eq!(primary.state.list_calls.load(Ordering::SeqCst), 1);
     assert_eq!(secondary.state.list_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn list_containers_validates_only_one_catalog_entry_per_visible_container() {
+    use crate::listing::ListRequest;
+
+    let (service, primary, secondary) = service_fixture_parts();
+    for backend in [&primary, &secondary] {
+        backend.add_container("populated", 10);
+    }
+    for index in 0..32 {
+        let path = format!("/populated/blob-{index:02}");
+        let content = spool_body(Body::from(path.clone()), 4)
+            .await
+            .expect("content");
+        service
+            .put_blob(
+                &blob(&path),
+                &principal(),
+                &format!("populated-{index:02}"),
+                &content,
+                LogicalCondition::None,
+            )
+            .await
+            .expect("commit");
+    }
+    let primary_gets_before = primary
+        .state
+        .control_get_calls
+        .lock()
+        .expect("get calls")
+        .values()
+        .sum::<u64>();
+    let secondary_gets_before = secondary
+        .state
+        .control_get_calls
+        .lock()
+        .expect("get calls")
+        .values()
+        .sum::<u64>();
+
+    let page = service
+        .listing_service("test-account")
+        .list_containers(
+            &ListRequest::new(String::new(), String::new(), None, Some(10), Vec::new())
+                .expect("request"),
+            &principal(),
+        )
+        .await
+        .expect("container listing");
+
+    assert_eq!(
+        page.containers
+            .iter()
+            .map(|container| container.name.as_str())
+            .collect::<Vec<_>>(),
+        ["populated"]
+    );
+    assert_eq!(page.entries_considered, 32);
+    assert_eq!(page.entries_validated, 1);
+    assert_eq!(
+        primary
+            .state
+            .control_get_calls
+            .lock()
+            .expect("get calls")
+            .values()
+            .sum::<u64>()
+            - primary_gets_before,
+        2
+    );
+    assert_eq!(
+        secondary
+            .state
+            .control_get_calls
+            .lock()
+            .expect("get calls")
+            .values()
+            .sum::<u64>()
+            - secondary_gets_before,
+        2
+    );
+    assert_eq!(
+        primary
+            .state
+            .container_list_auth_calls
+            .load(Ordering::SeqCst),
+        1
+    );
+    assert_eq!(
+        secondary
+            .state
+            .container_list_auth_calls
+            .load(Ordering::SeqCst),
+        1
+    );
 }
 
 #[tokio::test]
@@ -2016,6 +2157,20 @@ async fn delimiter_continuation_consumes_a_prefix_group_across_catalog_pages() {
 
     let listing = service.listing_service("test-account");
     let first_before = primary.state.control_page_calls.load(Ordering::SeqCst);
+    let primary_gets_before = primary
+        .state
+        .control_get_calls
+        .lock()
+        .expect("get calls")
+        .values()
+        .sum::<u64>();
+    let secondary_gets_before = secondary
+        .state
+        .control_get_calls
+        .lock()
+        .expect("get calls")
+        .values()
+        .sum::<u64>();
     let first = listing
         .list_blobs(
             "container",
@@ -2026,6 +2181,8 @@ async fn delimiter_continuation_consumes_a_prefix_group_across_catalog_pages() {
         .await
         .expect("first page");
     assert_eq!(first.entries, [BlobListEntry::Prefix("dir/".to_owned())]);
+    assert_eq!(first.entries_considered, 34);
+    assert_eq!(first.entries_validated, 2);
     assert!(first.next_marker.is_some());
     assert_eq!(
         primary.state.control_page_calls.load(Ordering::SeqCst) - first_before,
@@ -2034,6 +2191,28 @@ async fn delimiter_continuation_consumes_a_prefix_group_across_catalog_pages() {
     assert_eq!(
         secondary.state.control_page_calls.load(Ordering::SeqCst),
         primary.state.control_page_calls.load(Ordering::SeqCst)
+    );
+    assert_eq!(
+        primary
+            .state
+            .control_get_calls
+            .lock()
+            .expect("get calls")
+            .values()
+            .sum::<u64>()
+            - primary_gets_before,
+        4
+    );
+    assert_eq!(
+        secondary
+            .state
+            .control_get_calls
+            .lock()
+            .expect("get calls")
+            .values()
+            .sum::<u64>()
+            - secondary_gets_before,
+        4
     );
     let second = listing
         .list_blobs(
@@ -2055,6 +2234,53 @@ async fn delimiter_continuation_consumes_a_prefix_group_across_catalog_pages() {
         [BlobListEntry::Blob(blob)] if blob.name == "z"
     ));
     assert!(second.next_marker.is_none());
+}
+
+#[tokio::test]
+async fn concurrent_listing_reports_backend_errors_in_catalog_key_order() {
+    use crate::{
+        catalog::catalog_key_from_canonical,
+        listing::{ListRequest, ListingError},
+    };
+
+    let (service, primary, _secondary) = service_fixture_parts();
+    for name in ["a", "b"] {
+        let path = format!("/container/{name}");
+        let content = spool_body(Body::from(path.clone()), 4)
+            .await
+            .expect("content");
+        service
+            .put_blob(
+                &blob(&path),
+                &principal(),
+                &format!("ordered-error-{name}"),
+                &content,
+                LogicalCondition::None,
+            )
+            .await
+            .expect("commit");
+    }
+    let first_key =
+        catalog_key_from_canonical("/test-account/container/a").expect("first catalog key");
+    let second_key =
+        catalog_key_from_canonical("/test-account/container/b").expect("second catalog key");
+    primary.fail_control_get(&first_key);
+    primary.fail_control_get(&second_key);
+
+    let error = service
+        .listing_service("test-account")
+        .list_blobs(
+            "container",
+            &ListRequest::new(String::new(), String::new(), None, Some(2), Vec::new())
+                .expect("request"),
+            &principal(),
+        )
+        .await
+        .expect_err("listing must fail");
+
+    assert!(
+        matches!(error, ListingError::Backend(BackendError::InvalidResponse(message)) if message.contains(&first_key))
+    );
 }
 
 #[tokio::test]

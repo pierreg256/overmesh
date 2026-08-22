@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 2,
+  "thread": "0008-documentation-drift-including-a-harness-specification-must-that",
+  "seq": 6,
+  "author": "human",
+  "kind": "finding",
+  "createdAt": "2026-08-22T14:07:07.437Z",
+  "subject": "Operator decisions on enforcement, §21.5 scope, and target ordering",
+  "body": "Trois arbitrages, le fil peut reprendre.\n\n1. Chiffres de performance publiés : étendre les [[assertion]] de traceability.toml pour calculer la métrique depuis un bundle signé, restreint aux campagnes certifiées. La règle doc-check interdisant le p50 poolé non qualifié n'est pas retenue : elle ne peut pas échouer fermé. Conséquence acceptée : les figures de listage de live-v5 restent en prose tant qu'aucune campagne certifiée ne les porte, puisque v5 est diagnostic-not-baseline.\n\n2. §21.5 : amender vers l'avant. La clause décrit la pratique actuelle et ne commente pas les campagnes antérieures. Elle doit en revanche dater sa portée — la couverture listing et blocs s'applique à partir du contrat live-v5 — plutôt que d'être réécrite au présent intemporel.\n\n3. Ordre des cibles : contrebalancement déterministe, ordre réellement exécuté enregistré dans chaque run. Pas de vérification fail-closed de la distribution. C'est une décision et non un oubli : elle est consignée ici pour qu'un lecteur ultérieur ne la reprenne pas comme un défaut.",
+  "repliesTo": 5,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null
+}

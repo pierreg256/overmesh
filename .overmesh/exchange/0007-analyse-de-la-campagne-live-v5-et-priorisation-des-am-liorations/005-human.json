@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 2,
+  "thread": "0007-analyse-de-la-campagne-live-v5-et-priorisation-des-am-liorations",
+  "seq": 5,
+  "author": "human",
+  "kind": "finding",
+  "createdAt": "2026-08-22T14:11:05.495Z",
+  "subject": "Operator decisions on sampling, block-path scope, and per-case validity",
+  "body": "Trois arbitrages, plus validation du plan.\n\n1. Échantillonnage : recalibrer les itérations dès v5.1, à partir des écarts mesurés dans le diagnostic v5, et non des valeurs devinées au moment d'écrire le contrat. C'est indépendant du listage et des blocs, ça ne touche aucune ligne de gateway, et ça rend moins chères toutes les validations suivantes. À faire avant les correctifs, pas après.\n\n2. Chemin de blocs : décomposer ET corriger dans 0.11. La ventilation par classe d'objet des 181 et 442 requêtes et la cause nommée du +1 restent le préalable, mais la correction entre dans le périmètre du jalon. J'accepte que cela tire le premier item P2 en scope et demande probablement un ADR, puisque toucher au coût par bloc touche le protocole de commit. Raison : azcopy empruntera ce chemin dans la campagne poste-développeur, et je ne veux pas publier ces chiffres sans qu'une correction ait été tentée.\n\n3. Validité par cas : implémenter d'abord, documenter ensuite. Avec une réserve : §21.5 est déjà ouvert pour amendement suite à la décision prise sur le fil 0008. La sémantique — ce qu'implique un cas invalide, pourquoi la baseline canonique reste atomique, pourquoi une exclusion doit être déclarée avant exécution — doit être écrite dans cette même passe et non dans une passe ultérieure.\n\nLe reste de la disposition est validé sans changement : la séparation validité-par-cas / baseline atomique, l'ordre P0/P1/P2, les deux micro-gates dont celui à défaut de collecte injecté, ACA maintenu à 25 faute de signal, et 5 266,5× comme statistique normative.",
+  "repliesTo": 4,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/performance/live-v5.toml"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null
+}

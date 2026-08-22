@@ -58,9 +58,11 @@ pub struct BlobListPage {
     pub max_results: u32,
     pub marker: String,
     pub entries: Vec<BlobListEntry>,
-    pub entries_scanned: u64,
+    pub entries_considered: u64,
+    pub entries_validated: u64,
     pub next_marker: Option<String>,
     pub include_metadata: bool,
+    pub validation_concurrency: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -76,8 +78,10 @@ pub struct ContainerListPage {
     pub max_results: u32,
     pub marker: String,
     pub containers: Vec<ListedContainer>,
-    pub entries_scanned: u64,
+    pub entries_considered: u64,
+    pub entries_validated: u64,
     pub next_marker: Option<String>,
+    pub validation_concurrency: usize,
 }
 
 #[derive(Debug, Error)]
@@ -102,6 +106,7 @@ pub struct ListingService {
     signer: Arc<dyn ManifestSigner>,
     control_tokens: SharedControlTokenProvider,
     token_lifetime: Duration,
+    validation_concurrency: usize,
 }
 
 impl ListRequest {
@@ -151,7 +156,12 @@ impl ListingService {
         signer: Arc<dyn ManifestSigner>,
         control_tokens: SharedControlTokenProvider,
         token_lifetime: Duration,
+        validation_concurrency: usize,
     ) -> Self {
+        assert!(
+            (1..=256).contains(&validation_concurrency),
+            "listing validation concurrency must be between 1 and 256"
+        );
         Self {
             logical_account: logical_account.into(),
             ring,
@@ -159,6 +169,7 @@ impl ListingService {
             signer,
             control_tokens,
             token_lifetime,
+            validation_concurrency,
         }
     }
 
@@ -203,7 +214,8 @@ impl ListingService {
         let batch_size = limit.saturating_add(1).max(MIN_CATALOG_PAGE_SIZE);
         let mut backend_cursors = state.map_or(backend_cursors, |state| state.backend_cursors);
         let mut entries = Vec::with_capacity(limit);
-        let mut entries_scanned = 0_u64;
+        let mut entries_considered = 0_u64;
+        let mut entries_validated = 0_u64;
         let mut last_emitted_prefix = None;
         let mut has_more = false;
         let mut continuation_cursors = backend_cursors.clone();
@@ -230,45 +242,100 @@ impl ListingService {
                 }
                 continue;
             }
-            for key in keys {
+            let mut key_index = 0;
+            while key_index < keys.len() {
+                if request.delimiter.is_empty() {
+                    let remaining = limit.saturating_sub(entries.len());
+                    let fanout = self.validation_concurrency.min(remaining.max(1));
+                    let mut candidates = Vec::with_capacity(fanout);
+                    while key_index < keys.len() && candidates.len() < fanout {
+                        let key = keys[key_index].clone();
+                        key_index += 1;
+                        if after.as_ref().is_some_and(|cursor| key <= *cursor) {
+                            continue;
+                        }
+                        entries_considered = entries_considered.saturating_add(1);
+                        let Ok(logical_blob) =
+                            logical_blob_from_catalog_key(&self.logical_account, &key)
+                        else {
+                            after = Some(key);
+                            continue;
+                        };
+                        if is_internal_blob_name(logical_blob.blob()) {
+                            after = Some(key);
+                            continue;
+                        }
+                        candidates.push(key);
+                    }
+                    let validations =
+                        join_all(candidates.iter().map(|key| {
+                            self.validated_catalog_blob(key, &quarantined, &control_token)
+                        }))
+                        .await;
+                    for (key, validation) in candidates.into_iter().zip(validations) {
+                        entries_validated = entries_validated.saturating_add(1);
+                        let Some((name, metadata)) = validation? else {
+                            after = Some(key);
+                            continue;
+                        };
+                        if entries.len() == limit {
+                            has_more = true;
+                            continuation_cursors = page_start_cursors;
+                            break 'catalog;
+                        }
+                        entries.push(BlobListEntry::Blob(ListedBlob { name, metadata }));
+                        last_emitted_prefix = None;
+                        after = Some(key);
+                    }
+                    continue;
+                }
+
+                let key = keys[key_index].clone();
+                key_index += 1;
                 if after.as_ref().is_some_and(|cursor| key <= *cursor) {
                     continue;
                 }
-                let candidate = self
+                entries_considered = entries_considered.saturating_add(1);
+                let Ok(logical_blob) = logical_blob_from_catalog_key(&self.logical_account, &key)
+                else {
+                    after = Some(key);
+                    continue;
+                };
+                let name = logical_blob.blob();
+                if is_internal_blob_name(name) {
+                    after = Some(key);
+                    continue;
+                }
+                let collapsed_prefix =
+                    listed_blob_prefix(name, &request.prefix, &request.delimiter);
+                if collapsed_prefix
+                    .as_ref()
+                    .is_some_and(|prefix| last_emitted_prefix.as_deref() == Some(prefix.as_str()))
+                {
+                    after = Some(key);
+                    continue;
+                }
+                entries_validated = entries_validated.saturating_add(1);
+                let Some((name, metadata)) = self
                     .validated_catalog_blob(&key, &quarantined, &control_token)
-                    .await?;
-                entries_scanned = entries_scanned.saturating_add(1);
-                let Some((name, metadata)) = candidate else {
+                    .await?
+                else {
                     after = Some(key);
                     continue;
                 };
-                if is_internal_blob_name(&name) {
-                    after = Some(key);
-                    continue;
-                }
-                let output = listed_blob_entry(name, metadata, &request.prefix, &request.delimiter);
-                let duplicate_prefix = match &output {
-                    BlobListEntry::Prefix(prefix) => {
-                        last_emitted_prefix.as_deref() == Some(prefix.as_str())
-                    }
-                    BlobListEntry::Blob(_) => false,
-                };
-                if duplicate_prefix {
-                    after = Some(key.clone());
-                    continue;
-                }
                 if entries.len() == limit {
                     has_more = true;
                     continuation_cursors = page_start_cursors;
                     break 'catalog;
                 }
+                let output = listed_blob_entry(name, metadata, &request.prefix, &request.delimiter);
                 if let BlobListEntry::Prefix(prefix) = &output {
                     last_emitted_prefix = Some(prefix.clone());
                 } else {
                     last_emitted_prefix = None;
                 }
                 entries.push(output);
-                after = Some(key.clone());
+                after = Some(key);
             }
             backend_cursors = next_cursors;
             if backend_cursors_exhausted(&backend_cursors) {
@@ -301,9 +368,11 @@ impl ListingService {
             max_results: request.max_results,
             marker: request.marker.clone().unwrap_or_default(),
             entries,
-            entries_scanned,
+            entries_considered,
+            entries_validated,
             next_marker,
             include_metadata: request.include.iter().any(|value| value == "metadata"),
+            validation_concurrency: self.validation_concurrency,
         })
     }
 
@@ -343,7 +412,8 @@ impl ListingService {
         let limit = usize::try_from(request.max_results).expect("maxresults fits usize");
         let batch_size = limit.saturating_add(1).max(MIN_CATALOG_PAGE_SIZE);
         let mut containers = Vec::with_capacity(limit);
-        let mut entries_scanned = 0_u64;
+        let mut entries_considered = 0_u64;
+        let mut entries_validated = 0_u64;
         let mut last_container = after.clone();
         let mut continuation_cursors = backend_cursors.clone();
         let mut has_more = false;
@@ -370,46 +440,104 @@ impl ListingService {
                 }
                 continue;
             }
-            for key in keys {
-                let Ok(logical_blob) = logical_blob_from_catalog_key(&self.logical_account, &key)
-                else {
-                    continue;
-                };
-                let candidate = logical_blob.container().to_owned();
-                if candidate == SYSTEM_CONTAINER
-                    || !candidate.starts_with(&request.prefix)
-                    || last_container
-                        .as_ref()
-                        .is_some_and(|previous| candidate <= *previous)
-                {
-                    continue;
-                }
-                let Some((_blob, metadata)) = self
-                    .validated_catalog_blob(&key, &quarantined, &control_token)
-                    .await?
-                else {
-                    entries_scanned = entries_scanned.saturating_add(1);
-                    continue;
-                };
-                entries_scanned = entries_scanned.saturating_add(1);
-                match self.authorize_container(&candidate, principal).await {
-                    Ok(()) => {}
-                    Err(ListingError::Authorization | ListingError::ContainerNotFound) => {
+            let mut key_index = 0;
+            while key_index < keys.len() {
+                let remaining = limit.saturating_sub(containers.len());
+                let fanout = self.validation_concurrency.min(remaining.max(1));
+                let mut candidates: Vec<(String, Vec<String>)> = Vec::with_capacity(fanout);
+                while key_index < keys.len() {
+                    let key = &keys[key_index];
+                    entries_considered = entries_considered.saturating_add(1);
+                    let Ok(logical_blob) =
+                        logical_blob_from_catalog_key(&self.logical_account, key)
+                    else {
+                        key_index += 1;
+                        continue;
+                    };
+                    let candidate = logical_blob.container().to_owned();
+                    if candidate == SYSTEM_CONTAINER
+                        || !candidate.starts_with(&request.prefix)
+                        || last_container
+                            .as_ref()
+                            .is_some_and(|previous| candidate <= *previous)
+                    {
+                        key_index += 1;
                         continue;
                     }
-                    Err(error) => return Err(error),
+                    if let Some((last_candidate, candidate_keys)) = candidates.last_mut()
+                        && *last_candidate == candidate
+                    {
+                        candidate_keys.push(key.clone());
+                        key_index += 1;
+                        continue;
+                    }
+                    if candidates.len() == fanout {
+                        entries_considered = entries_considered.saturating_sub(1);
+                        break;
+                    }
+                    candidates.push((candidate, vec![key.clone()]));
+                    key_index += 1;
                 }
-                if containers.len() == limit {
-                    has_more = true;
-                    continuation_cursors = page_start_cursors;
-                    break 'catalog;
+                let validations = join_all(candidates.iter().map(|(candidate, candidate_keys)| {
+                    let quarantined = &quarantined;
+                    let control_token = &control_token;
+                    async move {
+                        let mut attempts = 0_u64;
+                        for key in candidate_keys {
+                            attempts = attempts.saturating_add(1);
+                            let result = self
+                                .validated_catalog_blob(key, quarantined, control_token)
+                                .await;
+                            let Some((_blob, metadata)) = (match result {
+                                Ok(value) => value,
+                                Err(error) => return (attempts, Err(error)),
+                            }) else {
+                                continue;
+                            };
+                            let authorization =
+                                match self.authorize_container(candidate, principal).await {
+                                    Ok(()) => Ok(Some(metadata)),
+                                    Err(
+                                        ListingError::Authorization
+                                        | ListingError::ContainerNotFound,
+                                    ) => Ok(None),
+                                    Err(error) => Err(error),
+                                };
+                            return (attempts, authorization);
+                        }
+                        (attempts, Ok(None))
+                    }
+                }))
+                .await;
+                for ((candidate, _), (attempts, validation)) in
+                    candidates.into_iter().zip(validations)
+                {
+                    entries_validated = entries_validated.saturating_add(attempts);
+                    let Some(metadata) = validation? else {
+                        continue;
+                    };
+                    if last_container
+                        .as_ref()
+                        .is_some_and(|previous| candidate <= *previous)
+                    {
+                        continue;
+                    }
+                    if containers.len() == limit {
+                        has_more = true;
+                        continuation_cursors = page_start_cursors;
+                        break 'catalog;
+                    }
+                    containers.push(ListedContainer {
+                        name: candidate.clone(),
+                        last_modified_unix_ms: metadata.committed_at_unix_ms,
+                        etag: container_etag(
+                            &self.logical_account,
+                            &candidate,
+                            self.ring.ring_version,
+                        ),
+                    });
+                    last_container = Some(candidate);
                 }
-                containers.push(ListedContainer {
-                    name: candidate.clone(),
-                    last_modified_unix_ms: metadata.committed_at_unix_ms,
-                    etag: container_etag(&self.logical_account, &candidate, self.ring.ring_version),
-                });
-                last_container = Some(candidate);
             }
             backend_cursors = next_cursors;
             if backend_cursors_exhausted(&backend_cursors) {
@@ -439,8 +567,10 @@ impl ListingService {
             max_results: request.max_results,
             marker: request.marker.clone().unwrap_or_default(),
             containers,
-            entries_scanned,
+            entries_considered,
+            entries_validated,
             next_marker,
+            validation_concurrency: self.validation_concurrency,
         })
     }
 
@@ -450,11 +580,13 @@ impl ListingService {
         principal: &AuthenticatedPrincipal,
     ) -> Result<(), ListingError> {
         let mut missing = 0_usize;
-        for backend in self.backends.values() {
-            match backend
-                .authorize_container_list(container, &principal.access_token)
-                .await
-            {
+        let results =
+            join_all(self.backends.values().map(|backend| {
+                backend.authorize_container_list(container, &principal.access_token)
+            }))
+            .await;
+        for result in results {
+            match result {
                 Ok(()) => {}
                 Err(BackendError::Http { status, .. }) if status == http::StatusCode::NOT_FOUND => {
                     missing += 1;
@@ -785,6 +917,17 @@ fn listed_blob_entry(
     }
 }
 
+fn listed_blob_prefix(name: &str, prefix: &str, delimiter: &str) -> Option<String> {
+    if !delimiter.is_empty()
+        && let Some(index) = name[prefix.len()..].find(delimiter)
+    {
+        let end = prefix.len() + index + delimiter.len();
+        Some(name[..end].to_owned())
+    } else {
+        None
+    }
+}
+
 fn quarantine_path_hash(key: &str) -> Option<&str> {
     let path_hash = key.strip_prefix("quarantine/")?.strip_suffix(".json")?;
     (path_hash.len() == 64 && path_hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
@@ -917,9 +1060,11 @@ mod tests {
                 name: "a&b".to_owned(),
                 metadata: metadata(),
             })],
-            entries_scanned: 1,
+            entries_considered: 1,
+            entries_validated: 1,
             next_marker: Some("\"next\"".to_owned()),
             include_metadata: true,
+            validation_concurrency: 32,
         };
         let xml = page.to_xml("https://example.invalid");
         assert!(xml.contains("<Prefix>a&amp;</Prefix>"));

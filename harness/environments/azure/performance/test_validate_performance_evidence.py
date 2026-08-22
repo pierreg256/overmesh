@@ -3,9 +3,14 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
-from overmesh_live_performance import load_contract
+from overmesh_live_performance import (
+    latency_metrics,
+    load_contract,
+    target_order_for_case,
+)
 from validate_performance_evidence import (
     FORBIDDEN,
+    validate_block_staging_cost,
     validate_document,
     validate_v2_request_coverage,
 )
@@ -36,6 +41,16 @@ def telemetry(count: int, client_requests: int) -> dict:
 
 
 class ValidatePerformanceEvidenceTests(unittest.TestCase):
+    def test_listing_confirmation_skips_block_staging_cost_check(self) -> None:
+        contract = load_contract(
+            Path(
+                "harness/performance/"
+                "live-v5.1-listing-confirmation.toml"
+            )
+        )
+
+        validate_block_staging_cost(contract, {})
+
     def test_canonical_scan_rejects_infrastructure_identifiers(self) -> None:
         rejected = [
             "e74f6a12-1dd5-4652-96a0-f49007c59990",
@@ -119,6 +134,14 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
                         "p50Classification": "blocking",
                     },
                 }
+                if contract.revision == "v5.1":
+                    result["validity"] = {
+                        "status": "valid",
+                        "mandatory": True,
+                        "expectedRuns": contract.campaign_repeats,
+                        "completedRuns": contract.campaign_repeats,
+                        "failures": [],
+                    }
                 if target == "gateway":
                     count = (
                         benchmark_case.backend_requests_per_operation
@@ -189,24 +212,36 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
         }
         validate_document(document, contract, canonical=False)
 
-    def test_v5_listing_and_establish_budgets_are_accepted(self) -> None:
-        contract = load_contract(Path("harness/performance/live-v5.toml"))
+    def test_v51_listing_and_establish_budgets_are_accepted(self) -> None:
+        contract = load_contract(Path("harness/performance/live-v5.1.toml"))
         cases = []
-        for benchmark_case in contract.cases:
+        for case_index, benchmark_case in enumerate(contract.cases):
             is_listing = benchmark_case.operation.startswith("list_")
             for target in ("direct", "gateway"):
                 runs = []
                 for repeat, p50 in enumerate((100.0, 101.0, 102.0), 1):
                     iterations = benchmark_case.measured_iterations
+                    latencies = [p50] * iterations
                     run = {
                         "repeat": repeat,
+                        "targetOrder": list(
+                            target_order_for_case(
+                                contract,
+                                repeat - 1,
+                                case_index,
+                            )
+                        ),
                         "iterations": iterations,
                         "metrics": {
-                            "p50Ms": p50,
+                            **latency_metrics(latencies),
                             "successCount": iterations,
                             "errorCount": 0,
                         },
+                        "latenciesMs": latencies,
                     }
+                    run["targetOrderPosition"] = (
+                        run["targetOrder"].index(target) + 1
+                    )
                     if is_listing:
                         fixture = benchmark_case.fixture
                         self.assertIsNotNone(fixture)
@@ -232,29 +267,45 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
                         )
                         run["entriesReturned"] = entries_returned
                         if target == "gateway":
-                            per_entry = (
-                                7
-                                if benchmark_case.operation
-                                == "list_containers"
-                                else 4
-                            )
                             entries_scanned = (
                                 scanned_per_operation * iterations
                             )
-                            backend_count = per_entry * entries_scanned
+                            if contract.revision == "v5.1":
+                                entries_validated = entries_returned
+                                backend_count = 4 * entries_validated
+                            else:
+                                per_entry = (
+                                    7
+                                    if benchmark_case.operation
+                                    == "list_containers"
+                                    else 4
+                                )
+                                backend_count = per_entry * entries_scanned
                             run["serverTelemetry"] = telemetry(
                                 backend_count,
                                 iterations,
                             )
-                            run["listingBudget"] = {
-                                "entriesReturned": entries_returned,
-                                "entriesScanned": entries_scanned,
-                                "backendRequests": backend_count,
-                                "requestsPerEntryReturned": round(
-                                    backend_count / entries_returned, 6
-                                ),
-                                "requestsPerEntryScanned": float(per_entry),
-                            }
+                            if contract.revision == "v5.1":
+                                run["listingBudget"] = {
+                                    "entriesConsidered": entries_scanned,
+                                    "entriesValidated": entries_validated,
+                                    "entriesReturned": entries_returned,
+                                    "backendRequests": backend_count,
+                                    "requestsPerEntryValidated": 4.0,
+                                    "validationConcurrency": 32,
+                                }
+                            else:
+                                run["listingBudget"] = {
+                                    "entriesReturned": entries_returned,
+                                    "entriesScanned": entries_scanned,
+                                    "backendRequests": backend_count,
+                                    "requestsPerEntryReturned": round(
+                                        backend_count / entries_returned, 6
+                                    ),
+                                    "requestsPerEntryScanned": float(
+                                        per_entry
+                                    ),
+                                }
                     elif target == "gateway":
                         per_operation = (
                             benchmark_case.backend_requests_per_operation
@@ -282,9 +333,16 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
                     "operation": benchmark_case.operation,
                     "iterations": total_iterations,
                     "metrics": {
-                        "p50Ms": 101.0,
-                        "p90Ms": 102.0,
-                        "p95Ms": 102.0,
+                        **latency_metrics(
+                            [
+                                value
+                                for p50 in (100.0, 101.0, 102.0)
+                                for value in (
+                                    [p50]
+                                    * benchmark_case.measured_iterations
+                                )
+                            ]
+                        ),
                         "operationsPerSecond": 1.0,
                         "successCount": total_iterations,
                         "errorCount": 0,
@@ -293,8 +351,16 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
                     "repeatability": {
                         "runs": 3,
                         "p50MsPerRun": [100.0, 101.0, 102.0],
+                        "medianP50Ms": 101.0,
                         "p50SpreadRatio": 1.02,
                         "p50Classification": "blocking",
+                    },
+                    "validity": {
+                        "status": "valid",
+                        "mandatory": True,
+                        "expectedRuns": contract.campaign_repeats,
+                        "completedRuns": contract.campaign_repeats,
+                        "failures": [],
                     },
                 }
                 if benchmark_case.fixture is not None:
@@ -309,6 +375,8 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
                     result["backendRequestBudget"] = "establish"
                 if (
                     benchmark_case.expected_requests_per_entry_scanned
+                    == "establish"
+                    or benchmark_case.expected_requests_per_entry_validated
                     == "establish"
                 ):
                     result["listingRequestBudget"] = "establish"
@@ -327,33 +395,56 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
                             run["listingBudget"]["entriesReturned"]
                             for run in runs
                         )
-                        entries_scanned = sum(
-                            run["listingBudget"]["entriesScanned"]
-                            for run in runs
-                        )
                         backend_count = sum(
                             run["listingBudget"]["backendRequests"]
                             for run in runs
                         )
-                        result["listingBudget"] = {
-                            "entriesReturned": entries_returned,
-                            "entriesScanned": entries_scanned,
-                            "backendRequests": backend_count,
-                            "requestsPerEntryReturned": round(
-                                backend_count / entries_returned, 6
-                            ),
-                            "requestsPerEntryScanned": runs[0][
-                                "listingBudget"
-                            ]["requestsPerEntryScanned"],
-                        }
-                        result["repeatability"][
-                            "requestsPerEntryScannedPerRun"
-                        ] = [
-                            run["listingBudget"][
-                                "requestsPerEntryScanned"
+                        if contract.revision == "v5.1":
+                            result["listingBudget"] = {
+                                "entriesConsidered": sum(
+                                    run["listingBudget"][
+                                        "entriesConsidered"
+                                    ]
+                                    for run in runs
+                                ),
+                                "entriesValidated": sum(
+                                    run["listingBudget"][
+                                        "entriesValidated"
+                                    ]
+                                    for run in runs
+                                ),
+                                "entriesReturned": entries_returned,
+                                "backendRequests": backend_count,
+                                "requestsPerEntryValidated": 4.0,
+                                "validationConcurrency": 32,
+                            }
+                            result["repeatability"][
+                                "requestsPerEntryValidatedPerRun"
+                            ] = [4.0 for _run in runs]
+                        else:
+                            entries_scanned = sum(
+                                run["listingBudget"]["entriesScanned"]
+                                for run in runs
+                            )
+                            result["listingBudget"] = {
+                                "entriesReturned": entries_returned,
+                                "entriesScanned": entries_scanned,
+                                "backendRequests": backend_count,
+                                "requestsPerEntryReturned": round(
+                                    backend_count / entries_returned, 6
+                                ),
+                                "requestsPerEntryScanned": runs[0][
+                                    "listingBudget"
+                                ]["requestsPerEntryScanned"],
+                            }
+                            result["repeatability"][
+                                "requestsPerEntryScannedPerRun"
+                            ] = [
+                                run["listingBudget"][
+                                    "requestsPerEntryScanned"
+                                ]
+                                for run in runs
                             ]
-                            for run in runs
-                        ]
                     else:
                         result["serverTelemetry"] = telemetry(
                             sum(
@@ -389,6 +480,11 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
             "campaign": {
                 "isolatedEnvironment": True,
                 "releaseTag": "v0.11.0",
+                "clientExecution": {
+                    "wallSecondsExcludingFixtures": 2_200.0,
+                    "budgetSeconds": 3_600,
+                    "status": "passed",
+                },
                 "fixtureSetup": {
                     "wallSeconds": 1.0,
                     "backendRequests": {"count": 1},
@@ -414,6 +510,20 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
             },
             "contract": {
                 "schemaVersion": 5,
+                "revision": contract.revision,
+                "campaignPurpose": contract.campaign_purpose,
+                "baselineEligible": contract.baseline_eligible,
+                "clientWallTimeBudgetSeconds": (
+                    contract.client_wall_time_budget_seconds
+                ),
+                "latencyEvidence": contract.latency_evidence,
+                "p50GatePolicy": contract.p50_gate_policy,
+                "confirmationPass": contract.confirmation_pass,
+                "targetOrderPolicy": contract.target_order_policy,
+                "p50ComparisonStatistic": (
+                    contract.p50_comparison_statistic
+                ),
+                "samplingBasis": contract.sampling_basis,
                 "nonRegression": contract.non_regression.document(),
             },
             "cases": cases,
@@ -439,15 +549,24 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
                 }
             },
             "historicalComparison": {
-                "status": "baseline-established",
+                "status": "diagnostic-not-baseline",
                 "nonRegression": {
                     "policy": contract.non_regression.document(),
-                    "gateStatus": "baseline-established",
+                    "gateStatus": "diagnostic-only",
                     "blockingRegressions": [],
                     "p50LatencyGateCoverage": {
-                        "eligibleCases": len(contract.cases),
+                        "eligibleCases": 0,
                         "totalCases": len(contract.cases),
-                        "signalCases": [],
+                        "signalCases": [
+                            {
+                                "case": benchmark_case.id,
+                                "reasons": ["diagnostic-policy"],
+                            }
+                            for benchmark_case in sorted(
+                                contract.cases,
+                                key=lambda case: case.id,
+                            )
+                        ],
                     },
                 },
             },
@@ -457,6 +576,42 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
             },
         }
         validate_document(document, contract, canonical=False)
+        document["cases"][0]["validity"] = {
+            "status": "invalid",
+            "mandatory": True,
+            "expectedRuns": contract.campaign_repeats,
+            "completedRuns": contract.campaign_repeats - 1,
+            "failures": [{"reason": "client-operation-failed"}],
+        }
+        with self.assertRaisesRegex(
+            ValueError,
+            "mandatory performance cases are invalid",
+        ):
+            validate_document(document, contract, canonical=False)
+        document["cases"][0]["validity"] = {
+            "status": "valid",
+            "mandatory": True,
+            "expectedRuns": contract.campaign_repeats,
+            "completedRuns": contract.campaign_repeats,
+            "failures": [],
+        }
+        document["cases"][0]["runs"][0]["latenciesMs"][0] += 1.0
+        with self.assertRaisesRegex(
+            ValueError,
+            "latency metrics do not match its samples",
+        ):
+            validate_document(document, contract, canonical=False)
+        document["cases"][0]["runs"][0]["latenciesMs"][0] -= 1.0
+        document["campaign"]["clientExecution"] = {
+            "wallSecondsExcludingFixtures": 3_601.0,
+            "budgetSeconds": 3_600,
+            "status": "failed",
+        }
+        with self.assertRaisesRegex(
+            ValueError,
+            "client execution budget evidence is invalid",
+        ):
+            validate_document(document, contract, canonical=False)
 
 
 if __name__ == "__main__":

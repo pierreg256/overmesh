@@ -28,21 +28,26 @@ An ADR explains a choice; it does not define behaviour.
 | [0009](0009-redaction-policy-for-retained-live-evidence.md) | Redaction policy for retained live evidence | accepted | 0.9.0 → 0.9.1 | yes |
 | [0010](0010-keep-reconciler-safety-state-on-the-read-path.md) | Keep Reconciler safety state on the read path | accepted | 0.10.1 | yes |
 | [0011](0011-use-physical-content-heads-for-read-authorization.md) | Use physical content HEADs for read authorization | accepted | 0.10.1 | yes |
+| [0012](0012-consolidate-gateway-owned-commit-state.md) | Consolidate gateway-owned commit state into one document | accepted | 0.11.0 | no |
+| [0013](0013-metadata-reads-stay-at-two-replicas.md) | Metadata reads stay at two replicas | accepted | 0.11.0 | yes |
 
 ## Implementation status
 
-All runtime implementation items identified by the accepted records are
-present in the current tree. The live authorization gate has been executed
+Runtime decisions in the accepted records are implemented except for debt
+called out explicitly below. The live authorization gate has been executed
 against the deployed Gateway with controlled write-role revocation and
-restoration, and the milestone 0.9 release evidence is signed.
+restoration. Signed retained evidence now includes the 0.9 release gates, the
+certified 0.11 `live-v4` request-budget baseline, and the failed-closed
+`live-v5` diagnostic.
 
 The retained run covers authorization refusal and revocation, negative ARM
 posture mutations, three-account RF=2 placement with single-account outage
 isolation, the standard clients, and the Reconciler's repair, quarantine,
 administrator recovery and retention-backed collection paths.
 
-Implementation-status sections inside accepted records remain the historical
-snapshot from acceptance; the index above is the current implementation state.
+Implementation-status sections inside accepted records are maintained when
+later work changes the implementation of that decision. The index above is the
+compact current state; the record remains the detailed source.
 
 0008 carries one outstanding item: property tests for the catalogue encoding,
 asserting round-trip and order preservation over random byte strings. They are
@@ -59,12 +64,27 @@ controls until a replacement protocol defines identity ownership and freshness.
 0011 removes the redundant logical read probes from `HEAD` and `GET`; the
 caller-authorized physical content `HEAD` now also carries the Azure RBAC check.
 
+0012 is the only accepted record that is not fully implemented. It merges the
+gateway-owned head, high-water, prepared and terminal state into one document.
+Its canonical-lease prerequisite is implemented: Gateway and Reconciler route
+the lease to the deterministic primary for every canonical logical blob,
+including an anomalous head discovered on the secondary. Its amendment to
+0010 — reading Reconciler-owned safety state once per request rather than
+twice — is separable and does not require the merge.
+
+0013 records a decision not to change anything: metadata continues to be read
+from both replicas. It exists because 0002's admissibility table permits
+`W = 2, R = 1`, and because 0002 itself observes that performance work drifts
+toward that configuration.
+
 Two items are scheduled rather than pending. Parity with Azure on blob-name
 length is to be reopened **before 1.0**; if the encoding changes, the derived
 bound changes in `LogicalBlobId::parse`, in 0007, and in
 [`COMPATIBILITY.md`](../../COMPATIBILITY.md). Reducing listing below four
-backend reads per entry is a policy question for the **0.10** performance
-baseline, not an ordering fix.
+backend reads per validated entry remains an explicit policy question because
+it changes what listing proves. The 0.11 implementation preserves those four
+reads while scheduling validations with bounded ordered concurrency and
+skipping validation for descendants of an already emitted hierarchical prefix.
 
 ## Conventions
 

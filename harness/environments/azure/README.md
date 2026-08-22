@@ -186,32 +186,65 @@ OVERMESH_LIVE_ALLOWED_MANAGED_IDENTITY_CLIENT_ID="00000000-0000-0000-0000-000000
 make test-live-azure-client-compat
 ```
 
-## Performance baseline
+## Performance campaigns
 
 `make test-live-azure-performance` executes the versioned matrix in
-`harness/performance/live-v5.toml`. It executes the complete matrix three times
-in sequence, with workload-specific iteration counts recorded in the contract.
+`harness/performance/live-v5.1.toml`. This is the fast, 38-case diagnostic
+contract used while milestone 0.11 optimizations are being implemented. It has
+a 3,600-second client-execution budget, zero warm-up iterations, and three
+repeats. Reads run 20 measured operations per repeat; writes and deletes 10;
+100-entry listing 10; 1,000-entry listing 3; container listing 5; block
+sequences 5; and `Get Block List` 10.
 Repeats are separated by the rest of the matrix so their p50 spread
 measures run-to-run conditions rather than adjacent samples. The retained
 0.10.0 baseline remains bound to `live-v1.toml`; v2 is the first
 request-attributed contract and v3 is the single-path, 240-read-sample
 predecessor. The retained v4 contract remains immutable for its signed campaign.
+The v5 contract is likewise retained unchanged as the source of the signed
+failed-campaign diagnostic. V5.1 records that diagnostic and its SHA-256 as the
+basis for the operator-approved fast diagnostic. It sets
+`baseline_eligible = false`, so an unsigned or signed execution can neither
+establish nor replace the milestone 0.11 non-regression baseline. A first
+execution records `diagnostic-not-baseline`; comparison with an earlier
+execution of the same contract records `diagnostic-compared`. The p50 policy is
+explicitly `signal-only`; only backend requests per operation and listing
+requests per scanned entry remain blocking.
+
+The four 5,000-entry cases are isolated in
+`harness/performance/live-v5.1-listing-confirmation.toml`. That contract runs
+one measured operation in each of three repeats, with no warm-up, and is
+launched once after the listing optimization lands:
+
+```bash
+OVERMESH_LIVE_PERFORMANCE_CONTRACT=harness/performance/live-v5.1-listing-confirmation.toml \
+  make test-live-azure-performance
+```
+
+The fast contract pins the confirmation contract by path and SHA-256. Both
+contracts retain every measured latency sample in each run so the later,
+high-iteration baseline can size its samples from observed distributions.
+Because the fast contract samples each block-sequence case only 15 times across
+three repeats, a passing diagnostic does not by itself prove that the rare
+442/443 request-budget instability observed by live-v5 has disappeared.
 
 Each read case cycles deterministically over the same 24 logical paths in every
-repeat and campaign. Setup creates every path at the case payload size before
-warm-up. Collection fails unless the paths exercise all three RF=2 placement
+repeat and campaign. Setup creates every path at the case payload size before measurement.
+Collection fails unless the paths exercise all three RF=2 placement
 pairs, every individual client operation keeps the declared request budget,
 and every repeat has zero unattributed requests. Evidence records per-run p50,
 the max/min p50 spread, exact request budgets per run, placement coverage, and
-campaign-level read and write resolution. Schema v5 also records the direct
+campaign-level read and write resolution. V5.1 materializes the median of the
+per-run p50 values as the normative comparison statistic while preserving the
+pooled p50 as a diagnostic. Schema v5 also records the direct
 target's worst spread and the number of cases eligible for latency gating,
 including machine-readable reasons for every case degraded to a signal.
 Resolution describes variation between repeats inside one campaign; it does
 not estimate drift between campaigns run hours or days apart. Pool provisioning
-and cleanup remain outside the measured campaign window. The runner still alternates each
-case between one direct Storage Account and the live Overmesh endpoint, using
-the same managed identity, Azure SDK versions, validation host, payload bytes,
-operation count, and concurrency.
+and cleanup remain outside the measured campaign window. V5.1 counterbalances
+the direct and Gateway target order deterministically across repeats and cases,
+and records the actual order in every run. Both targets use the same managed
+identity, Azure SDK versions, validation host, payload bytes, operation count,
+and concurrency.
 
 The performance gate is intentionally excluded from `test-pre-pr-live` because
 it is long-running and retains signed release evidence. `make test-release`
@@ -251,11 +284,13 @@ otherwise it remains a signal. Absolute latency and p95 remain informational.
 The evidence publishes eligible and total case counts so a latency gate with
 little or no effective coverage cannot appear equivalent to a fully active
 gate.
-For listing, the blocking request gate is `requestsPerEntryScanned`; the
-Gateway emits the actual returned and scanned counts, and the collector counts
-only the four catalogue/head validation reads attributable to each scanned
-candidate. Fixed pagination and quarantine-list requests remain visible in
-full backend telemetry but do not dilute that per-entry budget.
+For `live-v5`, the historical blocking request gate remains
+`requestsPerEntryScanned`. Starting with `live-v5.1`, listing evidence separates
+`entriesConsidered`, `entriesValidated`, and `entriesReturned`; the blocking
+gate is `requestsPerEntryValidated = 4.0`. The evidence also records the
+configured validation concurrency. Fixed pagination, authorization, and
+quarantine-list requests remain visible in full backend telemetry but do not
+dilute the four catalogue/head reads per validated entry.
 
 Additional required environment:
 
@@ -295,8 +330,9 @@ canonical performance evidence file. The gate rejects a different contract or
 case set, then records changes in Gateway-to-direct latency and throughput
 ratios, backend requests per operation, signing p95, campaign peak CPU, and
 campaign peak memory.
-Without a predecessor, the signed result explicitly records
-`baseline-established`.
+Without a predecessor, a baseline-eligible contract records
+`baseline-established`; the active v5.1 contracts instead record
+`diagnostic-not-baseline`.
 
 The client-side baseline deliberately does not infer server behavior. Gateway
 logs emit one structured `overmesh_backend_request` event per Storage request

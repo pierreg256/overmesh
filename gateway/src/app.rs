@@ -138,7 +138,13 @@ async fn blob_request_scoped(state: AppState, request: Request<Body>) -> Respons
         let service = commit_service.listing_service(state.logical_account.clone());
         match service.list_containers(&list_request, &principal).await {
             Ok(page) => {
-                emit_listing_scan("containers", page.containers.len(), page.entries_scanned);
+                emit_listing_scan(
+                    "containers",
+                    page.containers.len(),
+                    page.entries_considered,
+                    page.entries_validated,
+                    page.validation_concurrency,
+                );
                 listing_response(page.to_xml(&service_endpoint(&state.logical_account)))
             }
             Err(error) => listing_error_response(error),
@@ -168,7 +174,13 @@ async fn blob_request_scoped(state: AppState, request: Request<Body>) -> Respons
             .await
         {
             Ok(page) => {
-                emit_listing_scan("blobs", page.entries.len(), page.entries_scanned);
+                emit_listing_scan(
+                    "blobs",
+                    page.entries.len(),
+                    page.entries_considered,
+                    page.entries_validated,
+                    page.validation_concurrency,
+                );
                 listing_response(page.to_xml(&service_endpoint(&state.logical_account)))
             }
             Err(error) => listing_error_response(error),
@@ -774,14 +786,22 @@ fn listing_response(xml: String) -> Response {
     response
 }
 
-fn emit_listing_scan(scope: &str, entries_returned: usize, entries_scanned: u64) {
+fn emit_listing_scan(
+    scope: &str,
+    entries_returned: usize,
+    entries_considered: u64,
+    entries_validated: u64,
+    validation_concurrency: usize,
+) {
     let client_request_fingerprint = current_client_request_fingerprint();
     info!(
         event = "overmesh_listing_scan",
         client_request_fingerprint = %client_request_fingerprint,
         scope,
         entries_returned,
-        entries_scanned,
+        entries_considered,
+        entries_validated,
+        validation_concurrency,
     );
 }
 

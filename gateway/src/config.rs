@@ -79,12 +79,15 @@ pub enum TopologyValidationProvider {
 pub struct ListingConfig {
     #[serde(default = "default_continuation_token_lifetime_seconds")]
     pub continuation_token_lifetime_seconds: u64,
+    #[serde(default = "default_listing_validation_concurrency")]
+    pub validation_concurrency: usize,
 }
 
 impl Default for ListingConfig {
     fn default() -> Self {
         Self {
             continuation_token_lifetime_seconds: default_continuation_token_lifetime_seconds(),
+            validation_concurrency: default_listing_validation_concurrency(),
         }
     }
 }
@@ -289,6 +292,10 @@ impl GatewayConfig {
             "listing.continuationTokenLifetimeSeconds must be between 60 and 86400"
         );
         anyhow::ensure!(
+            (1..=256).contains(&self.listing.validation_concurrency),
+            "listing.validationConcurrency must be between 1 and 256"
+        );
+        anyhow::ensure!(
             (60..=30 * 24 * 60 * 60).contains(&self.staged_blocks.retention_seconds),
             "stagedBlocks.retentionSeconds must be between 60 and 2592000"
         );
@@ -319,6 +326,7 @@ impl GatewayConfig {
                 listing_token_lifetime: std::time::Duration::from_secs(
                     self.listing.continuation_token_lifetime_seconds,
                 ),
+                listing_validation_concurrency: self.listing.validation_concurrency,
                 staging_lifetime: std::time::Duration::from_secs(
                     self.staged_blocks.retention_seconds,
                 ),
@@ -501,6 +509,10 @@ fn resolve(base: &Path, path: &Path) -> PathBuf {
 
 const fn default_continuation_token_lifetime_seconds() -> u64 {
     15 * 60
+}
+
+const fn default_listing_validation_concurrency() -> usize {
+    32
 }
 
 const fn default_staged_block_retention_seconds() -> u64 {

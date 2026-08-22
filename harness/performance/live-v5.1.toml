@@ -1,0 +1,221 @@
+schema_version = 5
+contract_revision = "v5.1"
+campaign_purpose = "diagnostic-fast"
+baseline_eligible = false
+client_wall_time_budget_seconds = 3600
+latency_evidence = "individual-samples"
+p50_gate_policy = "signal-only"
+warmup_iterations = 0
+campaign_repeats = 3
+read_path_pool_size = 24
+request_timeout_seconds = 120
+target_order = ["direct", "gateway"]
+target_order_policy = "counterbalanced"
+p50_comparison_statistic = "median-per-run"
+
+[sampling_basis]
+artifact = "harness/artifacts/live/0.11.0/performance-v011-v5-failed-campaign.json"
+sha256 = "1b03c28e3d20015ae6558b141e6c6a66025ae4fe33ccc069af7430f92750a012"
+method = "operator-approved-fast-diagnostic-from-live-v5-costs"
+
+[confirmation_pass]
+contract = "harness/performance/live-v5.1-listing-confirmation.toml"
+sha256 = "5c613886f90282efdc9ec0af93b270ba7fb120f2a238d629e1c55fa36a4899d7"
+trigger = "after-listing-optimization"
+case_ids = [
+  "list_blobs_flat-list-flat-5000-c1",
+  "list_blobs_flat-list-flat-5000-c4",
+  "list_blobs_hierarchical-list-hierarchical-5000-c1",
+  "list_blobs_paginated-list-flat-5000-c1",
+]
+
+[non_regression]
+backend_requests_per_operation = "blocking"
+requests_per_entry_validated = "blocking"
+p50_stability_spread_ratio_threshold = 1.10
+p50_regression_ratio_threshold = 1.10
+p95_latency = "informational"
+
+[[payload]]
+id = "1kib"
+size_bytes = 1024
+
+[[payload]]
+id = "1mib"
+size_bytes = 1048576
+
+[[payload]]
+id = "16mib"
+size_bytes = 16777216
+
+[[payload]]
+id = "100mib"
+size_bytes = 104857600
+
+[[fixture]]
+id = "list-flat-100"
+kind = "blobs"
+prefix = "perf/list/list-flat-100"
+naming_scheme = "perf/list/{fixture_id}/{index:05d}"
+blob_count = 100
+payload_size_bytes = 1
+manifest_sha256 = "83422563ab1ade9a824b2bb6cb8ca4792bd8658dafd3cac7bcdac6a4a6404817"
+
+[[fixture]]
+id = "list-flat-1000"
+kind = "blobs"
+prefix = "perf/list/list-flat-1000"
+naming_scheme = "perf/list/{fixture_id}/{index:05d}"
+blob_count = 1000
+payload_size_bytes = 1
+manifest_sha256 = "a5df19a4939438a3076d4e1b604603d386a370fd4bf6063ff994cb1513f74682"
+
+[[fixture]]
+id = "list-containers-20"
+kind = "containers"
+prefix = "omv5fixture"
+naming_scheme = "{container_prefix}-{index:02d}/fixture.bin"
+container_count = 20
+payload_size_bytes = 1
+manifest_sha256 = "790dda770c05badcd64ea6b673d3332e516c821dab51d31ca026c9322cee82a1"
+
+[[workload]]
+operation = "put_blob"
+payloads = ["1kib", "1mib"]
+concurrency = [1, 4, 16]
+measured_iterations = 10
+backend_requests_per_operation = 49
+
+[[workload]]
+operation = "put_blob"
+payloads = ["16mib"]
+concurrency = [1, 4]
+measured_iterations = 10
+backend_requests_per_operation = 49
+
+[[workload]]
+operation = "overwrite_blob"
+payloads = ["1kib"]
+concurrency = [1, 4, 16]
+measured_iterations = 10
+backend_requests_per_operation = 49
+
+[[workload]]
+operation = "get_blob"
+payloads = ["1kib", "1mib"]
+concurrency = [1, 4, 16]
+measured_iterations = 20
+backend_requests_per_operation = 15
+
+[[workload]]
+operation = "get_blob"
+payloads = ["16mib"]
+concurrency = [1, 4, 16]
+measured_iterations = 20
+backend_requests_per_operation = 18
+
+[[workload]]
+operation = "get_range"
+payloads = ["16mib"]
+concurrency = [1, 4, 16]
+range_bytes = 1048576
+measured_iterations = 20
+backend_requests_per_operation = 15
+
+[[workload]]
+operation = "head_blob"
+payloads = ["1mib"]
+concurrency = [1, 16]
+measured_iterations = 20
+backend_requests_per_operation = 10
+
+[[workload]]
+operation = "delete_blob"
+payloads = ["1kib"]
+concurrency = [1, 4, 16]
+measured_iterations = 10
+backend_requests_per_operation = 43
+
+[[workload]]
+operation = "list_blobs_flat"
+fixture = "list-flat-100"
+concurrency = [1, 4]
+measured_iterations = 10
+request_timeout_seconds = 600
+max_results = 5000
+requests_per_entry_validated = 4.0
+
+[[workload]]
+operation = "list_blobs_flat"
+fixture = "list-flat-1000"
+concurrency = [1, 4]
+measured_iterations = 3
+request_timeout_seconds = 600
+max_results = 5000
+requests_per_entry_validated = 4.0
+
+[[workload]]
+operation = "list_containers"
+fixture = "list-containers-20"
+concurrency = [1]
+measured_iterations = 5
+request_timeout_seconds = 600
+max_results = 1000
+requests_per_entry_validated = 4.0
+
+[[workload]]
+operation = "put_block_sequence"
+payloads = ["16mib"]
+concurrency = [1]
+measured_iterations = 5
+block_size_bytes = 4194304
+backend_requests_per_operation = "establish"
+
+[[workload]]
+operation = "put_block_sequence"
+payloads = ["100mib"]
+concurrency = [1]
+measured_iterations = 5
+block_size_bytes = 8388608
+backend_requests_per_operation = "establish"
+
+[[workload]]
+operation = "put_block_sequence"
+payloads = ["16mib"]
+concurrency = [4]
+measured_iterations = 5
+block_size_bytes = 4194304
+backend_requests_per_operation = "establish"
+
+[[workload]]
+operation = "put_block_sequence"
+payloads = ["100mib"]
+concurrency = [4]
+measured_iterations = 5
+block_size_bytes = 8388608
+backend_requests_per_operation = "establish"
+
+[[workload]]
+operation = "get_block_list"
+payloads = ["16mib"]
+concurrency = [1]
+measured_iterations = 10
+backend_requests_per_operation = "establish"
+
+[[exclusion]]
+operation = "put_blob"
+payload = "16mib"
+concurrency = 16
+reason = "The retained v4 matrix omitted this high-memory case; v5 preserves the gap so contract evolution does not silently redefine the baseline."
+
+[[exclusion]]
+operation = "head_blob"
+payload = "1mib"
+concurrency = 4
+reason = "The retained v4 matrix omitted this intermediate point; v5 preserves the explicit gap."
+
+[[exclusion]]
+operation = "put_block_sequence"
+payload = "100mib"
+concurrency = 16
+reason = "The approved v5 block-staging matrix stops at c4 to avoid turning client memory pressure into a Gateway latency signal."

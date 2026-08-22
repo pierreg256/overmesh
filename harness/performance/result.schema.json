@@ -42,12 +42,71 @@
             "fixtures",
             "backendRequests"
           ]
+        },
+        "clientExecution": {
+          "type": "object",
+          "required": [
+            "wallSecondsExcludingFixtures",
+            "budgetSeconds",
+            "status"
+          ],
+          "properties": {
+            "wallSecondsExcludingFixtures": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "budgetSeconds": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "status": {
+              "const": "passed"
+            }
+          },
+          "additionalProperties": false
         }
       }
     },
     "contract": {
       "type": "object",
-      "required": ["id", "sha256", "schemaVersion"]
+      "required": ["id", "sha256", "schemaVersion"],
+      "properties": {
+        "revision": {
+          "const": "v5.1"
+        },
+        "campaignPurpose": {
+          "enum": ["diagnostic-fast", "listing-confirmation"]
+        },
+        "baselineEligible": {
+          "type": "boolean"
+        },
+        "clientWallTimeBudgetSeconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "latencyEvidence": {
+          "const": "individual-samples"
+        },
+        "p50GatePolicy": {
+          "const": "signal-only"
+        },
+        "confirmationPass": {
+          "type": "object",
+          "required": ["contract", "sha256", "trigger", "case_ids"],
+          "additionalProperties": false
+        },
+        "targetOrderPolicy": {
+          "enum": ["fixed", "counterbalanced"]
+        },
+        "p50ComparisonStatistic": {
+          "const": "median-per-run"
+        },
+        "samplingBasis": {
+          "type": "object",
+          "required": ["artifact", "sha256", "method"],
+          "additionalProperties": false
+        }
+      }
     },
     "toolVersions": {
       "type": "object",
@@ -66,8 +125,6 @@
     "resolution": {
       "type": "object",
       "required": [
-        "readP50SpreadRatioMax",
-        "writeP50SpreadRatioMax",
         "worstCase"
       ],
       "properties": {
@@ -118,6 +175,66 @@
           "metrics"
         ],
         "properties": {
+          "validity": {
+            "type": "object",
+            "required": [
+              "status",
+              "mandatory",
+              "expectedRuns",
+              "completedRuns",
+              "failures"
+            ],
+            "properties": {
+              "status": {
+                "enum": ["valid", "invalid"]
+              },
+              "mandatory": {
+                "const": true
+              },
+              "expectedRuns": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "completedRuns": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "failures": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "repeat",
+                    "targetOrder",
+                    "targetOrderPosition",
+                    "startedAt",
+                    "finishedAt",
+                    "phase",
+                    "reason",
+                    "exceptionClass"
+                  ],
+                  "properties": {
+                    "repeat": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "phase": {
+                      "enum": ["setup", "warmup", "measurement"]
+                    },
+                    "reason": {
+                      "const": "client-operation-failed"
+                    },
+                    "exceptionClass": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              }
+            },
+            "additionalProperties": false
+          },
           "runs": {
             "type": "array",
             "minItems": 1,
@@ -129,7 +246,31 @@
                 "finishedAt",
                 "iterations",
                 "metrics"
-              ]
+              ],
+              "properties": {
+                "targetOrder": {
+                  "type": "array",
+                  "prefixItems": [
+                    {"enum": ["direct", "gateway"]},
+                    {"enum": ["direct", "gateway"]}
+                  ],
+                  "minItems": 2,
+                  "maxItems": 2
+                },
+                "targetOrderPosition": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 2
+                },
+                "latenciesMs": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                }
+              }
             }
           },
           "repeatability": {
@@ -153,6 +294,10 @@
                   "exclusiveMinimum": 0
                 }
               },
+              "medianP50Ms": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
               "p50SpreadRatio": {
                 "type": "number",
                 "minimum": 1
@@ -171,6 +316,14 @@
                 "items": {
                   "type": "number",
                   "exclusiveMinimum": 0
+                }
+              },
+              "requestsPerEntryValidatedPerRun": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "number",
+                  "const": 4.0
                 }
               },
               "p50Classification": {
@@ -207,44 +360,87 @@
             "additionalProperties": false
           },
           "listingBudget": {
-            "type": "object",
-            "required": [
-              "entriesReturned",
-              "entriesScanned",
-              "backendRequests",
-              "requestsPerEntryReturned",
-              "requestsPerEntryScanned"
-            ],
-            "properties": {
-              "entriesReturned": {
-                "type": "integer",
-                "minimum": 1
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "entriesReturned",
+                  "entriesScanned",
+                  "backendRequests",
+                  "requestsPerEntryReturned",
+                  "requestsPerEntryScanned"
+                ],
+                "properties": {
+                  "entriesReturned": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "entriesScanned": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "backendRequests": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "requestsPerEntryReturned": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "requestsPerEntryScanned": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "additionalProperties": false
               },
-              "entriesScanned": {
-                "type": "integer",
-                "minimum": 1
-              },
-              "backendRequests": {
-                "type": "integer",
-                "minimum": 1
-              },
-              "requestsPerEntryReturned": {
-                "type": "number",
-                "exclusiveMinimum": 0
-              },
-              "requestsPerEntryScanned": {
-                "type": "number",
-                "exclusiveMinimum": 0
+              {
+                "type": "object",
+                "required": [
+                  "entriesConsidered",
+                  "entriesValidated",
+                  "entriesReturned",
+                  "backendRequests",
+                  "requestsPerEntryValidated",
+                  "validationConcurrency"
+                ],
+                "properties": {
+                  "entriesConsidered": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "entriesValidated": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "entriesReturned": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "backendRequests": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "requestsPerEntryValidated": {
+                    "type": "number",
+                    "const": 4.0
+                  },
+                  "validationConcurrency": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 256
+                  }
+                },
+                "additionalProperties": false
               }
-            },
-            "additionalProperties": false
+            ]
           }
         }
       }
     },
     "comparisons": {
       "type": "array",
-      "minItems": 1,
+      "minItems": 0,
       "items": {
         "type": "object",
         "required": [
@@ -280,21 +476,100 @@
     {
       "if": {
         "properties": {
-          "contract": {
-            "properties": {
-              "schemaVersion": {
-                "enum": [4, 5]
+          "cases": {
+            "not": {
+              "contains": {
+                "properties": {
+                  "validity": {
+                    "properties": {
+                      "status": {
+                        "const": "invalid"
+                      }
+                    },
+                    "required": ["status"]
+                  }
+                },
+                "required": ["validity"]
               }
-            },
-            "required": ["schemaVersion"]
+            }
           }
         }
+      },
+      "then": {
+        "properties": {
+          "comparisons": {
+            "minItems": 1
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "allOf": [
+          {
+            "properties": {
+              "contract": {
+                "properties": {
+                  "schemaVersion": {
+                    "enum": [4, 5]
+                  }
+                },
+                "required": ["schemaVersion"]
+              }
+            }
+          },
+          {
+            "properties": {
+              "cases": {
+                "not": {
+                  "contains": {
+                    "properties": {
+                      "validity": {
+                        "properties": {
+                          "status": {
+                            "const": "invalid"
+                          }
+                        },
+                        "required": ["status"]
+                      }
+                    },
+                    "required": ["validity"]
+                  }
+                }
+              }
+            }
+          }
+        ]
       },
       "then": {
         "required": ["resolution"],
         "properties": {
           "campaign": {
             "required": ["releaseTag"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "contract": {
+            "properties": {
+              "campaignPurpose": {
+                "const": "listing-confirmation"
+              }
+            },
+            "required": ["campaignPurpose"]
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "resolution": {
+            "required": [
+              "readP50SpreadRatioMax",
+              "writeP50SpreadRatioMax"
+            ]
           }
         }
       }
@@ -324,6 +599,58 @@
               "directWorstCase",
               "measurementScope"
             ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "contract": {
+            "properties": {
+              "revision": {
+                "const": "v5.1"
+              }
+            },
+            "required": ["revision"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "contract": {
+            "required": [
+              "campaignPurpose",
+              "baselineEligible",
+              "clientWallTimeBudgetSeconds",
+              "latencyEvidence",
+              "p50GatePolicy",
+              "targetOrderPolicy",
+              "p50ComparisonStatistic",
+              "samplingBasis"
+            ]
+          },
+          "campaign": {
+            "required": ["clientExecution"]
+          },
+          "cases": {
+            "items": {
+              "required": ["validity"],
+              "properties": {
+                "runs": {
+                  "items": {
+                    "required": [
+                      "targetOrder",
+                      "targetOrderPosition",
+                      "latenciesMs"
+                    ]
+                  }
+                },
+                "repeatability": {
+                  "required": ["medianP50Ms"]
+                }
+              }
+            }
           }
         }
       }

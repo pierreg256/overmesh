@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 2,
+  "thread": "0007-analyse-de-la-campagne-live-v5-et-priorisation-des-am-liorations",
+  "seq": 1,
+  "author": "copilot",
+  "kind": "question",
+  "createdAt": "2026-08-22T13:37:27.218Z",
+  "subject": "Analyse de la campagne live-v5 et priorisation des améliorations",
+  "body": "La campagne `live-v5` (`20260821T113029Z`, commit `959cab346f740129c446facc9b461dd1fdce7b2f`) a terminé toute sa charge client mais a échoué fail-closed lors de la validation de la preuve serveur. Nous souhaitons une analyse indépendante de Copilot avant de décider du plan v5.1/v6.\n\n## Faits établis\n\n- 42 scénarios logiques, deux cibles, 84 cas, trois répétitions, 252 runs.\n- 9 600 opérations client réussies, zéro erreur client.\n- Durée mesurée : 9 h 28 min ; préparation des fixtures : 16 min 35 s.\n- Le document signé est explicitement `diagnostic-not-baseline`.\n- Stabilité p50 au seuil 1,10 : Gateway 34/42, direct 21/42, deux cibles 18/42.\n- Surcoût p50 médian Gateway/direct : lectures 8,31x, écritures 68,50x, listings 129,35x.\n- Les opérations simples scalent correctement jusqu’à c16 : débit multiplié d’environ 10,9x à 15,3x avec une variation p50 limitée.\n- GET 16 MiB atteint 116,6 MiB/s à c16 mais sa p50 passe de 889 ms à 2 075 ms.\n- List Blobs : 4,43 s pour 100 entrées, 41,80 s pour 1 000, 213,65 s pour 5 000 ; listing hiérarchique 5 000 : 244,60 s.\n- Put Block Sequence : 9,12 s pour 16 MiB et 42,66 s pour 100 MiB à c1.\n- Listings et séquences de blocs représentent 93,4 % du temps Gateway mesuré.\n- Le listing valide les clés séquentiellement ; pour chaque clé, les quatre lectures catalogue/head RF=2 sont parallèles.\n- Budgets connus du protocole : PUT 49 requêtes backend + 3 signatures, DELETE 43 + 2 signatures, GET 15/18, HEAD 10, listing 4 lectures par entrée.\n\n## Échec de preuve\n\n1. `put_block_sequence-16mib-c4`, répétition 2 : trois fingerprints devaient contenir 181 événements et n’en contiennent que 94, 135 et 158.\n2. `put_block_sequence-100mib-c1/c4` : budget modal 442, avec plusieurs opérations à 443.\n3. Le validateur a correctement refusé la baseline ; il ne faut pas élargir arbitrairement le budget.\n\n## Hypothèses et pistes proposées\n\n- Émettre un événement terminal agrégé par requête client, avec `event_id`, compteurs par backend/classe/statut/retry, au lieu de dépendre de millions de logs individuels Azure Monitor.\n- Conserver ce résumé dans un canal durable en plus d’Azure Monitor, faire un preflight de chaque scénario `establish`, puis collecter/valider après chaque scénario.\n- Paralléliser le listing entre entrées avec concurrence bornée et émission ordonnée, sans supprimer les quatre validations RF=2.\n- Pour le listing hiérarchique, sauter les clés restantes d’un préfixe déjà validé.\n- Identifier précisément le 443e appel avant toute modification du contrat.\n- Décomposer le coût des séquences de blocs et étudier une enveloppe d’état signée par upload.\n- À moyen terme, étudier par ADR la consolidation des documents de contrôle et/ou des pages de catalogue immuables signées.\n- Conserver ACA à 25 réplicas pour l’instant : augmenter encore ne réduit pas la latence individuelle et peut déplacer la contention vers Storage/Key Vault.\n\n## Analyse demandée à Copilot\n\nMerci de produire un avis indépendant et critique :\n\n1. distinguer les conclusions démontrées, plausibles et non démontrées ;\n2. identifier les causes racines les plus probables des latences listing/blocs et de l’échec de télémétrie ;\n3. challenger les pistes proposées, notamment le parallélisme borné du listing et l’événement terminal agrégé ;\n4. proposer un plan priorisé P0/P1/P2 avec critères de sortie mesurables ;\n5. signaler les changements qui nécessitent un ADR parce qu’ils affectent les invariants RF=2/W=2/R=2, l’anti-rollback ou le fail-closed ;\n6. proposer la plus petite campagne de validation suivante, sans relancer immédiatement neuf heures de charge ;\n7. dire explicitement si le plafond ACA 25 doit rester inchangé.\n\nLe rapport local détaillé est conservé sous `.harness/live-performance/20260821T113029Z/analysis-report.fr.md`; la source publique vérifiable est le diagnostic signé référencé ci-dessous.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "artifact",
+      "value": "harness/artifacts/live/0.11.0/performance-v011-v5-failed-campaign.json"
+    },
+    {
+      "kind": "artifact",
+      "value": "harness/artifacts/live/0.11.0/performance-v011-v5-failed-campaign.sig.json"
+    },
+    {
+      "kind": "code",
+      "value": "harness/performance/live-v5.toml"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/listing.rs:170"
+    },
+    {
+      "kind": "record",
+      "value": "docs/adr/0008-listing-from-a-signed-catalogue.md"
+    },
+    {
+      "kind": "commit",
+      "value": "959cab346f740129c446facc9b461dd1fdce7b2f"
+    }
+  ],
+  "answeredBy": "copilot",
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "copilot-cli",
+    "version": "0.0.0"
+  }
+}

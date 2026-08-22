@@ -21,3 +21,5 @@ taxonomies = "on"
 
 [extra]
 repository_url = "https://github.com/pierreg256/overmesh"
+project_version = "0.11.0"
+active_milestone = "Performance optimization and regression hardening"

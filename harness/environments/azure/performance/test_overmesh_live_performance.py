@@ -15,6 +15,7 @@ from overmesh_live_performance import (
     retry_fixture_read,
     sdk_request_options,
     setup_request_id,
+    target_order_for_case,
 )
 
 
@@ -229,6 +230,193 @@ class PerformanceContractTests(unittest.TestCase):
                 in {"put_block_sequence", "get_block_list"}
             )
         )
+
+    def test_v51_recalibrates_expensive_cases_and_counterbalances_order(
+        self,
+    ) -> None:
+        contract = load_contract(Path("harness/performance/live-v5.1.toml"))
+
+        self.assertEqual(contract.revision, "v5.1")
+        self.assertEqual(contract.campaign_purpose, "diagnostic-fast")
+        self.assertFalse(contract.baseline_eligible)
+        self.assertEqual(contract.client_wall_time_budget_seconds, 3600)
+        self.assertEqual(contract.latency_evidence, "individual-samples")
+        self.assertEqual(contract.p50_gate_policy, "signal-only")
+        self.assertEqual(contract.warmup_iterations, 0)
+        self.assertEqual(len(contract.cases), 38)
+        self.assertEqual(contract.target_order_policy, "counterbalanced")
+        self.assertEqual(
+            contract.p50_comparison_statistic,
+            "median-per-run",
+        )
+        self.assertEqual(
+            contract.sampling_basis,
+            {
+                "artifact": (
+                    "harness/artifacts/live/0.11.0/"
+                    "performance-v011-v5-failed-campaign.json"
+                ),
+                "sha256": (
+                    "1b03c28e3d20015ae6558b141e6c6a66025ae4fe33ccc069"
+                    "af7430f92750a012"
+                ),
+                "method": (
+                    "operator-approved-fast-diagnostic-from-live-v5-costs"
+                ),
+            },
+        )
+        iterations = {
+            case.id: case.measured_iterations for case in contract.cases
+        }
+        self.assertEqual(
+            iterations["list_blobs_flat-list-flat-100-c1"],
+            10,
+        )
+        self.assertEqual(
+            iterations["list_blobs_flat-list-flat-1000-c4"],
+            3,
+        )
+        self.assertEqual(
+            iterations["list_containers-list-containers-20-c1"],
+            5,
+        )
+        self.assertEqual(
+            iterations["put_block_sequence-100mib-c1"],
+            5,
+        )
+        self.assertEqual(
+            iterations["put_block_sequence-100mib-c4"],
+            5,
+        )
+        self.assertEqual(iterations["get_blob-16mib-c16"], 20)
+        self.assertEqual(iterations["get_block_list-16mib-c1"], 10)
+        self.assertNotIn(
+            "list_blobs_flat-list-flat-5000-c1",
+            iterations,
+        )
+        self.assertEqual(
+            set(contract.confirmation_pass["case_ids"]),
+            {
+                "list_blobs_flat-list-flat-5000-c1",
+                "list_blobs_flat-list-flat-5000-c4",
+                "list_blobs_hierarchical-list-hierarchical-5000-c1",
+                "list_blobs_paginated-list-flat-5000-c1",
+            },
+        )
+        self.assertEqual(
+            contract.non_regression.document()[
+                "requestsPerEntryValidated"
+            ],
+            "blocking",
+        )
+        self.assertEqual(
+            {
+                case.expected_requests_per_entry_validated
+                for case in contract.cases
+                if case.operation.startswith("list_")
+            },
+            {4.0},
+        )
+        self.assertEqual(
+            [
+                target_order_for_case(contract, repeat, 0)
+                for repeat in range(3)
+            ],
+            [
+                ("direct", "gateway"),
+                ("gateway", "direct"),
+                ("direct", "gateway"),
+            ],
+        )
+        self.assertEqual(
+            [
+                target_order_for_case(contract, repeat, 1)
+                for repeat in range(3)
+            ],
+            [
+                ("gateway", "direct"),
+                ("direct", "gateway"),
+                ("gateway", "direct"),
+            ],
+        )
+
+    def test_v51_listing_confirmation_is_non_baseline_and_exact(self) -> None:
+        contract = load_contract(
+            Path(
+                "harness/performance/"
+                "live-v5.1-listing-confirmation.toml"
+            )
+        )
+
+        self.assertEqual(contract.campaign_purpose, "listing-confirmation")
+        self.assertFalse(contract.baseline_eligible)
+        self.assertEqual(contract.p50_gate_policy, "signal-only")
+        self.assertEqual(contract.warmup_iterations, 0)
+        self.assertEqual(contract.campaign_repeats, 3)
+        self.assertEqual(len(contract.cases), 4)
+        self.assertEqual(
+            {case.measured_iterations for case in contract.cases},
+            {1},
+        )
+        self.assertEqual(
+            {case.fixture.blob_count for case in contract.cases},
+            {5_000},
+        )
+        self.assertEqual(
+            {
+                case.expected_requests_per_entry_validated
+                for case in contract.cases
+            },
+            {4.0},
+        )
+
+    def test_v51_rejects_weakened_diagnostic_safeguards(self) -> None:
+        source = Path("harness/performance/live-v5.1.toml").read_text(
+            encoding="utf-8"
+        )
+        mutations = (
+            (
+                source.replace(
+                    "baseline_eligible = false",
+                    "baseline_eligible = true",
+                    1,
+                ),
+                "must not be baseline eligible",
+            ),
+            (
+                source.replace(
+                    'p50_gate_policy = "signal-only"',
+                    'p50_gate_policy = "blocking"',
+                    1,
+                ),
+                "requires signal-only p50 gating",
+            ),
+            (
+                source.replace(
+                    "5c613886f90282efdc9ec0af93b270ba7fb120f2a238d629e1c55fa36a4899d7",
+                    "0c613886f90282efdc9ec0af93b270ba7fb120f2a238d629e1c55fa36a4899d7",
+                    1,
+                ),
+                "confirmation_pass.sha256",
+            ),
+            (
+                source.replace(
+                    '"list_blobs_flat-list-flat-5000-c4",',
+                    '"list_blobs_flat-list-flat-5000-c16",',
+                    1,
+                ),
+                "case_ids do not match",
+            ),
+        )
+        for document, message in mutations:
+            with (
+                self.subTest(message=message),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                path = Path(directory) / "invalid-v5.1.toml"
+                path.write_text(document, encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, message):
+                    load_contract(path)
 
     def test_unknown_payload_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

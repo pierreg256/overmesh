@@ -143,7 +143,8 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
             (
                 'event="overmesh_listing_scan" '
                 'client_request_fingerprint="request-a" '
-                "entries_returned=2 entries_scanned=2"
+                "entries_returned=2 entries_considered=20 "
+                "entries_validated=2 validation_concurrency=32"
             )
         ]
         messages.extend(
@@ -168,11 +169,12 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         self.assertEqual(
             listing_budget(messages),
             {
+                "entriesConsidered": 20,
+                "entriesValidated": 2,
                 "entriesReturned": 2,
-                "entriesScanned": 2,
                 "backendRequests": 8,
-                "requestsPerEntryReturned": 4.0,
-                "requestsPerEntryScanned": 4.0,
+                "requestsPerEntryValidated": 4.0,
+                "validationConcurrency": 32,
             },
         )
 

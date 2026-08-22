@@ -10,7 +10,8 @@
 This document explains the current system and its measured tradeoffs. It is
 descriptive rather than normative: specifications define behaviour and
 accepted decision records constrain implementation. Performance figures below
-come from retained signed evidence rather than estimates.
+come from retained signed evidence rather than estimates; non-baseline
+diagnostics are identified explicitly.
 
 The references are
 [`OVERMESH_V1_SPECIFICATION.md`](../OVERMESH_V1_SPECIFICATION.md) and
@@ -255,7 +256,7 @@ Nothing here is hidden. Each line states whether it is inherent or scheduled.
 | Storage | 2×, plus uncollected generations | Inherent to RF=2 |
 | Write latency | 49 backend requests and 3 Key Vault signatures per first PUT | Measured; request-budgeted |
 | Read latency | 10 requests for `HEAD`, 15 for nominal `GET` and range reads | Measured after ADR-0011 |
-| Listing | ~20,000 backend reads for a 5,000-entry page | Reduced 2.5× in 0.8; going further is a trade, not a fix |
+| Listing | 213.20 s client p50 for a flat 5,000-entry page | Signed v5 diagnostic; not a baseline |
 | Write availability | Writes stop while either region is unavailable | Hinted handoff, post-V1 |
 | Reconciliation | O(dataset) per cycle | Merkle trees in V2 |
 | Operations | 2+ accounts, private endpoints, 3 managed identities, container-scoped RBAC, Key Vault, signed Ring distribution, reconciler scheduling, continuous RBAC posture auditing | Inherent |
@@ -271,31 +272,33 @@ back without giving up the guarantee.
 
 ### The measured performance price
 
-The final signed 0.10.1 campaign ran the same Azure SDK operations directly
-against Storage and through Overmesh from an isolated France Central VM.
-Writes use 30 measured operations per case; reads use 240 so their percentiles
-are useful signals. There were zero client errors, zero backend transport
-failures, and zero unattributed requests in every case. Front Door selected the
-France Container App for the entire run, so these figures describe a France
-client and its lowest-latency healthy origin, not balanced multi-origin traffic.
+The certified `live-v4` request-budget baseline ran the same Azure SDK
+operations directly against Storage and through Overmesh from an isolated
+France Central VM. Each of its three repetitions uses 30 measured operations
+per write case and 60 per read case. The p50 below is the median of the three
+per-run p50 values, which is also the regression gate's normative statistic.
+There were zero client errors, zero backend transport failures, and zero
+unattributed requests in every case. Front Door selected the France Container
+App for the entire run, so these figures describe a France client and its
+lowest-latency healthy origin, not balanced multi-origin traffic.
 
 | Operation | Direct p50 | Overmesh p50 | Overmesh requests |
 | --- | ---: | ---: | ---: |
-| `Put Blob`, 1 KiB, c1 | 9.08 ms | 1,255.49 ms | 49 |
-| `Put Blob`, 1 MiB, c1 | 20.06 ms | 1,379.71 ms | 49 |
-| `Put Blob`, 16 MiB, c1 | 141.54 ms | 2,986.14 ms | 49 |
-| `Delete Blob`, 1 KiB, c1 | 9.52 ms | 1,010.35 ms | 43 |
-| `Get Blob`, 1 MiB, c1 | 15.36 ms | 230.09 ms | 15 |
-| `Get Blob`, 16 MiB, c1 | 110.11 ms | 813.86 ms | 18 |
-| `Range Get`, 1 MiB of 16 MiB, c1 | 15.74 ms | 276.78 ms | 15 |
-| `Head Blob`, 1 MiB, c1 | 5.92 ms | 93.62 ms | 10 |
+| `Put Blob`, 1 KiB, c1 | 9.44 ms | 1183.05 ms | 49 |
+| `Put Blob`, 1 MiB, c1 | 21.28 ms | 1461.31 ms | 49 |
+| `Put Blob`, 16 MiB, c1 | 147.39 ms | 3107.32 ms | 49 |
+| `Delete Blob`, 1 KiB, c1 | 10.11 ms | 996.67 ms | 43 |
+| `Get Blob`, 1 MiB, c1 | 16.40 ms | 248.41 ms | 15 |
+| `Get Blob`, 16 MiB, c1 | 130.81 ms | 913.95 ms | 18 |
+| `Range Get`, 1 MiB of 16 MiB, c1 | 16.41 ms | 278.65 ms | 15 |
+| `Head Blob`, 1 MiB, c1 | 6.13 ms | 94.67 ms | 10 |
 
 The 1 KiB and 1 MiB writes cost nearly the same despite a thousand-fold payload
 difference, and DELETE pays the same order of latency while carrying no body.
 The dominant cost is therefore fixed backend-request amplification, not CPU or
 bulk throughput. Overmesh buys synchronous cross-region durability, signed
 state validation and repairability at a severe small-operation latency price:
-about 130× direct Storage for the measured 1 KiB PUT.
+about 125× direct Storage for the measured 1 KiB PUT.
 
 The deterministic request counts are the blocking non-regression measure for
 0.11. Latency remains a signal because geography, Azure scheduling and network
@@ -309,14 +312,23 @@ the established path from three lock requests to two but raise the first-write
 path to four. It is therefore a workload-policy decision for 0.11, not a global
 optimization.
 
-The listing line is the largest number in this table and deserves a word,
-because it is not simply unfinished work. Each listed entry is validated across
-both replicas and against its committed head before it is returned. Removing
-either check halves the cost and buys a class of incorrect result — serving an
-entry a reconciler has not yet repaired, or reporting a version that was never
-committed. Write ordering does not resolve it: two objects that must agree
-require a check at read time. The 0.10 performance baseline is where that trade
-gets priced.
+The subsequent signed `live-v5` workload extended the matrix to listing and
+block APIs. All 9,600 client operations succeeded, but server telemetry failed
+closed, so the retained result is explicitly `diagnostic-not-baseline`. Its
+client evidence is still useful when kept separate from the certified table:
+a flat 5,000-entry listing has a median per-run p50 of 213.20 s through
+Overmesh versus 1.412 s direct, about 151×. The hierarchical 5,000-entry case
+returns 50 prefixes but takes 244.11 s versus 46.351 ms direct, about 5,266.5×.
+The measured cost is approximately linear at 42 ms per scanned blob.
+
+Those client timings do not certify v5 backend request counts, CPU, memory, or
+Key Vault metrics. The source implementation still performs four validation
+reads per scanned entry, but v5 did not produce complete server evidence for
+that budget. Each returned entry is validated across both replicas and against
+its committed head; reducing those checks changes what listing proves and
+requires a separate decision. Scheduling entries concurrently and skipping
+descendants of an already emitted hierarchical prefix do not remove those
+checks and are the first 0.11 optimizations.
 
 ## 9. What Overmesh does not do
 
@@ -383,7 +395,7 @@ block staging APIs with their own retention and collection, reconciliation with
 repair and quarantine, and continuous RBAC posture auditing against Azure
 Resource Manager.
 
-**How it is validated:** 225 unit and integration tests, 23 declarative
+**How it is validated:** 229 unit and integration tests, 23 declarative
 scenarios against an independent reference model, three process-level suites
 and a Rust system validator running against Azurite backends behind a fault
 proxy, and a live Azure gate that verifies account posture, authorization
