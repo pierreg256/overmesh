@@ -23,6 +23,7 @@ from collect_live_performance_telemetry import (
     placement_coverage,
     query_logs,
     query_metrics,
+    query_repeated_aggregates,
     request_fingerprint,
     request_id,
     telemetry_query_windows,
@@ -380,6 +381,35 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         query = command[command.index("--analytics-query") + 1]
         self.assertIn(
             "AppName in ('gateway-frc', 'gateway-swe')",
+            query,
+        )
+
+    @patch("collect_live_performance_telemetry.run_json")
+    def test_repeated_query_deduplicates_dual_table_ingestion(
+        self,
+        run_json,
+    ) -> None:
+        run_json.return_value = []
+        query_repeated_aggregates(
+            "workspace",
+            "gateway-frc,gateway-swe",
+            [
+                {
+                    "id": "put-1kib-c1",
+                    "runs": [
+                        {
+                            "repeat": 1,
+                            "startedAt": "2026-01-01T00:00:00Z",
+                            "finishedAt": "2026-01-01T00:01:00Z",
+                        }
+                    ],
+                }
+            ],
+        )
+        command = run_json.call_args.args[0]
+        query = command[command.index("--analytics-query") + 1]
+        self.assertIn(
+            "summarize TimeGenerated=min(TimeGenerated) by AppName, Message",
             query,
         )
 

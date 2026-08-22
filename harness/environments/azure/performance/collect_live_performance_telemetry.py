@@ -286,6 +286,7 @@ let Base = materialize(
   | where AppName in ({escaped_names})
   | where TimeGenerated between (datetime({started_at}) .. datetime({finished_at}))
   | where Message has "overmesh_backend_request" or Message has "overmesh_manifest_sign" or Message has "overmesh_listing_scan"
+  | summarize TimeGenerated=min(TimeGenerated) by AppName, Message
   | extend CleanMessage = replace_regex(Message, @'\\x1B\\[[0-?]*[ -/]*[@-~]', '')
   | extend ParsedTime = todatetime(extract(@'^(\\d{{4}}-\\d{{2}}-\\d{{2}}T\\d{{2}}:\\d{{2}}:\\d{{2}}(?:\\.\\d+)?Z)', 1, CleanMessage))
   | extend EventTime = coalesce(ParsedTime, TimeGenerated)
