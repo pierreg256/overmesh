@@ -15,6 +15,13 @@ The `0.9.0` deployment is intentionally phased:
 6. Deploy with `deployRuntime=true`.
 7. Approve the two Front Door Private Link requests on the ACA environments.
 
+`deployRbac` defaults to `true` so foundation deployments manage every declared
+role assignment. It may be set to `false` for a runtime-only update of an
+established environment after the required live assignments and scopes have
+been verified independently. This avoids attempting to duplicate equivalent
+legacy assignments that were created under different assignment IDs; it does
+not remove or alter any assignment.
+
 The foundation phase creates the third Storage Account, geo-replicated Premium
 ACR, regional networks, Private Endpoints, monitoring, ACA environments, and
 least-privilege role assignments. It also creates the dedicated non-exportable

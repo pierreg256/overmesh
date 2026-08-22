@@ -42,6 +42,9 @@ param imageTag string = '0.9.0'
 @description('Deploy Gateway, Reconciler, and Front Door after images exist in ACR.')
 param deployRuntime bool = false
 
+@description('Create and manage the runtime role assignments. Disable only for an established environment whose required assignments were verified independently.')
+param deployRbac bool = true
+
 @secure()
 @description('Gateway YAML configuration without credentials.')
 param gatewayConfig string
@@ -237,7 +240,7 @@ module secondaryRuntime './modules/aca-region-v090.bicep' = {
   ]
 }
 
-module rbac './modules/rbac-v090.bicep' = {
+module rbac './modules/rbac-v090.bicep' = if (deployRbac) {
   name: 'overmesh-v090-rbac'
   params: {
     storageAccountAName: storageAccountAName

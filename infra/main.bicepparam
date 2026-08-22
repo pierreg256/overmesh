@@ -16,6 +16,7 @@ param allowedCallerIdentityName = 'id-overmesh-caller-allowed-v050'
 // Supply signed runtime configuration at validation/deployment time.
 param imageTag = '0.9.0'
 param deployRuntime = false
+param deployRbac = true
 param gatewayConfig = ''
 param reconcilerConfig = ''
 param ringDocument = ''
