@@ -242,6 +242,7 @@ pub trait ReplicaBackend: Send + Sync {
         control_token: &ControlToken,
     ) -> Result<Vec<String>, BackendError>;
 
+    /// Returns a contiguous, ascending page for the supplied opaque cursor.
     async fn control_list_objects_page(
         &self,
         prefix: &str,

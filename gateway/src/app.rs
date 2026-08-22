@@ -16,6 +16,7 @@ use axum::{
     routing::get,
 };
 use serde::Serialize;
+use tracing::info;
 use uuid::Uuid;
 
 use crate::{
@@ -26,7 +27,7 @@ use crate::{
     error::StorageError,
     listing::{ListRequest, ListingError},
     read::{BlobMetadata, ReadError, ReadService},
-    request_context::{client_request_fingerprint, scope},
+    request_context::{client_request_fingerprint, current_client_request_fingerprint, scope},
     resource::LogicalBlobId,
     ring::SignedRing,
     upload::{DEFAULT_BLOCK_SIZE, SpoolBodyError, spool_body, spool_body_limited},
@@ -136,7 +137,10 @@ async fn blob_request_scoped(state: AppState, request: Request<Body>) -> Respons
         };
         let service = commit_service.listing_service(state.logical_account.clone());
         match service.list_containers(&list_request, &principal).await {
-            Ok(page) => listing_response(page.to_xml(&service_endpoint(&state.logical_account))),
+            Ok(page) => {
+                emit_listing_scan("containers", page.containers.len(), page.entries_scanned);
+                listing_response(page.to_xml(&service_endpoint(&state.logical_account)))
+            }
             Err(error) => listing_error_response(error),
         }
     }
@@ -163,7 +167,10 @@ async fn blob_request_scoped(state: AppState, request: Request<Body>) -> Respons
             .list_blobs(&container, &list_request, &principal)
             .await
         {
-            Ok(page) => listing_response(page.to_xml(&service_endpoint(&state.logical_account))),
+            Ok(page) => {
+                emit_listing_scan("blobs", page.entries.len(), page.entries_scanned);
+                listing_response(page.to_xml(&service_endpoint(&state.logical_account)))
+            }
             Err(error) => listing_error_response(error),
         }
     }
@@ -765,6 +772,17 @@ fn listing_response(xml: String) -> Response {
         HeaderValue::from_str(&httpdate::fmt_http_date(SystemTime::now())).expect("date header"),
     );
     response
+}
+
+fn emit_listing_scan(scope: &str, entries_returned: usize, entries_scanned: u64) {
+    let client_request_fingerprint = current_client_request_fingerprint();
+    info!(
+        event = "overmesh_listing_scan",
+        client_request_fingerprint = %client_request_fingerprint,
+        scope,
+        entries_returned,
+        entries_scanned,
+    );
 }
 
 fn listing_request(query: &QueryParameters) -> Result<ListRequest, StorageError> {

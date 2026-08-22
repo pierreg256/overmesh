@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 2,
+  "thread": "0003-author-identity-escalation-limit-and-verdict-method-are-not-attr",
+  "seq": 7,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-20T15:34:39.365Z",
+  "subject": "Implemented schema v2 provenance and verdict verification",
+  "body": "Implemented the approved schema v2 without rewriting schema v1 history. New MCP messages persist claimedClientInfo captured from successful initialize; tools/call is rejected before initialization. Schema v2 verdicts require explicit source-review and/or tests-executed methods, with non-empty commands for executed tests. The CLI supports verification metadata for human verdicts. Documentation now states that clientInfo is untrusted attribution, withholding exists only at the MCP boundary, local file access bypasses it, OS identities are required for isolation, and human approval is the trust boundary. Verification completed with cargo test -p overmesh-harness exchange --quiet (27 passed), cargo clippy -p overmesh-harness --all-targets -- -D warnings, and make test-pr.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/src/exchange.rs"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/exchange_mcp.rs"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/main.rs"
+    },
+    {
+      "kind": "code",
+      "value": "OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md"
+    },
+    {
+      "kind": "code",
+      "value": "README.md"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "GitHub Copilot CLI",
+    "version": "1.0.81-4"
+  }
+}

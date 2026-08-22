@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "thread": "0003-author-identity-escalation-limit-and-verdict-method-are-not-attr",
+  "seq": 4,
+  "author": "copilot",
+  "kind": "spec",
+  "createdAt": "2026-08-20T15:00:36.129Z",
+  "subject": "Add honest transport provenance and verdict verification methods",
+  "body": "Introduce exchange message schema v2 while preserving read compatibility with schema v1. Every MCP-authored v2 message records claimedClientInfo {name, version} captured from initialize and labels it explicitly as untrusted attribution metadata, not authentication; tool calls before initialize are rejected. Every v2 verdict requires verification {methods, commands}: methods is a non-empty subset of source-review and tests-executed; commands is required and non-empty when tests-executed is claimed. The MCP exchange_resolve schema exposes these fields. Human approvals remain the trust boundary. Documentation must state that local filesystem transport cannot cryptographically prove assistant independence and that operators must review claimed provenance before approving a verdict. Existing v1 messages remain immutable and readable.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/src/exchange.rs"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/exchange_mcp.rs"
+    },
+    {
+      "kind": "code",
+      "value": "OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null
+}

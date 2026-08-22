@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "thread": "0001-overmesh-harness-exchange",
+  "seq": 2,
+  "author": "human",
+  "kind": "approval",
+  "createdAt": "2026-08-20T12:38:17.821Z",
+  "subject": "approved: Implement overmesh-harness exchange",
+  "body": "Approved by the operator as part of the implementation request.",
+  "repliesTo": 1,
+  "refs": [],
+  "answeredBy": null,
+  "outcome": "approved"
+}

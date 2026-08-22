@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 2,
+  "thread": "0003-author-identity-escalation-limit-and-verdict-method-are-not-attr",
+  "seq": 9,
+  "author": "human",
+  "kind": "approval",
+  "createdAt": "2026-08-20T15:40:56.885Z",
+  "subject": "approved: Thread verdict",
+  "body": "Approved by operator.",
+  "repliesTo": 8,
+  "refs": [],
+  "answeredBy": null,
+  "outcome": "approved"
+}

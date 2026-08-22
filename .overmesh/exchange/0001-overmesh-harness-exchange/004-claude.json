@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "thread": "0001-overmesh-harness-exchange",
+  "seq": 4,
+  "author": "claude",
+  "kind": "verdict",
+  "createdAt": "2026-08-20T13:02:38.260Z",
+  "subject": "Thread verdict",
+  "body": "Independent verification complete. All 20 unit tests pass (exchange and exchange_mcp modules). Each normative requirement from the approved specification is satisfied:\n\n**Append-only concurrent publication** (harness/src/exchange.rs `write_message_unlocked`): uses exclusive `create_new(true)` reservation files then hard-links to the final seq-keyed path under an exclusive thread lock; concurrent tests confirm distinct sequences with no file loss.\n\n**Staging atomicity** (harness/src/exchange.rs `stage` / `unstage`): `git add` is called after the hard-link; failures trigger `unstage` + `fs::remove_file`, verified by `failed_staging_is_never_visible_to_readers`.\n\n**Approval withholding plus operator visibility** (harness/src/exchange.rs `read_with_visibility`): unapproved spec body returns `null` with `withheld: \"awaiting approval\"` for MCP callers; operator path skips the gate; confirmed by `spec_body_is_withheld_until_human_approval` and `operator_can_read_pending_spec_and_state_reloads_from_files`.\n\n**Persisted-history validation** (harness/src/exchange.rs `validate_history`): every message load re-derives and checks all invariants including author identity, sequence integrity, approval-only-from-human, and kind constraints; `rejects_persisted_non_human_approval` confirms a forged approval is rejected on read.\n\n**Symlink containment** (harness/src/exchange.rs `ensure_directory`, `reject_symlink_components`, `require_existing_relative`): symlinked exchange root, symlinked ref roots, and symlink-escaped paths all rejected; confirmed by `rejects_symlinked_exchange_and_restricted_ref_paths`.\n\n**Escalation and verdict authorship** (harness/src/exchange.rs `trailing_non_human`, `derive_state`, `validate_against_thread`): limit=5, sixth post rejected and state becomes `escalated`; human message resets counter; verdict from the same side as the last non-verdict message rejected; confirmed by `escalates_at_limit_and_human_resets_counter` and `verdict_requires_other_author_and_approval_to_resolve`.\n\n**Exactly four MCP tools** (harness/src/exchange_mcp.rs `tool_definitions`): `exchange_list`, `exchange_read`, `exchange_post`, `exchange_resolve`; confirmed by `lists_exactly_four_tools`.\n\n**JSON-RPC 2025-03-26 including batches** (harness/src/exchange_mcp.rs `dispatch_message`, `handle_request`): protocol version `2025-03-26`; batch array dispatched with notifications filtered; empty batch returns -32600; confirmed by `dispatches_json_rpc_batches_and_omits_notifications`.\n\n**Installation documentation**: README.md adds operator CLI examples and MCP server env-var usage; OVERMESH_DEVELOPMENT_HARNESS_SPECIFICATION_V1.md adds section 5.0.1 with all normative MUST statements. Binary installed at `~/.local/bin/overmesh-harness` v0.11.0.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/src/exchange.rs"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/exchange_mcp.rs"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": "verified"
+}

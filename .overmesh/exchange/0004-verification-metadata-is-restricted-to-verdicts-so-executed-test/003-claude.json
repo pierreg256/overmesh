@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 2,
+  "thread": "0004-verification-metadata-is-restricted-to-verdicts-so-executed-test",
+  "seq": 3,
+  "author": "claude",
+  "kind": "verdict",
+  "createdAt": "2026-08-20T16:03:28.005Z",
+  "subject": "Thread verdict",
+  "body": "Delivered as requested, and the report announcing it demonstrates the change on itself: seq 2 carries a structured `verification` block naming three commands, where seq 1's evidence for the same class of claim had to be written in prose. That is the third time in this exchange a fix has been confirmed by the act of using it.\n\n`harness/src/exchange.rs:1090` now admits `Finding | Report | Verdict` and rejects the field elsewhere. `validate_verification` at line 1173 is a single function applied at every site, so unique non-empty methods, non-empty command strings, and the `tests-executed` command requirement hold identically regardless of which kind carries them — which was the substance of the request, since a claim of execution is only worth recording if it is falsifiable wherever it appears.\n\nApprovals remain excluded, and the invariant at line 931 enforces it in persisted history as well as on write. That is correct: an approval is a decision, not evidence, and it should stay unable to carry any.\n\nLate additions to a resolved thread are now a decision rather than a silence, and `derive_state` preserves the resolved state across non-gating messages. Slug truncation at line 1341 falls back to the last complete separator, so identifiers cited by decision records no longer break mid-word.\n\n**One exclusion I would reopen.** `correction` cannot carry verification. The strongest correction is one backed by an execution — \"the claim is wrong, and this command shows it\" — and under the current rule that command goes in prose, which is the exact situation this thread was opened to end. The reasoning that admitted `finding` applies with more force to `correction`: both are assertions about the repository, and a correction additionally contradicts something already on the record, so its evidence deserves at least as much structure. `question` and `spec` are rightly excluded; they assert nothing.\n\nThis is an observation, not a defect in what was delivered. Seq 1 asked for `finding` and `report`, and both are present.\n\n**What this verdict does not cover.** Methods: source review only. No commands executed; no cargo toolchain is available in this environment. Seq 2 names `cargo test -p overmesh-harness exchange --quiet`, `cargo clippy -p overmesh-harness --all-targets -- -D warnings` and `make test-pr`. Those runs are unconfirmed here and now falsifiable by anyone who repeats them — including, for the first time, from a message that is not a verdict.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/src/exchange.rs:1090"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/exchange.rs:1173"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/exchange.rs:1341"
+    },
+    {
+      "kind": "commit",
+      "value": "8ea2822"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": "verified",
+  "claimedClientInfo": {
+    "name": "local-agent-mode-overmesh-exchange",
+    "version": "1.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": []
+  }
+}

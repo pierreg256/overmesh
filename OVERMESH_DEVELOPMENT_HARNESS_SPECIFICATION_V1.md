@@ -159,6 +159,63 @@ every real-system smoke assertion. A scenario's `environment.providers` lists
 the providers for which that history is applicable; the declarative runner
 always executes the model provider.
 
+### 5.0.1 Assistant Work Exchange
+
+The harness exposes a local, file-backed work exchange for assistants operating
+on the same repository. It is a typed work queue, not a chat or shared-memory
+service.
+
+- Each thread MUST live under `.overmesh/exchange/<nnnn>-<slug>/`.
+- Each message MUST be one immutable, schema-versioned JSON file.
+- Message creation MUST be append-only and safe under concurrent writers.
+- Every accepted message MUST be staged with `git add` and MUST NOT be
+  committed by the harness.
+- Findings, corrections, reports, and verdicts MUST carry the repository refs
+  required by their message kind, and refs MUST be validated before writing.
+- Thread state and `waitingOn` MUST be derived from message files on every
+  read; no derived state file is permitted.
+- An unapproved `spec` body MUST be withheld from assistant readers.
+- A `verdict` MUST NOT resolve a thread until an operator approval follows it.
+- The sixth consecutive non-human message MUST be rejected. Five consecutive
+  non-human messages place the thread in `escalated` state until a human posts.
+- The assistant allowlist and consecutive-message limit MUST be loaded from the
+  committed `.overmesh/exchange/config.json`. Environment variables MUST NOT
+  override either control.
+- The author of the last non-verdict message MUST NOT author the verdict.
+- The stdio MCP server MUST reject a missing, unapproved, or `human` server
+  identity. Human messages MUST enter through the operator CLI.
+- Existing schema v1 messages MUST remain immutable and readable. Every new
+  message MUST use schema v2.
+- A successful MCP `initialize` MUST provide non-empty `clientInfo.name` and
+  `clientInfo.version`. Tool calls before successful initialization MUST be
+  rejected.
+- Every MCP-authored schema v2 message MUST persist that client-supplied value
+  as `claimedClientInfo`. This value is untrusted attribution and MUST NOT be
+  represented or used as authentication.
+- Every schema v2 verdict MUST carry a non-empty `verification.methods` list
+  containing only `source-review` and/or `tests-executed`. When
+  `tests-executed` is present, `verification.commands` MUST contain at least one
+  non-empty command. `exchange_resolve` MUST require this structure.
+- Schema v2 findings and reports MAY carry the same `verification` structure.
+  When present, it MUST satisfy the verdict validation rules, including the
+  command requirement for `tests-executed`. Other message kinds MUST reject it.
+- A resolved thread MAY accept later non-gating messages. Those additions MUST
+  preserve the approved verdict and the `resolved` state.
+- Generated thread slugs MUST be at most 64 characters and SHOULD truncate at
+  the last complete word separator when one exists.
+
+The version 1 MCP surface is limited to `exchange_list`, `exchange_read`,
+`exchange_post`, and `exchange_resolve`. The operator surface is
+`overmesh-harness exchange`; it owns approval and rejection. Neither surface
+executes work instructions automatically.
+
+The local filesystem transport does not cryptographically prove assistant
+identity or independence. Spec-body withholding is enforced only by the MCP
+read boundary; any participant with direct filesystem access can read the raw
+message JSON. Real isolation would require distinct OS identities and
+permissions. Human approval, rather than filesystem secrecy or claimed client
+metadata, is the exchange trust boundary.
+
 ### 5.1 Scenario Orchestrator
 
 The Scenario Orchestrator:

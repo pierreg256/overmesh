@@ -5,16 +5,84 @@ import unittest
 from pathlib import Path
 
 from overmesh_live_performance import (
+    fixture_hash_matches,
+    fixture_blob_names,
+    fixture_manifest_sha256,
     latency_metrics,
     load_contract,
     percentile,
     request_id,
+    retry_fixture_read,
     sdk_request_options,
     setup_request_id,
 )
 
 
 class PerformanceContractTests(unittest.TestCase):
+    def test_fixture_read_retries_only_classified_errors(self) -> None:
+        class FixtureReadError(Exception):
+            def __init__(self, status_code: int) -> None:
+                super().__init__(status_code)
+                self.status_code = status_code
+
+        attempts = 0
+        delays: list[float] = []
+
+        def operation() -> str:
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise FixtureReadError(503)
+            return "complete"
+
+        result = retry_fixture_read(
+            operation,
+            "fixture test",
+            (FixtureReadError,),
+            lambda error: error.status_code == 503,
+            delays.append,
+        )
+
+        self.assertEqual(result, "complete")
+        self.assertEqual(attempts, 3)
+        self.assertEqual(delays, [2, 4])
+
+        with self.assertRaises(FixtureReadError):
+            retry_fixture_read(
+                lambda: (_ for _ in ()).throw(FixtureReadError(400)),
+                "fixture test",
+                (FixtureReadError,),
+                lambda error: error.status_code == 503,
+                delays.append,
+            )
+        self.assertEqual(delays, [2, 4])
+
+    def test_fixture_hash_accepts_gateway_sha256_prefix(self) -> None:
+        digest = "a" * 64
+        self.assertTrue(fixture_hash_matches(digest, digest))
+        self.assertTrue(fixture_hash_matches(f"sha256:{digest}", digest))
+        self.assertFalse(fixture_hash_matches(None, digest))
+        self.assertFalse(fixture_hash_matches(f"sha256:{'b' * 64}", digest))
+
+    def test_blob_fixture_targets_use_disjoint_namespaces(self) -> None:
+        contract = load_contract(Path("harness/performance/live-v5.toml"))
+        fixture = next(
+            fixture
+            for fixture in contract.fixtures
+            if fixture.id == "list-flat-100"
+        )
+
+        direct = fixture_blob_names(fixture, "direct")
+        gateway = fixture_blob_names(fixture, "gateway")
+
+        self.assertTrue(set(direct).isdisjoint(gateway))
+        self.assertTrue(
+            all("/direct/" in name for name in direct)
+        )
+        self.assertTrue(
+            all("/gateway/" in name for name in gateway)
+        )
+
     def test_repository_contract_expands_to_unique_cases(self) -> None:
         baseline = load_contract(Path("harness/performance/live-v1.toml"))
         self.assertEqual(len(baseline.cases), 25)
@@ -72,6 +140,94 @@ class PerformanceContractTests(unittest.TestCase):
                 for benchmark_case in repeated.cases
             },
             {10, 15, 18, 43, 49},
+        )
+        live_v5 = load_contract(Path("harness/performance/live-v5.toml"))
+        self.assertEqual(live_v5.schema_version, 5)
+        self.assertEqual(len(live_v5.cases), 42)
+        self.assertEqual(len(live_v5.fixtures), 5)
+        self.assertEqual(
+            live_v5.non_regression.document()[
+                "requestsPerEntryScanned"
+            ],
+            "blocking",
+        )
+        self.assertTrue(
+            all(
+                fixture.manifest_sha256
+                == fixture_manifest_sha256(fixture)
+                for fixture in live_v5.fixtures
+            )
+        )
+        listing_cases = [
+            case
+            for case in live_v5.cases
+            if case.operation.startswith("list_")
+        ]
+        self.assertEqual(len(listing_cases), 9)
+        self.assertTrue(
+            all(case.request_timeout_seconds == 600 for case in listing_cases)
+        )
+        self.assertEqual(
+            {
+                case.max_results
+                for case in listing_cases
+                if case.operation == "list_blobs_flat"
+                and case.fixture is not None
+                and case.fixture.id == "list-flat-5000"
+            },
+            {1000},
+        )
+        self.assertEqual(
+            next(
+                case
+                for case in listing_cases
+                if case.operation == "list_blobs_hierarchical"
+            ).max_results,
+            10,
+        )
+        self.assertEqual(
+            {
+                case.expected_requests_per_entry_scanned
+                for case in listing_cases
+                if case.operation != "list_containers"
+            },
+            {4.0},
+        )
+        self.assertEqual(
+            next(
+                case
+                for case in listing_cases
+                if case.operation == "list_containers"
+            ).expected_requests_per_entry_scanned,
+            "establish",
+        )
+        self.assertEqual(
+            len(
+                [
+                    case
+                    for case in live_v5.cases
+                    if case.operation == "put_block_sequence"
+                ]
+            ),
+            4,
+        )
+        self.assertEqual(
+            {
+                case.measured_iterations
+                for case in listing_cases
+                if case.operation == "list_blobs_flat"
+                and case.fixture is not None
+                and case.fixture.blob_count == 100
+            },
+            {60},
+        )
+        self.assertTrue(
+            all(
+                case.backend_requests_per_operation == "establish"
+                for case in live_v5.cases
+                if case.operation
+                in {"put_block_sequence", "get_block_list"}
+            )
         )
 
     def test_unknown_payload_fails_closed(self) -> None:

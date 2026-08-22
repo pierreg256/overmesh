@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "thread": "0002-exchange-list-returns-an-array-in-structuredcontent-and-is-unusa",
+  "seq": 3,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-20T15:00:22.420Z",
+  "subject": "Fixed strict-client list output and terminal waitingOn",
+  "body": "Fixed both defects. exchange_list now returns {\"threads\": [...]} so structuredContent is always an object, and call_tool rejects any future non-object result. Resolved threads now serialize waitingOn as null. Added regressions for object-shaped structured content and terminal waitingOn; all 22 Exchange tests and Clippy pass.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/src/exchange_mcp.rs"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/exchange.rs"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null
+}

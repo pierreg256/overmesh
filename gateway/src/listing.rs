@@ -27,6 +27,7 @@ pub const DEFAULT_MAX_RESULTS: u32 = 5_000;
 pub const MAX_RESULTS: u32 = 5_000;
 const MIN_CATALOG_PAGE_SIZE: usize = 32;
 const SYSTEM_CONTAINER: &str = "overmesh-system";
+const EXHAUSTED_BACKEND_CURSOR: &str = "overmesh:catalog-exhausted:v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListRequest {
@@ -57,6 +58,7 @@ pub struct BlobListPage {
     pub max_results: u32,
     pub marker: String,
     pub entries: Vec<BlobListEntry>,
+    pub entries_scanned: u64,
     pub next_marker: Option<String>,
     pub include_metadata: bool,
 }
@@ -74,6 +76,7 @@ pub struct ContainerListPage {
     pub max_results: u32,
     pub marker: String,
     pub containers: Vec<ListedContainer>,
+    pub entries_scanned: u64,
     pub next_marker: Option<String>,
 }
 
@@ -200,10 +203,17 @@ impl ListingService {
         let batch_size = limit.saturating_add(1).max(MIN_CATALOG_PAGE_SIZE);
         let mut backend_cursors = state.map_or(backend_cursors, |state| state.backend_cursors);
         let mut entries = Vec::with_capacity(limit);
+        let mut entries_scanned = 0_u64;
         let mut last_emitted_prefix = None;
         let mut has_more = false;
         let mut continuation_cursors = backend_cursors.clone();
+        let mut seen_cursor_states = BTreeSet::new();
         'catalog: loop {
+            if !seen_cursor_states.insert(backend_cursors.clone()) {
+                return Err(ListingError::Backend(BackendError::InvalidResponse(
+                    "catalog listing cursor cycle detected".to_owned(),
+                )));
+            }
             let page_start_cursors = backend_cursors.clone();
             let (keys, next_cursors) = self
                 .catalog_keys_page(
@@ -214,9 +224,12 @@ impl ListingService {
                 )
                 .await?;
             if keys.is_empty() {
-                break;
+                backend_cursors = next_cursors;
+                if backend_cursors_exhausted(&backend_cursors) {
+                    break;
+                }
+                continue;
             }
-            let mut consumed_any = false;
             for key in keys {
                 if after.as_ref().is_some_and(|cursor| key <= *cursor) {
                     continue;
@@ -224,14 +237,13 @@ impl ListingService {
                 let candidate = self
                     .validated_catalog_blob(&key, &quarantined, &control_token)
                     .await?;
+                entries_scanned = entries_scanned.saturating_add(1);
                 let Some((name, metadata)) = candidate else {
                     after = Some(key);
-                    consumed_any = true;
                     continue;
                 };
                 if is_internal_blob_name(&name) {
                     after = Some(key);
-                    consumed_any = true;
                     continue;
                 }
                 let output = listed_blob_entry(name, metadata, &request.prefix, &request.delimiter);
@@ -243,7 +255,6 @@ impl ListingService {
                 };
                 if duplicate_prefix {
                     after = Some(key.clone());
-                    consumed_any = true;
                     continue;
                 }
                 if entries.len() == limit {
@@ -258,10 +269,9 @@ impl ListingService {
                 }
                 entries.push(output);
                 after = Some(key.clone());
-                consumed_any = true;
             }
             backend_cursors = next_cursors;
-            if !consumed_any || backend_cursors.values().all(Option::is_none) {
+            if backend_cursors_exhausted(&backend_cursors) {
                 break;
             }
         }
@@ -291,6 +301,7 @@ impl ListingService {
             max_results: request.max_results,
             marker: request.marker.clone().unwrap_or_default(),
             entries,
+            entries_scanned,
             next_marker,
             include_metadata: request.include.iter().any(|value| value == "metadata"),
         })
@@ -332,10 +343,17 @@ impl ListingService {
         let limit = usize::try_from(request.max_results).expect("maxresults fits usize");
         let batch_size = limit.saturating_add(1).max(MIN_CATALOG_PAGE_SIZE);
         let mut containers = Vec::with_capacity(limit);
+        let mut entries_scanned = 0_u64;
         let mut last_container = after.clone();
         let mut continuation_cursors = backend_cursors.clone();
         let mut has_more = false;
+        let mut seen_cursor_states = BTreeSet::new();
         'catalog: loop {
+            if !seen_cursor_states.insert(backend_cursors.clone()) {
+                return Err(ListingError::Backend(BackendError::InvalidResponse(
+                    "catalog listing cursor cycle detected".to_owned(),
+                )));
+            }
             let page_start_cursors = backend_cursors.clone();
             let (keys, next_cursors) = self
                 .catalog_keys_page(
@@ -346,13 +364,15 @@ impl ListingService {
                 )
                 .await?;
             if keys.is_empty() {
-                break;
+                backend_cursors = next_cursors;
+                if backend_cursors_exhausted(&backend_cursors) {
+                    break;
+                }
+                continue;
             }
-            let mut consumed_any = false;
             for key in keys {
                 let Ok(logical_blob) = logical_blob_from_catalog_key(&self.logical_account, &key)
                 else {
-                    consumed_any = true;
                     continue;
                 };
                 let candidate = logical_blob.container().to_owned();
@@ -362,20 +382,19 @@ impl ListingService {
                         .as_ref()
                         .is_some_and(|previous| candidate <= *previous)
                 {
-                    consumed_any = true;
                     continue;
                 }
                 let Some((_blob, metadata)) = self
                     .validated_catalog_blob(&key, &quarantined, &control_token)
                     .await?
                 else {
-                    consumed_any = true;
+                    entries_scanned = entries_scanned.saturating_add(1);
                     continue;
                 };
+                entries_scanned = entries_scanned.saturating_add(1);
                 match self.authorize_container(&candidate, principal).await {
                     Ok(()) => {}
                     Err(ListingError::Authorization | ListingError::ContainerNotFound) => {
-                        consumed_any = true;
                         continue;
                     }
                     Err(error) => return Err(error),
@@ -391,10 +410,9 @@ impl ListingService {
                     etag: container_etag(&self.logical_account, &candidate, self.ring.ring_version),
                 });
                 last_container = Some(candidate);
-                consumed_any = true;
             }
             backend_cursors = next_cursors;
-            if !consumed_any || backend_cursors.values().all(Option::is_none) {
+            if backend_cursors_exhausted(&backend_cursors) {
                 break;
             }
         }
@@ -421,6 +439,7 @@ impl ListingService {
             max_results: request.max_results,
             marker: request.marker.clone().unwrap_or_default(),
             containers,
+            entries_scanned,
             next_marker,
         })
     }
@@ -458,10 +477,20 @@ impl ListingService {
     ) -> Result<(Vec<String>, BTreeMap<String, Option<String>>), ListingError> {
         let mut keys = BTreeSet::new();
         let mut next_cursors = BTreeMap::new();
+        let mut pages = Vec::new();
+        let mut safe_upper_bound: Option<String> = None;
+        let mut blocked_by_empty_continued_page = false;
         for backend in self.backends.values() {
             let cursor = cursors
                 .get(backend.id())
                 .ok_or(ListingError::InvalidMarker(ContinuationError::Binding))?;
+            if cursor.as_deref() == Some(EXHAUSTED_BACKEND_CURSOR) {
+                next_cursors.insert(
+                    backend.id().to_owned(),
+                    Some(EXHAUSTED_BACKEND_CURSOR.to_owned()),
+                );
+                continue;
+            }
             let page = backend
                 .control_list_objects_page(prefix, cursor.as_deref(), limit, token)
                 .await?;
@@ -470,8 +499,44 @@ impl ListingService {
                     "catalog listing cursor did not advance".to_owned(),
                 )));
             }
-            next_cursors.insert(backend.id().to_owned(), page.next_cursor);
-            keys.extend(page.objects);
+            if page.next_cursor.as_deref() == Some(EXHAUSTED_BACKEND_CURSOR) {
+                return Err(ListingError::Backend(BackendError::InvalidResponse(
+                    "catalog listing cursor collides with internal state".to_owned(),
+                )));
+            }
+            if page.next_cursor.is_some() {
+                if let Some(last_key) = page.objects.iter().max() {
+                    safe_upper_bound = Some(match safe_upper_bound {
+                        Some(current) => current.min(last_key.clone()),
+                        None => last_key.clone(),
+                    });
+                } else {
+                    blocked_by_empty_continued_page = true;
+                }
+            }
+            pages.push((backend.id().to_owned(), cursor.clone(), page));
+        }
+        for (backend_id, cursor, page) in pages {
+            let page_max = page.objects.iter().max();
+            let page_consumed = if blocked_by_empty_continued_page {
+                page.objects.is_empty()
+            } else {
+                match (&safe_upper_bound, page_max) {
+                    (Some(bound), Some(last_key)) => last_key <= bound,
+                    _ => true,
+                }
+            };
+            keys.extend(page.objects.into_iter().filter(|key| {
+                !blocked_by_empty_continued_page
+                    && safe_upper_bound.as_ref().is_none_or(|bound| key <= bound)
+            }));
+            let next_cursor = if page_consumed {
+                page.next_cursor
+                    .or_else(|| Some(EXHAUSTED_BACKEND_CURSOR.to_owned()))
+            } else {
+                cursor
+            };
+            next_cursors.insert(backend_id, next_cursor);
         }
         Ok((keys.into_iter().collect(), next_cursors))
     }
@@ -614,6 +679,12 @@ impl ListingService {
             Err(ListingError::InvalidMarker(ContinuationError::Binding))
         }
     }
+}
+
+fn backend_cursors_exhausted(cursors: &BTreeMap<String, Option<String>>) -> bool {
+    cursors
+        .values()
+        .all(|cursor| cursor.as_deref() == Some(EXHAUSTED_BACKEND_CURSOR))
 }
 
 impl BlobListPage {
@@ -846,6 +917,7 @@ mod tests {
                 name: "a&b".to_owned(),
                 metadata: metadata(),
             })],
+            entries_scanned: 1,
             next_marker: Some("\"next\"".to_owned()),
             include_metadata: true,
         };

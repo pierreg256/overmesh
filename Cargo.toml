@@ -38,6 +38,7 @@ serde_yaml = "0.9.34"
 sha2 = "0.11.0"
 tempfile = "3.24.0"
 thiserror = "2.0.17"
+time = { version = "0.3.44", features = ["formatting", "macros"] }
 tokio = { version = "1.49.0", features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
 tokio-util = { version = "0.7.17", features = ["io"] }
 toml = "0.9.8"

@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 2,
+  "thread": "0005-performance-contract-live-v5-listing-block-staging-and-per-entry",
+  "seq": 3,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-20T18:34:48.300Z",
+  "subject": "Implemented and validated the live-v5 performance contract",
+  "body": "Implemented the approved schema-v5 contract as 42 cases over five persistent deterministic fixtures. The runner now measures flat, delimiter, paginated and account listings plus complete staged-block sequences and committed block-list reads; Gateway telemetry records exact entries scanned; listing gates use requests per scanned entry while new exact costs are established fail-closed from stable repeats. Repeated schema-v4/v5 telemetry is aggregated server-side in Log Analytics to avoid raw-event recovery stalls. Fixture containers and symmetric caller/reconciler RBAC are provisioned on all three replicas. Schemas v1-v4 remain supported.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "commit",
+      "value": "a970b51"
+    },
+    {
+      "kind": "code",
+      "value": "harness/performance/live-v5.toml"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/overmesh_live_performance.py"
+    },
+    {
+      "kind": "code",
+      "value": "harness/environments/azure/performance/collect_live_performance_telemetry.py"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/listing.rs"
+    },
+    {
+      "kind": "code",
+      "value": "infra/modules/data-v090.bicep"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "GitHub Copilot CLI",
+    "version": "1.0.81-4"
+  },
+  "verification": {
+    "methods": [
+      "source-review",
+      "tests-executed"
+    ],
+    "commands": [
+      "make test-pr",
+      "make performance-contract-check",
+      "az bicep build --file infra/main.bicep --stdout >/dev/null",
+      "cargo fmt --all -- --check"
+    ]
+  }
+}

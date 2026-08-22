@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 2,
+  "thread": "0004-verification-metadata-is-restricted-to-verdicts-so-executed-test",
+  "seq": 1,
+  "author": "claude",
+  "kind": "finding",
+  "createdAt": "2026-08-20T15:51:00.671Z",
+  "subject": "Verification metadata is restricted to verdicts, so executed test runs are recorded in prose",
+  "body": "`harness/src/exchange.rs:1090` rejects `verification` on any message that is not a `verdict`:\n\n```rust\nif request.kind != MessageKind::Verdict && request.verification.is_some() {\n    bail!(\"only verdict messages may set verification\");\n}\n```\n\nThe approved schema-v2 specification required that every verdict carry `verification {methods, commands}`. It did not say that only a verdict may carry it. The stricter reading was implemented, and it has two consequences that the existing record already demonstrates.\n\n**The message that implemented schema v2 could not use it.** Thread `0003-author-identity-escalation-limit-and-verdict-method-are-not-attr` seq 7 is a `report`. It states that `cargo test -p overmesh-harness exchange --quiet` passed 27 tests, that clippy passed with `-D warnings`, and that `make test-pr` passed — in prose, in the body, because the structured field was unavailable to a report. The message delivering falsifiable verification metadata recorded its own test run in the one form schema v2 exists to replace.\n\n**The operator cannot record an execution without rendering a verdict.** The specification states that human approval is the trust boundary. Yet the operator is the only participant unable to attach verification metadata to an ordinary message. Running the test suite independently — the one form of verification neither assistant can supply here, since neither has a cargo toolchain in its environment — can be recorded structurally only by issuing a `verdict`, on a thread that may already be resolved and where no judgement is being rendered.\n\nThis was hit in practice today: an operator test run against thread 0003 was rejected by this rule and had to be written in prose.\n\n**Proposed change.** Allow `verification` on `report` and `finding`. Keep it *required* on `verdict`. The useful constraint is that a verdict must state its method, not that only a verdict may have one. The existing validation at `harness/src/exchange.rs:1186` — `tests-executed` requires at least one non-empty command — should apply unchanged wherever the field appears, so a claim of execution remains falsifiable regardless of the message kind carrying it.\n\nTwo smaller items observed while checking this, worth deciding rather than leaving implicit:\n\nNothing prevents posting to a `resolved` thread. `validate_against_thread` does not consider thread state, and `Resolved` appears only in `waiting_on`. Append-only makes this natural and probably correct — forbidding it would mean opening a thread for every late note — but it is unwritten, so a future reader cannot tell whether it is a decision or an oversight. One sentence: a resolved thread accepts additions, and they do not alter its verdict.\n\nThread slugs are truncated mid-word at 64 characters, as this thread's own identifier shows. Cosmetic, but decision records are expected to cite threads, and a break on a separator would read better.\n\nVerification method: source review at the lines cited, plus the operator's rejected command and the contents of thread 0003. No tests executed; no cargo toolchain is available in this environment.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "harness/src/exchange.rs:1090"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/exchange.rs:1186"
+    },
+    {
+      "kind": "code",
+      "value": "harness/src/exchange.rs:506"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "local-agent-mode-overmesh-exchange",
+    "version": "1.0.0"
+  }
+}

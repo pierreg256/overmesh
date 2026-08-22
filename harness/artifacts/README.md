@@ -100,3 +100,29 @@ The client JSON and deterministic archive SHA-256 values are:
 057a43673e57c3033fcbbcabd1a5513722f2b2cdb43c5cdb07f5c4497c99e063  client-performance.json
 af0f10b56e62fd6033dd56f943e8a34750ddc14b4711b68c07abaefa5c314e11  performance-v0101-v3-raw-evidence.tar.gz
 ```
+
+The 0.11.0 `live-v4` request-budget baseline archive is retained on all three
+accounts at:
+
+```text
+overmesh-system/release-evidence/0.11.0/raw/performance-v011-v4-raw-evidence.tar.gz
+```
+
+It contains the aggregate server telemetry reconstructed from the retained
+Azure Monitor events and the original client campaign output. Their SHA-256
+values and the deterministic archive hash are:
+
+```text
+018ec415b0669361c5aa67fbc6214241dde2f29aed3c662059f5c3e28146e20c  raw-performance.json
+5025a60127a7ba77ddcdde04faad797b4ab6b40bb054ba2e92889a90960bad77  client-performance.json
+76710de5bc2bff86a191097a50931c61d20fd44c870ba0fc870844020bb4a3e8  performance-v011-v4-raw-evidence.tar.gz
+```
+
+Independent review of the immutable v4 bundle found that 10 of 28 cases met
+the p50 stability requirement on both targets: 22 qualified on Gateway and 11
+on direct Storage. Direct Storage was the binding source of variance, reaching
+a 2.103 within-campaign spread on `put_blob-16mib-c4`, while the Gateway maximum
+was 1.259. These repeat spreads describe variation within the one-hour campaign
+and do not estimate drift between campaigns run on different days. Schema v5
+publishes this gate coverage and the direct-target maximum directly in its
+machine-readable evidence.
