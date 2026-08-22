@@ -336,6 +336,9 @@
             },
             "additionalProperties": false
           },
+          "readPathPoolPolicy": {
+            "enum": ["repeat-strided"]
+          },
           "placementCoverage": {
             "type": "object",
             "required": [

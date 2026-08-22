@@ -467,6 +467,7 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
                             "get_range",
                             "head_blob",
                         }:
+                            result["readPathPoolPolicy"] = "repeat-strided"
                             result["placementCoverage"] = {
                                 "distinctPaths": 24,
                                 "distinctPlacementPairs": 3,

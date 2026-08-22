@@ -11,6 +11,7 @@ from overmesh_live_performance import (
     latency_metrics,
     load_contract,
     percentile,
+    read_path_pool_index,
     request_id,
     retry_fixture_read,
     sdk_request_options,
@@ -20,6 +21,28 @@ from overmesh_live_performance import (
 
 
 class PerformanceContractTests(unittest.TestCase):
+    def test_v51_read_paths_are_strided_across_repeats(self) -> None:
+        contract = load_contract(Path("harness/performance/live-v5.1.toml"))
+        benchmark_case = next(
+            case for case in contract.cases if case.operation == "get_blob"
+        )
+        observed = {
+            read_path_pool_index(
+                contract,
+                benchmark_case,
+                repeat_index,
+                invocation_index,
+            )
+            for repeat_index in range(contract.campaign_repeats)
+            for invocation_index in range(
+                benchmark_case.measured_iterations
+            )
+        }
+        self.assertEqual(
+            observed,
+            set(range(contract.read_path_pool_size or 0)),
+        )
+
     def test_fixture_read_retries_only_classified_errors(self) -> None:
         class FixtureReadError(Exception):
             def __init__(self, status_code: int) -> None:

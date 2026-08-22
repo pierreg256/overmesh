@@ -1423,6 +1423,12 @@ def aggregate_placement_coverage(
         repeat_index = run["repeat"] - 1
         for measured_index in range(run["iterations"]):
             invocation_index = warmup_per_run + measured_index
+            path_index = (
+                repeat_index * run["iterations"] + invocation_index
+                if benchmark_case.get("readPathPoolPolicy")
+                == "repeat-strided"
+                else invocation_index
+            ) % pool_size
             fingerprint = request_fingerprint(
                 request_id(
                     run_id,
@@ -1438,7 +1444,7 @@ def aggregate_placement_coverage(
                     f"case {benchmark_case['id']} request {fingerprint} "
                     f"reached {len(backends)} placement backends, expected 2"
                 )
-            pairs_by_path[invocation_index % pool_size].add(
+            pairs_by_path[path_index].add(
                 tuple(sorted(backends))
             )
     inconsistent_paths = [
@@ -1759,21 +1765,38 @@ def main() -> int:
                     "requestsPerOperationPerRun"
                 ] = requests_per_operation_per_run
             if case_is_valid and "pathPoolSize" in benchmark_case:
-                benchmark_case["placementCoverage"] = (
-                    aggregate_placement_coverage(
-                        campaign["runId"],
-                        benchmark_case,
-                        aggregate_fingerprint_backends,
-                        event_metrics,
+                try:
+                    benchmark_case["placementCoverage"] = (
+                        aggregate_placement_coverage(
+                            campaign["runId"],
+                            benchmark_case,
+                            aggregate_fingerprint_backends,
+                            event_metrics,
+                        )
+                        if repeated
+                        else placement_coverage(
+                            campaign["runId"],
+                            benchmark_case,
+                            messages_by_run,
+                            event_metrics,
+                        )
                     )
-                    if repeated
-                    else placement_coverage(
-                        campaign["runId"],
+                except RuntimeError:
+                    record_telemetry_failure(
                         benchmark_case,
-                        messages_by_run,
-                        event_metrics,
+                        runs[-1],
+                        "server-telemetry-result-mismatch",
+                        "PlacementCoverageMismatch",
+                        {
+                            "expectedDistinctPaths": benchmark_case[
+                                "pathPoolSize"
+                            ],
+                            "readPathPoolPolicy": benchmark_case.get(
+                                "readPathPoolPolicy",
+                                "fixed",
+                            ),
+                        },
                     )
-                )
 
     if fixture_setup is not None:
         fixture_setup["backendRequests"] = {

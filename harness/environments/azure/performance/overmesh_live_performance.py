@@ -1364,6 +1364,24 @@ def read_blob_name(case_id: str, pool_index: int) -> str:
     return f"perf/{case_id}/{pool_index:04d}"
 
 
+def read_path_pool_index(
+    contract: Contract,
+    benchmark_case: BenchmarkCase,
+    repeat_index: int,
+    invocation_index: int,
+) -> int:
+    if contract.read_path_pool_size is None:
+        raise ValueError("read path pool is unavailable")
+    repeat_offset = (
+        repeat_index * benchmark_case.measured_iterations
+        if contract.revision == "v5.1"
+        else 0
+    )
+    return (
+        repeat_offset + invocation_index
+    ) % contract.read_path_pool_size
+
+
 def measured_metrics(
     latencies: list[float],
     iterations: int,
@@ -2011,7 +2029,12 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                             current_read_blob = (
                                 read_blob_name(
                                     benchmark_case.id,
-                                    index % contract.read_path_pool_size,
+                                    read_path_pool_index(
+                                        contract,
+                                        benchmark_case,
+                                        repeat_index,
+                                        index,
+                                    ),
                                 )
                                 if contract.read_path_pool_size is not None
                                 else seed_blob
@@ -2506,6 +2529,8 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                 and contract.read_path_pool_size is not None
             ):
                 result["pathPoolSize"] = contract.read_path_pool_size
+                if contract.revision == "v5.1":
+                    result["readPathPoolPolicy"] = "repeat-strided"
             if isinstance(
                 benchmark_case.backend_requests_per_operation, int
             ):

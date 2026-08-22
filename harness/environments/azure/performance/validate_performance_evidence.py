@@ -642,6 +642,13 @@ def validate_document(
                 "get_range",
                 "head_blob",
             }:
+                if (
+                    contract.revision == "v5.1"
+                    and case.get("readPathPoolPolicy") != "repeat-strided"
+                ):
+                    raise ValueError(
+                        f"case {key} has an invalid read path pool policy"
+                    )
                 coverage = case.get("placementCoverage", {})
                 by_backend = coverage.get("byBackend", {})
                 if (

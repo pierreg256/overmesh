@@ -6,6 +6,7 @@ from subprocess import CalledProcessError
 from unittest.mock import patch
 
 from collect_live_performance_telemetry import (
+    aggregate_placement_coverage,
     aggregate_events,
     collect_stable_backend_request_count,
     collect_stable_events,
@@ -551,6 +552,67 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         failure = benchmark_case["validity"]["failures"][0]
         self.assertEqual(failure["repeat"], 2)
         self.assertNotIn("fingerprint", failure)
+
+    def test_v51_placement_coverage_uses_repeat_stride(self) -> None:
+        benchmark_case = {
+            "id": "get-1kib-c1",
+            "pathPoolSize": 3,
+            "readPathPoolPolicy": "repeat-strided",
+            "warmupIterations": 0,
+            "runs": [
+                {"repeat": 1, "iterations": 2},
+                {"repeat": 2, "iterations": 2},
+            ],
+        }
+        pairs = [
+            ("storage-a", "storage-b"),
+            ("storage-a", "storage-c"),
+            ("storage-b", "storage-c"),
+            ("storage-a", "storage-b"),
+        ]
+        fingerprint_backends = {}
+        for run in benchmark_case["runs"]:
+            scope = f"{benchmark_case['id']}::repeat-{run['repeat']}"
+            repeat_index = run["repeat"] - 1
+            fingerprint_backends[scope] = {}
+            for invocation_index in range(run["iterations"]):
+                fingerprint = request_fingerprint(
+                    request_id(
+                        "run",
+                        "gateway",
+                        benchmark_case["id"],
+                        invocation_index,
+                        repeat_index,
+                    )
+                )
+                pair_index = (
+                    repeat_index * run["iterations"] + invocation_index
+                ) % benchmark_case["pathPoolSize"]
+                fingerprint_backends[scope][fingerprint] = set(
+                    pairs[pair_index]
+                )
+        metrics = {
+            "backendRequests": {
+                "byBackend": {
+                    "storage-a": 3,
+                    "storage-b": 3,
+                    "storage-c": 2,
+                }
+            }
+        }
+        self.assertEqual(
+            aggregate_placement_coverage(
+                "run",
+                benchmark_case,
+                fingerprint_backends,
+                metrics,
+            ),
+            {
+                "distinctPaths": 3,
+                "distinctPlacementPairs": 3,
+                "byBackend": metrics["backendRequests"]["byBackend"],
+            },
+        )
 
     @patch("collect_live_performance_telemetry.time.sleep")
     @patch("collect_live_performance_telemetry.time.monotonic")
