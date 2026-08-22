@@ -23,6 +23,7 @@ from collect_live_performance_telemetry import (
     placement_coverage,
     query_logs,
     query_metrics,
+    query_repeated_aggregate_batches,
     query_repeated_aggregates,
     request_fingerprint,
     request_id,
@@ -411,6 +412,44 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         self.assertIn(
             "summarize TimeGenerated=min(TimeGenerated) by AppName, Message",
             query,
+        )
+        self.assertIn(
+            "datetime(2025-12-31T23:55:00Z)",
+            query,
+        )
+        self.assertIn(
+            "datetime(2026-01-01T00:06:00Z)",
+            query,
+        )
+        timespan = command[command.index("--timespan") + 1]
+        self.assertEqual(
+            timespan,
+            "2025-12-31T23:55:00Z/2026-01-01T00:06:00Z",
+        )
+
+    @patch(
+        "collect_live_performance_telemetry.query_repeated_aggregates"
+    )
+    def test_repeated_aggregate_queries_are_batched_by_case(
+        self,
+        query_repeated_aggregates,
+    ) -> None:
+        query_repeated_aggregates.side_effect = [
+            [{"Scope": "case-a"}],
+            [{"Scope": "case-b"}],
+        ]
+        rows = query_repeated_aggregate_batches(
+            "workspace",
+            "gateway",
+            [{"id": "case-a"}, {"id": "case-b"}],
+        )
+        self.assertEqual(
+            rows,
+            [{"Scope": "case-a"}, {"Scope": "case-b"}],
+        )
+        self.assertEqual(
+            [call.args[2] for call in query_repeated_aggregates.call_args_list],
+            [[{"id": "case-a"}], [{"id": "case-b"}]],
         )
 
     def test_fingerprint_vector_must_be_complete_before_stabilizing(

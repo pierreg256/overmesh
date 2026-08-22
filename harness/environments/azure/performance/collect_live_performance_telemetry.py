@@ -262,6 +262,34 @@ def kusto_case_expression(
     return "case(" + ", ".join([*clauses, "''"]) + ")"
 
 
+def kusto_ingestion_window_expression(
+    scopes: list[dict[str, Any]],
+) -> tuple[str, str, str]:
+    padding = timedelta(minutes=5)
+    windows = [
+        (
+            parse_timestamp(scope["startedAt"]) - padding,
+            parse_timestamp(scope["finishedAt"]) + padding,
+        )
+        for scope in scopes
+    ]
+    expression = " or ".join(
+        (
+            "TimeGenerated between "
+            f"(datetime({started.isoformat().replace('+00:00', 'Z')}) .. "
+            f"datetime({finished.isoformat().replace('+00:00', 'Z')}))"
+        )
+        for started, finished in windows
+    )
+    query_started_at = min(started for started, _ in windows)
+    query_finished_at = max(finished for _, finished in windows)
+    return (
+        expression,
+        query_started_at.isoformat().replace("+00:00", "Z"),
+        query_finished_at.isoformat().replace("+00:00", "Z"),
+    )
+
+
 def query_repeated_aggregates(
     workspace: str,
     app_names: str | list[str],
@@ -276,15 +304,16 @@ def query_repeated_aggregates(
     )
     run_expression = kusto_case_expression(scopes, "key")
     case_expression = kusto_case_expression(scopes, "case")
-    started_at = min(scope["startedAt"] for scope in scopes)
-    finished_at = max(scope["finishedAt"] for scope in scopes)
+    ingestion_windows, started_at, finished_at = (
+        kusto_ingestion_window_expression(scopes)
+    )
     query = f"""
 let Base = materialize(
   union isfuzzy=true ContainerAppConsoleLogs, ContainerAppConsoleLogs_CL
   | extend AppName = tostring(column_ifexists("ContainerAppName", column_ifexists("ContainerAppName_s", "")))
   | extend Message = tostring(column_ifexists("Log", column_ifexists("Log_s", "")))
   | where AppName in ({escaped_names})
-  | where TimeGenerated between (datetime({started_at}) .. datetime({finished_at}))
+  | where {ingestion_windows}
   | where Message has "overmesh_backend_request" or Message has "overmesh_manifest_sign" or Message has "overmesh_listing_scan"
   | summarize TimeGenerated=min(TimeGenerated) by AppName, Message
   | extend CleanMessage = replace_regex(Message, @'\\x1B\\[[0-?]*[ -/]*[@-~]', '')
@@ -354,6 +383,22 @@ union
     return [
         dict(zip(columns, row, strict=True))
         for row in table.get("rows", [])
+    ]
+
+
+def query_repeated_aggregate_batches(
+    workspace: str,
+    app_names: str | list[str],
+    gateway_cases: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        row
+        for benchmark_case in gateway_cases
+        for row in query_repeated_aggregates(
+            workspace,
+            app_names,
+            [benchmark_case],
+        )
     ]
 
 
@@ -1258,7 +1303,7 @@ def collect_stable_repeated_aggregates(
     ] | None = None
     while True:
         latest = repeated_aggregate_metrics(
-            query_repeated_aggregates(
+            query_repeated_aggregate_batches(
                 workspace,
                 app_names,
                 gateway_cases,
