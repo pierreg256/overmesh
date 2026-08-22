@@ -151,6 +151,14 @@ impl MemoryBackend {
             .collect()
     }
 
+    fn reset_control_get_counts(&self) {
+        self.state
+            .control_get_calls
+            .lock()
+            .expect("control get call lock")
+            .clear();
+    }
+
     fn maybe_fail(&self, key: &str) -> Result<(), BackendError> {
         if self
             .state
@@ -748,6 +756,23 @@ fn service_fixture() -> Arc<CommitService> {
     service_fixture_parts().0
 }
 
+#[tokio::test]
+async fn listing_services_share_the_validation_budget() {
+    let service = service_fixture();
+    let first = service.listing_service("account");
+    let second = service.listing_service("account");
+    let permits = first
+        .validation_limiter
+        .clone()
+        .acquire_many_owned(32)
+        .await
+        .expect("validation permits");
+
+    assert_eq!(second.validation_limiter.available_permits(), 0);
+    drop(permits);
+    assert_eq!(second.validation_limiter.available_permits(), 32);
+}
+
 fn service_fixture_parts() -> (Arc<CommitService>, Arc<MemoryBackend>, Arc<MemoryBackend>) {
     service_fixture_parts_with_staging_lifetime(Duration::from_secs(7 * 24 * 60 * 60))
 }
@@ -988,12 +1013,12 @@ async fn first_put_control_reads_have_a_closed_object_level_budget() {
     let secondary_reads = secondary.control_get_snapshot();
     assert_eq!(
         primary_reads.values().sum::<u64>(),
-        14,
+        12,
         "{primary_reads:#?}"
     );
     assert_eq!(
         secondary_reads.values().sum::<u64>(),
-        14,
+        12,
         "{secondary_reads:#?}"
     );
     let mut by_object_class = BTreeMap::<&str, u64>::new();
@@ -1007,9 +1032,9 @@ async fn first_put_control_reads_have_a_closed_object_level_budget() {
         BTreeMap::from([
             ("block_manifest", 2),
             ("catalogue", 4),
-            ("compaction_checkpoint", 4),
+            ("compaction_checkpoint", 2),
             ("head", 4),
-            ("high_water_current", 6),
+            ("high_water_current", 4),
             ("prepared_manifest", 4),
             ("quarantine", 2),
             ("terminal_manifest", 2),
@@ -3932,6 +3957,60 @@ async fn rejects_a_valid_head_replayed_below_the_high_water_record() {
         .await,
         Err(CommitError::VerificationFailed)
     ));
+}
+
+#[tokio::test]
+async fn write_reuses_the_validated_high_water_snapshot() {
+    let (service, primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/high-water-snapshot");
+    let coordinator = service.coordinator(&logical_blob).expect("coordinator");
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    let path_hash = logical_blob.path_hash();
+    let compaction_key = CommitCoordinator::history_compaction_checkpoint_key(&path_hash);
+    let current_key = CommitCoordinator::high_water_current_key(&path_hash);
+
+    coordinator
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "write-1",
+            &content,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("commit");
+
+    for backend in [&primary, &secondary] {
+        backend.reset_control_get_counts();
+    }
+
+    let replacement = spool_body(Body::from("replacement"), 4)
+        .await
+        .expect("replacement");
+    coordinator
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "write-2",
+            &replacement,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("replacement commit");
+
+    for backend in [primary, secondary] {
+        let reads = backend.control_get_snapshot();
+        assert_eq!(
+            backend.control_get_count(&compaction_key),
+            1,
+            "control reads: {reads:?}"
+        );
+        assert_eq!(
+            backend.control_get_count(&current_key),
+            2,
+            "control reads: {reads:?}"
+        );
+    }
 }
 
 #[tokio::test]

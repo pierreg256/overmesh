@@ -50,7 +50,7 @@ impl CommitCoordinator {
             {
                 self.authorize_replay(principal, &head.signed.payload)
                     .await?;
-                Self::validate_or_repair_high_water(
+                let _ = Self::validate_or_repair_high_water(
                     self.primary.as_ref(),
                     self.secondary.as_ref(),
                     &path_hash,
@@ -81,7 +81,7 @@ impl CommitCoordinator {
             }
             return Err(CommitError::IdempotencyConflict);
         }
-        Self::validate_or_repair_high_water(
+        let validated_high_water = Self::validate_or_repair_high_water(
             self.primary.as_ref(),
             self.secondary.as_ref(),
             &path_hash,
@@ -325,16 +325,33 @@ impl CommitCoordinator {
             control_token,
         )
         .await?;
-        Self::publish_high_water(
-            self.primary.as_ref(),
-            self.secondary.as_ref(),
-            &path_hash,
-            &signed_committed,
-            &committed_bytes,
-            control_token,
-            self.signer.as_ref(),
-        )
-        .await?;
+        match validated_high_water {
+            Some(snapshot) => {
+                Self::publish_high_water_with_snapshot(
+                    self.primary.as_ref(),
+                    self.secondary.as_ref(),
+                    &path_hash,
+                    &signed_committed,
+                    &committed_bytes,
+                    snapshot,
+                    control_token,
+                    self.signer.as_ref(),
+                )
+                .await?;
+            }
+            None => {
+                Self::publish_high_water(
+                    self.primary.as_ref(),
+                    self.secondary.as_ref(),
+                    &path_hash,
+                    &signed_committed,
+                    &committed_bytes,
+                    control_token,
+                    self.signer.as_ref(),
+                )
+                .await?;
+            }
+        }
 
         Ok(CommitResult {
             logical_version,

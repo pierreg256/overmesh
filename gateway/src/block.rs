@@ -716,7 +716,7 @@ impl BlockService {
             if committed_ids != requested_ids {
                 return Err(BlockError::Conflict);
             }
-            CommitCoordinator::validate_or_repair_high_water(
+            let _ = CommitCoordinator::validate_or_repair_high_water(
                 coordinator.primary.as_ref(),
                 coordinator.secondary.as_ref(),
                 &logical_blob.path_hash(),
@@ -747,7 +747,7 @@ impl BlockService {
         let current = self
             .load_current_blocks(coordinator, logical_blob, control_token)
             .await?;
-        CommitCoordinator::validate_or_repair_high_water(
+        let _ = CommitCoordinator::validate_or_repair_high_water(
             coordinator.primary.as_ref(),
             coordinator.secondary.as_ref(),
             &logical_blob.path_hash(),

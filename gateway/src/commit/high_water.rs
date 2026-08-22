@@ -11,7 +11,7 @@ impl CommitCoordinator {
         current: Option<&LoadedHead>,
         control_token: &ControlToken,
         signer: &dyn ManifestSigner,
-    ) -> Result<(), CommitError> {
+    ) -> Result<Option<ValidatedHighWaterSnapshot>, CommitError> {
         let compaction = Self::validate_or_repair_compaction_checkpoint(
             primary,
             secondary,
@@ -60,10 +60,10 @@ impl CommitCoordinator {
                 return Err(CommitError::VerificationFailed);
             }
         }
-        let highest = match (primary_high, secondary_high) {
-            (None, None) => None,
+        let (primary_current, secondary_current) = match (primary_high, secondary_high) {
+            (None, None) => (None, None),
             (Some(value), None) => {
-                Self::copy_high_water(
+                let repaired = Self::copy_high_water(
                     secondary,
                     path_hash,
                     &value,
@@ -71,10 +71,10 @@ impl CommitCoordinator {
                     control_token,
                 )
                 .await?;
-                Some(value)
+                (Some(value), Some(repaired))
             }
             (None, Some(value)) => {
-                Self::copy_high_water(
+                let repaired = Self::copy_high_water(
                     primary,
                     path_hash,
                     &value,
@@ -82,7 +82,7 @@ impl CommitCoordinator {
                     control_token,
                 )
                 .await?;
-                Some(value)
+                (Some(repaired), Some(value))
             }
             (Some(primary_value), Some(secondary_value)) => {
                 if primary_value.signed.payload.logical_version
@@ -91,7 +91,7 @@ impl CommitCoordinator {
                     if primary_value.bytes != secondary_value.bytes {
                         return Err(CommitError::VerificationFailed);
                     }
-                    Some(primary_value)
+                    (Some(primary_value), Some(secondary_value))
                 } else if primary_value.signed.payload.logical_version
                     > secondary_value.signed.payload.logical_version
                 {
@@ -99,7 +99,7 @@ impl CommitCoordinator {
                         &primary_value.signed.payload,
                         &secondary_value.signed.payload,
                     )?;
-                    Self::copy_high_water(
+                    let repaired = Self::copy_high_water(
                         secondary,
                         path_hash,
                         &primary_value,
@@ -107,13 +107,13 @@ impl CommitCoordinator {
                         control_token,
                     )
                     .await?;
-                    Some(primary_value)
+                    (Some(primary_value), Some(repaired))
                 } else {
                     validate_manifest_successor(
                         &secondary_value.signed.payload,
                         &primary_value.signed.payload,
                     )?;
-                    Self::copy_high_water(
+                    let repaired = Self::copy_high_water(
                         primary,
                         path_hash,
                         &secondary_value,
@@ -121,29 +121,26 @@ impl CommitCoordinator {
                         control_token,
                     )
                     .await?;
-                    Some(secondary_value)
+                    (Some(repaired), Some(secondary_value))
                 }
             }
         };
-        match (current, highest) {
-            (None, None) => Ok(()),
-            (None, Some(_)) => Err(CommitError::VerificationFailed),
+        let highest = primary_current.as_ref().or(secondary_current.as_ref());
+        let reuse_snapshot = match (current, highest) {
+            (None, None) => true,
+            (None, Some(_)) => return Err(CommitError::VerificationFailed),
             (Some(head), Some(high))
                 if high.signed.payload.logical_version > head.signed.payload.logical_version =>
             {
-                Err(CommitError::VerificationFailed)
+                return Err(CommitError::VerificationFailed);
             }
             (Some(head), Some(high))
                 if high.signed.payload.logical_version == head.signed.payload.logical_version =>
             {
-                if high.signed.payload.logical_etag == head.signed.payload.logical_etag
-                    && high.signed.payload.write_id == head.signed.payload.write_id
-                    && high.signed.payload.blob == head.signed.payload.blob
-                    && high.bytes == head.bytes
-                {
-                    Ok(())
+                if high.signed.payload == head.signed.payload {
+                    true
                 } else {
-                    Err(CommitError::VerificationFailed)
+                    return Err(CommitError::VerificationFailed);
                 }
             }
             (Some(head), _) => {
@@ -156,9 +153,15 @@ impl CommitCoordinator {
                     control_token,
                     signer,
                 )
-                .await
+                .await?;
+                false
             }
-        }
+        };
+        Ok(reuse_snapshot.then_some(ValidatedHighWaterSnapshot {
+            compaction,
+            primary_current,
+            secondary_current,
+        }))
     }
 
     pub(crate) async fn publish_high_water(
@@ -170,11 +173,6 @@ impl CommitCoordinator {
         control_token: &ControlToken,
         signer: &dyn ManifestSigner,
     ) -> Result<(), CommitError> {
-        committed.verify(
-            SignatureDomain::CommitManifest,
-            &committed.payload.signing_key_id,
-            signer,
-        )?;
         let compaction = Self::strict_compaction_checkpoint(
             primary,
             secondary,
@@ -189,6 +187,44 @@ impl CommitCoordinator {
             Self::load_current_high_water(primary, path_hash, control_token, signer),
             Self::load_current_high_water(secondary, path_hash, control_token, signer)
         )?;
+        Self::publish_high_water_with_snapshot(
+            primary,
+            secondary,
+            path_hash,
+            committed,
+            committed_bytes,
+            ValidatedHighWaterSnapshot {
+                compaction,
+                primary_current,
+                secondary_current,
+            },
+            control_token,
+            signer,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn publish_high_water_with_snapshot(
+        primary: &dyn ReplicaBackend,
+        secondary: &dyn ReplicaBackend,
+        path_hash: &str,
+        committed: &SignedDocument<CommitManifest>,
+        committed_bytes: &[u8],
+        snapshot: ValidatedHighWaterSnapshot,
+        control_token: &ControlToken,
+        signer: &dyn ManifestSigner,
+    ) -> Result<(), CommitError> {
+        committed.verify(
+            SignatureDomain::CommitManifest,
+            &committed.payload.signing_key_id,
+            signer,
+        )?;
+        let ValidatedHighWaterSnapshot {
+            compaction,
+            primary_current,
+            secondary_current,
+        } = snapshot;
         validate_recovery_floor(
             &committed.payload,
             primary_current.as_ref(),
@@ -322,11 +358,11 @@ impl CommitCoordinator {
         value: &LoadedHighWater,
         condition: PutCondition,
         control_token: &ControlToken,
-    ) -> Result<(), CommitError> {
+    ) -> Result<LoadedHighWater, CommitError> {
         let history_key = Self::high_water_history_key(path_hash, &value.signed.payload);
         control_put_bytes_idempotent(backend, &history_key, value.bytes.clone(), control_token)
             .await?;
-        backend
+        let result = backend
             .control_put_bytes(
                 &Self::high_water_current_key(path_hash),
                 value.bytes.clone(),
@@ -335,7 +371,11 @@ impl CommitCoordinator {
                 control_token,
             )
             .await?;
-        Ok(())
+        Ok(LoadedHighWater {
+            signed: value.signed.clone(),
+            bytes: value.bytes.clone(),
+            backend_etag: result.etag,
+        })
     }
 
     pub(in crate::commit) fn high_water_current_key(path_hash: &str) -> String {

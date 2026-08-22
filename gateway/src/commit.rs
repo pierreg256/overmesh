@@ -6,6 +6,7 @@ use std::{
 
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use tokio::sync::Semaphore;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -98,6 +99,7 @@ pub struct CommitService {
     pub(crate) control_tokens: SharedControlTokenProvider,
     listing_token_lifetime: Duration,
     listing_validation_concurrency: usize,
+    listing_validation_limiter: Arc<Semaphore>,
     staging_lifetime: Duration,
 }
 
@@ -129,16 +131,24 @@ struct EncodedBlockPage {
     bytes: Vec<u8>,
 }
 
+#[derive(Clone)]
 struct LoadedHighWater {
     signed: SignedDocument<CommitManifest>,
     bytes: Vec<u8>,
     backend_etag: Option<String>,
 }
 
+#[derive(Clone)]
 pub(crate) struct LoadedCompactionCheckpoint {
     pub(crate) signed: SignedDocument<HistoryCompactionCheckpoint>,
     pub(crate) bytes: Vec<u8>,
     pub(crate) backend_etag: Option<String>,
+}
+
+pub(crate) struct ValidatedHighWaterSnapshot {
+    compaction: Option<LoadedCompactionCheckpoint>,
+    primary_current: Option<LoadedHighWater>,
+    secondary_current: Option<LoadedHighWater>,
 }
 
 mod delete;
@@ -239,6 +249,9 @@ impl CommitService {
             control_tokens,
             listing_token_lifetime: options.listing_token_lifetime,
             listing_validation_concurrency: options.listing_validation_concurrency,
+            listing_validation_limiter: Arc::new(Semaphore::new(
+                options.listing_validation_concurrency,
+            )),
             staging_lifetime: options.staging_lifetime,
         }
     }
@@ -276,6 +289,7 @@ impl CommitService {
             self.control_tokens.clone(),
             self.listing_token_lifetime,
             self.listing_validation_concurrency,
+            self.listing_validation_limiter.clone(),
         )
     }
 

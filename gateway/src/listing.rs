@@ -6,6 +6,7 @@ use std::{
 
 use futures_util::future::join_all;
 use thiserror::Error;
+use tokio::sync::Semaphore;
 
 use crate::{
     auth::AuthenticatedPrincipal,
@@ -107,6 +108,7 @@ pub struct ListingService {
     control_tokens: SharedControlTokenProvider,
     token_lifetime: Duration,
     validation_concurrency: usize,
+    pub(crate) validation_limiter: Arc<Semaphore>,
 }
 
 impl ListRequest {
@@ -157,6 +159,7 @@ impl ListingService {
         control_tokens: SharedControlTokenProvider,
         token_lifetime: Duration,
         validation_concurrency: usize,
+        validation_limiter: Arc<Semaphore>,
     ) -> Self {
         assert!(
             (1..=256).contains(&validation_concurrency),
@@ -170,6 +173,7 @@ impl ListingService {
             control_tokens,
             token_lifetime,
             validation_concurrency,
+            validation_limiter,
         }
     }
 
@@ -693,6 +697,9 @@ impl ListingService {
         let Some(secondary) = self.backends.get(&replicas[1].id) else {
             return Ok(None);
         };
+        let _validation_permit = self.validation_limiter.acquire().await.map_err(|error| {
+            ListingError::Backend(BackendError::InvalidResponse(error.to_string()))
+        })?;
         let head_key = format!("heads/{}.json", logical_blob.path_hash());
         let (primary_catalog, secondary_catalog, primary_head, secondary_head) = tokio::try_join!(
             primary.control_get_object(object_key, token),
