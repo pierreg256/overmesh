@@ -1582,8 +1582,21 @@ def main() -> int:
                 f"case {benchmark_case['id']} has no backend request telemetry"
             )
         if event_metrics["backendRequests"]["unattributedRequests"] != 0:
-            raise RuntimeError(
-                f"case {benchmark_case['id']} has unattributed backend requests"
+            if runs is None:
+                raise RuntimeError(
+                    f"case {benchmark_case['id']} has unattributed "
+                    "backend requests"
+                )
+            record_telemetry_failure(
+                benchmark_case,
+                runs[-1],
+                "server-telemetry-result-mismatch",
+                "UnattributedBackendRequests",
+                {
+                    "unattributedBackendRequests": event_metrics[
+                        "backendRequests"
+                    ]["unattributedRequests"]
+                },
             )
         benchmark_case["serverTelemetry"] = event_metrics
         if runs is not None:
@@ -1607,9 +1620,16 @@ def main() -> int:
                     run_metrics["backendRequests"]["unattributedRequests"]
                     != 0
                 ):
-                    raise RuntimeError(
-                        f"case {benchmark_case['id']} repeat "
-                        f"{run['repeat']} has unattributed backend requests"
+                    record_telemetry_failure(
+                        benchmark_case,
+                        run,
+                        "server-telemetry-result-mismatch",
+                        "UnattributedBackendRequests",
+                        {
+                            "unattributedBackendRequests": run_metrics[
+                                "backendRequests"
+                            ]["unattributedRequests"]
+                        },
                     )
                 if is_listing:
                     budget = listing_budget_from_metrics(
