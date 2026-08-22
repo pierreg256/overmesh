@@ -99,6 +99,7 @@ class BenchmarkCase:
     range_bytes: int | None
     measured_iterations: int
     backend_requests_per_operation: int | str | None = None
+    allowed_variable_backend_operations: tuple[str, ...] = ()
     fixture: Fixture | None = None
     request_timeout_seconds: int | None = None
     max_results: int | None = None
@@ -670,6 +671,45 @@ def load_contract(path: Path) -> Contract:
             )
         else:
             backend_requests_per_operation = None
+        raw_variable_operations = workload.get(
+            "allowed_variable_backend_operations"
+        )
+        allowed_variable_backend_operations: tuple[str, ...] = ()
+        if raw_variable_operations is not None:
+            if (
+                revision != "v5.1"
+                or operation in LISTING_OPERATIONS
+                or not isinstance(backend_requests_per_operation, int)
+            ):
+                raise ValueError(
+                    "allowed_variable_backend_operations is valid only for "
+                    "v5.1 non-listing workloads with an integer "
+                    "backend_requests_per_operation"
+                )
+            if (
+                not isinstance(raw_variable_operations, (list, tuple))
+                or not raw_variable_operations
+                or any(
+                    not isinstance(item, str) or not item.strip()
+                    for item in raw_variable_operations
+                )
+            ):
+                raise ValueError(
+                    f"workload[{workload_index}]."
+                    "allowed_variable_backend_operations must be a "
+                    "non-empty list of non-empty operation strings"
+                )
+            allowed_variable_backend_operations = tuple(
+                raw_variable_operations
+            )
+            if len(set(allowed_variable_backend_operations)) != len(
+                allowed_variable_backend_operations
+            ):
+                raise ValueError(
+                    f"workload[{workload_index}]."
+                    "allowed_variable_backend_operations must not contain "
+                    "duplicates"
+                )
         fixture_id = workload.get("fixture")
         fixture = fixtures.get(fixture_id) if fixture_id is not None else None
         if fixture_id is not None and fixture is None:
@@ -766,6 +806,9 @@ def load_contract(path: Path) -> Contract:
                     measured_iterations=workload_measured_iterations,
                     backend_requests_per_operation=(
                         backend_requests_per_operation
+                    ),
+                    allowed_variable_backend_operations=(
+                        allowed_variable_backend_operations
                     ),
                     fixture=fixture,
                     request_timeout_seconds=request_timeout_seconds,
@@ -1099,6 +1142,15 @@ def plan(contract: Contract) -> dict[str, Any]:
                     if isinstance(
                         benchmark_case.backend_requests_per_operation, int
                     )
+                    else {}
+                ),
+                **(
+                    {
+                        "allowedVariableBackendOperations": list(
+                            benchmark_case.allowed_variable_backend_operations
+                        )
+                    }
+                    if benchmark_case.allowed_variable_backend_operations
                     else {}
                 ),
                 **(
@@ -2539,6 +2591,10 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                 )
             elif benchmark_case.backend_requests_per_operation == "establish":
                 result["backendRequestBudget"] = "establish"
+            if benchmark_case.allowed_variable_backend_operations:
+                result["allowedVariableBackendOperations"] = list(
+                    benchmark_case.allowed_variable_backend_operations
+                )
             if benchmark_case.fixture is not None:
                 result.update(
                     {

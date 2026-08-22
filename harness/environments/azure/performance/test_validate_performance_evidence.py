@@ -212,7 +212,7 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
         }
         validate_document(document, contract, canonical=False)
 
-    def test_v51_listing_and_establish_budgets_are_accepted(self) -> None:
+    def test_v51_listing_and_variable_budgets_are_accepted(self) -> None:
         contract = load_contract(Path("harness/performance/live-v5.1.toml"))
         cases = []
         for case_index, benchmark_case in enumerate(contract.cases):
@@ -318,10 +318,34 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
                             == "put_block_sequence"
                             else 15
                         )
+                        has_variable_requests = bool(
+                            benchmark_case.allowed_variable_backend_operations
+                        )
+                        variable_requests = (
+                            repeat - 1 if has_variable_requests else 0
+                        )
                         run["serverTelemetry"] = telemetry(
-                            per_operation * iterations,
+                            per_operation * iterations + variable_requests,
                             iterations,
                         )
+                        if has_variable_requests:
+                            allowed_variable_operations = list(
+                                benchmark_case.allowed_variable_backend_operations
+                            )
+                            run["backendRequestBudget"] = {
+                                "structuralRequestsPerOperation": (
+                                    per_operation
+                                ),
+                                "allowedVariableOperations": (
+                                    allowed_variable_operations
+                                ),
+                                "variableRequestsByOperation": {
+                                    operation: variable_requests
+                                    for operation in (
+                                        allowed_variable_operations
+                                    )
+                                },
+                            }
                     runs.append(run)
                 total_iterations = (
                     benchmark_case.measured_iterations
@@ -373,6 +397,10 @@ class ValidatePerformanceEvidenceTests(unittest.TestCase):
                     )
                 if benchmark_case.backend_requests_per_operation == "establish":
                     result["backendRequestBudget"] = "establish"
+                if benchmark_case.allowed_variable_backend_operations:
+                    result["allowedVariableBackendOperations"] = list(
+                        benchmark_case.allowed_variable_backend_operations
+                    )
                 if (
                     benchmark_case.expected_requests_per_entry_scanned
                     == "establish"

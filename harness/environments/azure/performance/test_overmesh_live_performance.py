@@ -11,6 +11,7 @@ from overmesh_live_performance import (
     latency_metrics,
     load_contract,
     percentile,
+    plan,
     read_path_pool_index,
     request_id,
     retry_fixture_read,
@@ -265,8 +266,53 @@ class PerformanceContractTests(unittest.TestCase):
         self.assertEqual(contract.client_wall_time_budget_seconds, 3600)
         self.assertEqual(contract.latency_evidence, "individual-samples")
         self.assertEqual(contract.p50_gate_policy, "signal-only")
-        self.assertEqual(contract.warmup_iterations, 0)
+        self.assertEqual(contract.warmup_iterations, 1)
         self.assertEqual(len(contract.cases), 38)
+        block_cases = [
+            case
+            for case in contract.cases
+            if case.operation == "put_block_sequence"
+        ]
+        self.assertEqual(
+            {
+                case.payload.id: case.backend_requests_per_operation
+                for case in block_cases
+            },
+            {"16mib": 177, "100mib": 438},
+        )
+        self.assertTrue(
+            all(
+                case.allowed_variable_backend_operations
+                == ("control_renew_lock",)
+                for case in block_cases
+            )
+        )
+        self.assertEqual(
+            {
+                case.backend_requests_per_operation
+                for case in contract.cases
+                if case.operation in {"put_blob", "overwrite_blob"}
+            },
+            {45},
+        )
+        self.assertEqual(
+            {
+                case.backend_requests_per_operation
+                for case in contract.cases
+                if case.operation == "get_block_list"
+            },
+            {18},
+        )
+        planned_block = next(
+            case
+            for case in plan(contract)["cases"]
+            if case["operation"] == "put_block_sequence"
+            and case["payload"] == "100mib"
+        )
+        self.assertEqual(
+            planned_block["allowedVariableBackendOperations"],
+            ["control_renew_lock"],
+        )
         self.assertEqual(contract.target_order_policy, "counterbalanced")
         self.assertEqual(
             contract.p50_comparison_statistic,
@@ -429,6 +475,32 @@ class PerformanceContractTests(unittest.TestCase):
                     1,
                 ),
                 "case_ids do not match",
+            ),
+            (
+                source.replace(
+                    '["control_renew_lock"]',
+                    '[""]',
+                    1,
+                ),
+                "must be a non-empty list",
+            ),
+            (
+                source.replace(
+                    "backend_requests_per_operation = 177",
+                    'backend_requests_per_operation = "establish"',
+                    1,
+                ),
+                "valid only for v5.1 non-listing workloads",
+            ),
+            (
+                source.replace(
+                    "requests_per_entry_validated = 4.0",
+                    "requests_per_entry_validated = 4.0\n"
+                    "allowed_variable_backend_operations = "
+                    '["control_renew_lock"]',
+                    1,
+                ),
+                "valid only for v5.1 non-listing workloads",
             ),
         )
         for document, message in mutations:

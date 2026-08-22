@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-import unittest
+from collections import Counter
 from datetime import datetime, timezone
 from subprocess import CalledProcessError
+import unittest
 from unittest.mock import patch
 
 from collect_live_performance_telemetry import (
     aggregate_placement_coverage,
     aggregate_events,
+    backend_request_budget_is_valid,
     collect_stable_backend_request_count,
     collect_stable_events,
+    collect_stable_repeated_aggregates,
     comma_separated_values,
     covered_gateway_cases,
     deduplicate_events,
@@ -21,6 +24,7 @@ from collect_live_performance_telemetry import (
     listing_budget,
     measured_request_fingerprints,
     next_stability,
+    normalize_backend_request_budget,
     parse_fields,
     placement_coverage,
     query_logs,
@@ -28,6 +32,8 @@ from collect_live_performance_telemetry import (
     query_repeated_aggregate_batches,
     query_repeated_aggregates,
     record_telemetry_failure,
+    repeated_aggregate_metrics,
+    repeated_listing_results_complete,
     request_fingerprint,
     request_id,
     telemetry_query_windows,
@@ -139,6 +145,98 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         )
         self.assertEqual(metrics["manifestSigning"]["count"], 1)
         self.assertNotIn("logs", metrics)
+
+    def test_known_ambient_requests_are_separated_from_client_traffic(
+        self,
+    ) -> None:
+        metrics = aggregate_events(
+            [
+                (
+                    'event="overmesh_backend_request" '
+                    'client_request_fingerprint="missing" '
+                    'backend_id="storage-a" '
+                    'operation="validate_control_container" '
+                    'object_class="system_container" status=200 '
+                    "response_headers_duration_us=10 "
+                    "transport_success=true"
+                ),
+                (
+                    'event="overmesh_backend_request" '
+                    'client_request_fingerprint="missing" '
+                    'backend_id="storage-a" operation="unknown_extra" '
+                    'object_class="unknown" status=200 '
+                    "response_headers_duration_us=20 "
+                    "transport_success=true"
+                ),
+            ]
+        )
+        self.assertEqual(metrics["backendRequests"]["count"], 1)
+        self.assertEqual(metrics["backendRequests"]["unattributedRequests"], 1)
+        self.assertEqual(
+            metrics["ambientBackendRequests"],
+            {
+                "count": 1,
+                "byOperationAndObjectClass": {
+                    "validate_control_container": {
+                        "system_container": 1
+                    }
+                },
+            },
+        )
+
+    def test_repeated_aggregates_separate_ambient_and_keep_operations(
+        self,
+    ) -> None:
+        metrics, counts, operations, _ = repeated_aggregate_metrics(
+            [
+                {
+                    "ScopeType": "case",
+                    "Scope": "put-block-100mib-c1",
+                    "RowType": "backend-summary",
+                    "Count": 1,
+                    "ClientRequestCount": 0,
+                    "UnattributedRequests": 1,
+                },
+                {
+                    "ScopeType": "case",
+                    "Scope": "put-block-100mib-c1",
+                    "RowType": "ambient-operation-object-class",
+                    "Key1": "validate_control_container",
+                    "Key2": "system_container",
+                    "Count": 2,
+                },
+                {
+                    "ScopeType": "run",
+                    "Scope": "put-block-100mib-c1::repeat-1",
+                    "RowType": "fingerprint",
+                    "Key1": "fingerprint-a",
+                    "Count": 439,
+                },
+                {
+                    "ScopeType": "run",
+                    "Scope": "put-block-100mib-c1::repeat-1",
+                    "RowType": "fingerprint-operation",
+                    "Key1": "fingerprint-a",
+                    "Key2": "control_renew_lock",
+                    "Count": 1,
+                },
+            ]
+        )
+        case_metrics = metrics[("case", "put-block-100mib-c1")]
+        self.assertEqual(
+            case_metrics["backendRequests"]["unattributedRequests"],
+            1,
+        )
+        self.assertEqual(
+            case_metrics["ambientBackendRequests"]["count"],
+            2,
+        )
+        scope = "put-block-100mib-c1::repeat-1"
+        self.assertEqual(counts[scope]["fingerprint-a"], 439)
+        self.assertEqual(
+            operations[scope]["fingerprint-a"],
+            Counter({"control_renew_lock": 1}),
+        )
 
     def test_listing_budget_uses_only_per_entry_validation_reads(self) -> None:
         messages = [
@@ -418,6 +516,8 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
             "summarize TimeGenerated=min(TimeGenerated) by AppName, Message",
             query,
         )
+        self.assertIn("RowType='fingerprint-operation'", query)
+        self.assertIn("RowType='ambient-operation-object-class'", query)
         self.assertIn(
             "datetime(2025-12-31T23:55:00Z)",
             query,
@@ -501,19 +601,121 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         )
         self.assertEqual((previous, stable), (complete, 2))
 
-    def test_stable_overcount_is_complete_regression_evidence(self) -> None:
-        case = {
-            "id": "put-block-100mib-c1",
-            "expectedBackendRequestsPerOperation": 442,
-            "runs": [{"repeat": 1}, {"repeat": 2}],
+    def test_variable_lock_renewal_is_normalized_but_unknown_extra_is_not(
+        self,
+    ) -> None:
+        expected = {"fingerprint-a", "fingerprint-b"}
+        operations = {
+            "fingerprint-a": Counter({"structural": 438}),
+            "fingerprint-b": Counter(
+                {"structural": 438, "control_renew_lock": 1}
+            ),
         }
-        vector = (
-            ("put-block-100mib-c1", 1, "fingerprint-a", 442),
-            ("put-block-100mib-c1", 1, "fingerprint-b", 443),
-            ("put-block-100mib-c1", 2, "fingerprint-c", 442),
-            ("put-block-100mib-c1", 2, "fingerprint-d", 443),
+        structural, variable = normalize_backend_request_budget(
+            expected,
+            operations,
+            ["control_renew_lock"],
         )
-        self.assertTrue(fingerprint_count_vector_complete(vector, [case]))
+        self.assertTrue(
+            backend_request_budget_is_valid(expected, structural, 438)
+        )
+        self.assertEqual(variable, Counter({"control_renew_lock": 1}))
+
+        operations["fingerprint-b"]["unallowlisted_extra"] = 1
+        structural, _ = normalize_backend_request_budget(
+            expected,
+            operations,
+            ["control_renew_lock"],
+        )
+        self.assertFalse(
+            backend_request_budget_is_valid(expected, structural, 438)
+        )
+
+    def test_listing_completeness_requires_exact_client_result(self) -> None:
+        case = {
+            "id": "list-flat-5000-c1",
+            "operation": "list_blobs_flat",
+            "runs": [{"repeat": 1, "entriesReturned": 5_000}],
+        }
+        scope = ("run", "list-flat-5000-c1::repeat-1")
+        partial = {scope: {"listingScan": {"entriesReturned": 3_000}}}
+        complete = {scope: {"listingScan": {"entriesReturned": 5_000}}}
+        self.assertFalse(repeated_listing_results_complete(partial, [case]))
+        self.assertTrue(repeated_listing_results_complete(complete, [case]))
+
+    @patch("collect_live_performance_telemetry.time.sleep")
+    @patch("collect_live_performance_telemetry.time.monotonic")
+    @patch(
+        "collect_live_performance_telemetry."
+        "query_repeated_aggregate_batches"
+    )
+    def test_repeated_listing_waits_for_complete_ingestion(
+        self,
+        query_batches,
+        monotonic,
+        sleep,
+    ) -> None:
+        case = {
+            "id": "list-flat-5000-c1",
+            "operation": "list_blobs_flat",
+            "warmupIterations": 0,
+            "repeatability": {"runs": 1},
+            "runs": [
+                {
+                    "repeat": 1,
+                    "iterations": 1,
+                    "entriesReturned": 5_000,
+                }
+            ],
+        }
+        fingerprint = next(
+            iter(
+                measured_request_fingerprints(
+                    "run",
+                    case,
+                )
+            )
+        )
+
+        def rows(entries: int) -> list[dict[str, object]]:
+            scope = "list-flat-5000-c1::repeat-1"
+            return [
+                {
+                    "ScopeType": "run",
+                    "Scope": scope,
+                    "RowType": "fingerprint",
+                    "Key1": fingerprint,
+                    "Count": 4,
+                },
+                {
+                    "ScopeType": "run",
+                    "Scope": scope,
+                    "RowType": "listing-summary",
+                    "Count": 1,
+                    "EntriesReturned": entries,
+                    "EntriesConsidered": entries,
+                    "EntriesValidated": entries,
+                    "ValidationConcurrency": 32,
+                },
+            ]
+
+        query_batches.side_effect = [
+            rows(3_000),
+            rows(5_000),
+            rows(5_000),
+        ]
+        monotonic.side_effect = [0, 1, 2]
+        collect_stable_repeated_aggregates(
+            "workspace",
+            "gateway",
+            [case],
+            "run",
+            60,
+            1,
+            2,
+        )
+        self.assertEqual(query_batches.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
 
     def test_telemetry_failure_is_pseudonymous_case_evidence(self) -> None:
         benchmark_case = {
@@ -545,11 +747,24 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
                 ],
             },
         )
+        record_telemetry_failure(
+            benchmark_case,
+            run,
+            "backend-request-budget-mismatch",
+            "BackendRequestBudgetMismatch",
+            {
+                "expectedBackendRequestsPerOperation": 442,
+                "observedBackendRequestCounts": [
+                    {"requestsPerOperation": 443, "operationCount": 1}
+                ],
+            },
+        )
         self.assertEqual(
             benchmark_case["validity"]["status"],
             "invalid",
         )
         failure = benchmark_case["validity"]["failures"][0]
+        self.assertEqual(len(benchmark_case["validity"]["failures"]), 1)
         self.assertEqual(failure["repeat"], 2)
         self.assertNotIn("fingerprint", failure)
 
@@ -835,6 +1050,99 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         self.assertEqual(result["cpuCores"]["resources"], 2)
         self.assertEqual(result["cpuCores"]["average"], 4.0)
         self.assertEqual(result["cpuCores"]["maximum"], 6.0)
+
+    @patch("collect_live_performance_telemetry.run_json")
+    def test_metrics_include_pseudonymous_resources_and_transitions(
+        self,
+        run_json,
+    ) -> None:
+        def metric(name: str, points: list[tuple[str, float]]) -> dict:
+            return {
+                "name": {"value": name},
+                "timeseries": [
+                    {
+                        "data": [
+                            {
+                                "timeStamp": timestamp,
+                                "average": value,
+                                "maximum": value,
+                            }
+                            for timestamp, value in points
+                        ]
+                    }
+                ],
+            }
+
+        run_json.side_effect = [
+            {
+                "value": [
+                    metric(
+                        "UsageNanoCores",
+                        [("2026-01-01T00:00:00Z", 1_000_000_000)],
+                    ),
+                    metric(
+                        "WorkingSetBytes",
+                        [("2026-01-01T00:00:00Z", 100)],
+                    ),
+                    metric(
+                        "Replicas",
+                        [
+                            ("2026-01-01T00:00:00Z", 1),
+                            ("2026-01-01T00:01:00Z", 2),
+                        ],
+                    ),
+                ]
+            },
+            {
+                "value": [
+                    metric(
+                        "UsageNanoCores",
+                        [("2026-01-01T00:00:00Z", 2_000_000_000)],
+                    ),
+                    metric(
+                        "WorkingSetBytes",
+                        [("2026-01-01T00:00:00Z", 200)],
+                    ),
+                    metric(
+                        "Replicas",
+                        [
+                            ("2026-01-01T00:00:00Z", 3),
+                            ("2026-01-01T00:01:00Z", 3),
+                        ],
+                    ),
+                ]
+            },
+        ]
+        result = query_metrics(
+            "resource-frc,resource-swe",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:02:00Z",
+        )
+        frc = request_fingerprint("resource-frc")
+        swe = request_fingerprint("resource-swe")
+        self.assertEqual(set(result["byResource"]), {frc, swe})
+        self.assertEqual(
+            result["byResource"][frc]["cpuCores"]["average"],
+            1.0,
+        )
+        self.assertEqual(
+            result["byResource"][swe]["memoryBytes"]["average"],
+            200.0,
+        )
+        self.assertEqual(
+            result["replicaTransitions"],
+            [
+                {
+                    "resource": frc,
+                    "at": "2026-01-01T00:01:00Z",
+                    "from": 1.0,
+                    "to": 2.0,
+                }
+            ],
+        )
+        serialized = str(result)
+        self.assertNotIn("resource-frc", serialized)
+        self.assertNotIn("resource-swe", serialized)
 
 
 if __name__ == "__main__":

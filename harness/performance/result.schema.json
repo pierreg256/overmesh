@@ -120,7 +120,57 @@
     },
     "campaignTelemetry": {
       "type": "object",
-      "required": ["containerApp"]
+      "required": ["containerApp"],
+      "properties": {
+        "containerApp": {
+          "type": "object",
+          "properties": {
+            "byResource": {
+              "type": "object",
+              "minProperties": 1,
+              "patternProperties": {
+                "^[0-9a-f]{16}$": {
+                  "type": "object",
+                  "required": ["cpuCores", "memoryBytes", "replicas"],
+                  "properties": {
+                    "cpuCores": {"$ref": "#/$defs/resourceMetricSummary"},
+                    "memoryBytes": {"$ref": "#/$defs/resourceMetricSummary"},
+                    "replicas": {"$ref": "#/$defs/resourceMetricSummary"}
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            "replicaTransitions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["resource", "at", "from", "to"],
+                "properties": {
+                  "resource": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{16}$"
+                  },
+                  "at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "from": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "to": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        }
+      }
     },
     "resolution": {
       "type": "object",
@@ -239,6 +289,45 @@
             },
             "additionalProperties": false
           },
+          "allowedVariableBackendOperations": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            }
+          },
+          "ambientBackendRequests": {
+            "type": "object",
+            "required": ["count", "byOperationAndObjectClass"],
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "byOperationAndObjectClass": {
+                "type": "object",
+                "required": ["validate_control_container"],
+                "properties": {
+                  "validate_control_container": {
+                    "type": "object",
+                    "required": ["system_container"],
+                    "properties": {
+                      "system_container": {
+                        "type": "integer",
+                        "minimum": 1
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
           "runs": {
             "type": "array",
             "minItems": 1,
@@ -273,6 +362,43 @@
                     "type": "number",
                     "exclusiveMinimum": 0
                   }
+                },
+                "backendRequestBudget": {
+                  "type": "object",
+                  "required": [
+                    "structuralRequestsPerOperation",
+                    "allowedVariableOperations",
+                    "variableRequestsByOperation"
+                  ],
+                  "properties": {
+                    "structuralRequestsPerOperation": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "allowedVariableOperations": {
+                      "type": "array",
+                      "minItems": 1,
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "\\S"
+                      }
+                    },
+                    "variableRequestsByOperation": {
+                      "type": "object",
+                      "minProperties": 1,
+                      "propertyNames": {
+                        "type": "string",
+                        "pattern": "\\S"
+                      },
+                      "additionalProperties": {
+                        "type": "integer",
+                        "minimum": 0
+                      }
+                    }
+                  },
+                  "additionalProperties": false
                 }
               }
             }
@@ -663,5 +789,29 @@
       }
     }
   ],
+  "$defs": {
+    "resourceMetricSummary": {
+      "type": "object",
+      "required": ["samples", "resources", "average", "maximum"],
+      "properties": {
+        "samples": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resources": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "average": {
+          "type": ["number", "null"]
+        },
+        "maximum": {
+          "type": ["number", "null"]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
   "additionalProperties": false
 }

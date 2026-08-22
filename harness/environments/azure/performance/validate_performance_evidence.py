@@ -426,6 +426,30 @@ def validate_document(
             ):
                 raise ValueError(f"case {key} has invalid repeatability")
         is_listing = benchmark_case.operation.startswith("list_")
+        expected_variable_operations = list(
+            benchmark_case.allowed_variable_backend_operations
+        )
+        if case.get("allowedVariableBackendOperations", []) != (
+            expected_variable_operations
+        ):
+            raise ValueError(
+                f"case {key} has invalid allowed variable backend operations"
+            )
+        ambient = case.get("ambientBackendRequests")
+        if ambient is not None:
+            if not isinstance(ambient, dict):
+                raise ValueError(
+                    f"case {key} has invalid ambient backend requests"
+                )
+            known_ambient = (
+                ambient.get("byOperationAndObjectClass", {})
+                .get("validate_control_container", {})
+                .get("system_container", 0)
+            )
+            if ambient.get("count") != known_ambient or known_ambient <= 0:
+                raise ValueError(
+                    f"case {key} has invalid ambient backend requests"
+                )
         if (
             contract.schema_version == 5
             and contract.campaign_purpose != "listing-confirmation"
@@ -610,16 +634,63 @@ def validate_document(
                     benchmark_case.measured_iterations,
                     run.get("serverTelemetry", {}),
                 )
-                backend_count = run["serverTelemetry"]["backendRequests"][
-                    "count"
-                ]
-                if backend_count % benchmark_case.measured_iterations != 0:
-                    raise ValueError(
-                        f"case {key} repeat request budget is not integral"
+                if expected_variable_operations:
+                    budget = run.get("backendRequestBudget", {})
+                    variable_counts = budget.get(
+                        "variableRequestsByOperation", {}
                     )
-                requests_per_run.append(
-                    backend_count // benchmark_case.measured_iterations
-                )
+                    structural_requests = budget.get(
+                        "structuralRequestsPerOperation"
+                    )
+                    backend_count = run["serverTelemetry"][
+                        "backendRequests"
+                    ]["count"]
+                    if (
+                        isinstance(structural_requests, bool)
+                        or not isinstance(structural_requests, int)
+                        or structural_requests <= 0
+                        or budget.get("allowedVariableOperations")
+                        != expected_variable_operations
+                        or not isinstance(variable_counts, dict)
+                        or set(variable_counts)
+                        != set(expected_variable_operations)
+                        or any(
+                            isinstance(count, bool)
+                            or not isinstance(count, int)
+                            or count < 0
+                            for count in variable_counts.values()
+                        )
+                        or backend_count
+                        != (
+                            structural_requests
+                            * benchmark_case.measured_iterations
+                            + sum(variable_counts.values())
+                        )
+                    ):
+                        raise ValueError(
+                            f"case {key} repeat variable request budget "
+                            "is invalid"
+                        )
+                    requests_per_run.append(
+                        structural_requests
+                    )
+                else:
+                    backend_count = run["serverTelemetry"][
+                        "backendRequests"
+                    ]["count"]
+                    if (
+                        backend_count
+                        % benchmark_case.measured_iterations
+                        != 0
+                    ):
+                        raise ValueError(
+                            f"case {key} repeat request budget is not "
+                            "integral"
+                        )
+                    requests_per_run.append(
+                        backend_count
+                        // benchmark_case.measured_iterations
+                    )
             if (
                 len(set(requests_per_run)) != 1
                 or (

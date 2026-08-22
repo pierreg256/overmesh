@@ -5,7 +5,7 @@ baseline_eligible = false
 client_wall_time_budget_seconds = 3600
 latency_evidence = "individual-samples"
 p50_gate_policy = "signal-only"
-warmup_iterations = 0
+warmup_iterations = 1
 campaign_repeats = 3
 read_path_pool_size = 24
 request_timeout_seconds = 120
@@ -84,21 +84,21 @@ operation = "put_blob"
 payloads = ["1kib", "1mib"]
 concurrency = [1, 4, 16]
 measured_iterations = 10
-backend_requests_per_operation = 49
+backend_requests_per_operation = 45
 
 [[workload]]
 operation = "put_blob"
 payloads = ["16mib"]
 concurrency = [1, 4]
 measured_iterations = 10
-backend_requests_per_operation = 49
+backend_requests_per_operation = 45
 
 [[workload]]
 operation = "overwrite_blob"
 payloads = ["1kib"]
 concurrency = [1, 4, 16]
 measured_iterations = 10
-backend_requests_per_operation = 49
+backend_requests_per_operation = 45
 
 [[workload]]
 operation = "get_blob"
@@ -169,7 +169,8 @@ payloads = ["16mib"]
 concurrency = [1]
 measured_iterations = 5
 block_size_bytes = 4194304
-backend_requests_per_operation = "establish"
+backend_requests_per_operation = 177
+allowed_variable_backend_operations = ["control_renew_lock"]
 
 [[workload]]
 operation = "put_block_sequence"
@@ -177,7 +178,8 @@ payloads = ["100mib"]
 concurrency = [1]
 measured_iterations = 5
 block_size_bytes = 8388608
-backend_requests_per_operation = "establish"
+backend_requests_per_operation = 438
+allowed_variable_backend_operations = ["control_renew_lock"]
 
 [[workload]]
 operation = "put_block_sequence"
@@ -185,7 +187,8 @@ payloads = ["16mib"]
 concurrency = [4]
 measured_iterations = 5
 block_size_bytes = 4194304
-backend_requests_per_operation = "establish"
+backend_requests_per_operation = 177
+allowed_variable_backend_operations = ["control_renew_lock"]
 
 [[workload]]
 operation = "put_block_sequence"
@@ -193,14 +196,15 @@ payloads = ["100mib"]
 concurrency = [4]
 measured_iterations = 5
 block_size_bytes = 8388608
-backend_requests_per_operation = "establish"
+backend_requests_per_operation = 438
+allowed_variable_backend_operations = ["control_renew_lock"]
 
 [[workload]]
 operation = "get_block_list"
 payloads = ["16mib"]
 concurrency = [1]
 measured_iterations = 10
-backend_requests_per_operation = "establish"
+backend_requests_per_operation = 18
 
 [[exclusion]]
 operation = "put_blob"

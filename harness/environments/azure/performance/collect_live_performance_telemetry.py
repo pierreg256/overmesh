@@ -90,6 +90,15 @@ def request_fingerprint(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
+def is_ambient_backend_request(fields: dict[str, str]) -> bool:
+    fingerprint = fields.get("client_request_fingerprint")
+    return (
+        (not fingerprint or fingerprint == "missing")
+        and fields.get("operation") == "validate_control_container"
+        and fields.get("object_class") == "system_container"
+    )
+
+
 def measured_request_fingerprints(
     run_id: str,
     benchmark_case: dict[str, Any],
@@ -346,7 +355,8 @@ let Scoped = materialize(
     (Base | project ScopeType='run', Scope=RunKey, Event, Fingerprint, BackendId, Operation, ObjectClass, Status, TransportSuccess, HeaderDurationUs, SignDurationUs, SignSuccess, SignDomain, EntriesReturned, EntriesConsidered, EntriesValidated, ValidationConcurrency),
     (Base | project ScopeType='case', Scope=CaseId, Event, Fingerprint, BackendId, Operation, ObjectClass, Status, TransportSuccess, HeaderDurationUs, SignDurationUs, SignSuccess, SignDomain, EntriesReturned, EntriesConsidered, EntriesValidated, ValidationConcurrency)
 );
-let Backend = materialize(Scoped | where Event == 'overmesh_backend_request');
+let Ambient = materialize(Scoped | where Event == 'overmesh_backend_request' and (isempty(Fingerprint) or Fingerprint == 'missing') and Operation == 'validate_control_container' and ObjectClass == 'system_container');
+let Backend = materialize(Scoped | where Event == 'overmesh_backend_request' and not((isempty(Fingerprint) or Fingerprint == 'missing') and Operation == 'validate_control_container' and ObjectClass == 'system_container'));
 let Signing = materialize(Scoped | where Event == 'overmesh_manifest_sign');
 let Listing = materialize(Scoped | where Event == 'overmesh_listing_scan');
 union
@@ -360,7 +370,9 @@ union
   (Signing | summarize Count=count(), Failures=countif(SignSuccess != 'true'), TotalDurationUs=sum(SignDurationUs), P50DurationUs=tolong(percentile(SignDurationUs, 50)), P95DurationUs=tolong(percentile(SignDurationUs, 95)), P99DurationUs=tolong(percentile(SignDurationUs, 99)), MaxDurationUs=max(SignDurationUs) by ScopeType, Scope | extend RowType='signing-summary'),
   (Signing | summarize Count=count() by ScopeType, Scope, Key1=SignDomain | extend RowType='signing-domain'),
   (Listing | summarize Count=count(), EntriesReturned=sum(EntriesReturned), EntriesConsidered=sum(EntriesConsidered), EntriesValidated=sum(EntriesValidated), ValidationConcurrency=max(ValidationConcurrency) by ScopeType, Scope | extend RowType='listing-summary'),
+  (Ambient | where ScopeType == 'case' | summarize Count=count() by ScopeType, Scope, Key1=Operation, Key2=ObjectClass | extend RowType='ambient-operation-object-class'),
   (Backend | where ScopeType == 'run' | summarize Count=count() by ScopeType, Scope, Key1=Fingerprint | extend RowType='fingerprint'),
+  (Backend | where ScopeType == 'run' | summarize Count=count() by ScopeType, Scope, Key1=Fingerprint, Key2=Operation | extend RowType='fingerprint-operation'),
   (Backend | where ScopeType == 'run' | summarize Count=count() by ScopeType, Scope, Key1=Fingerprint, Key2=BackendId | extend RowType='fingerprint-backend')
 """
     response = run_json(
@@ -425,10 +437,12 @@ def repeated_aggregate_metrics(
 ) -> tuple[
     dict[tuple[str, str], dict[str, Any]],
     dict[str, Counter[str]],
+    dict[str, dict[str, Counter[str]]],
     dict[str, dict[str, set[str]]],
 ]:
     metrics: dict[tuple[str, str], dict[str, Any]] = {}
     fingerprint_counts: dict[str, Counter[str]] = {}
+    fingerprint_operations: dict[str, dict[str, Counter[str]]] = {}
     fingerprint_backends: dict[str, dict[str, set[str]]] = {}
 
     def scope_metrics(scope_type: str, scope: str) -> dict[str, Any]:
@@ -569,13 +583,34 @@ def repeated_aggregate_metrics(
                     row.get("ValidationConcurrency") or 0
                 ),
             }
+        elif row_type == "ambient-operation-object-class":
+            ambient = current.setdefault(
+                "ambientBackendRequests",
+                {
+                    "count": 0,
+                    "byOperationAndObjectClass": {},
+                },
+            )
+            ambient["count"] += count
+            ambient["byOperationAndObjectClass"].setdefault(key1, {})[
+                key2
+            ] = count
         elif row_type == "fingerprint":
             fingerprint_counts.setdefault(scope, Counter())[key1] = count
+        elif row_type == "fingerprint-operation":
+            fingerprint_operations.setdefault(scope, {}).setdefault(
+                key1, Counter()
+            )[key2] = count
         elif row_type == "fingerprint-backend":
             fingerprint_backends.setdefault(scope, {}).setdefault(
                 key1, set()
             ).add(key2)
-    return metrics, fingerprint_counts, fingerprint_backends
+    return (
+        metrics,
+        fingerprint_counts,
+        fingerprint_operations,
+        fingerprint_backends,
+    )
 
 
 def collect_stable_backend_request_count(
@@ -675,8 +710,17 @@ def query_metrics(
     query_finished_at = query_finished.isoformat().replace("+00:00", "Z")
     resources = comma_separated_values(resource_ids)
     series: dict[str, dict[str, dict[str, float]]] = {}
+    series_by_resource: dict[
+        str, dict[str, dict[str, dict[str, float]]]
+    ] = {}
     metric_resources: dict[str, set[int]] = {}
     for resource_index, resource_id in enumerate(resources):
+        resource_fingerprint = request_fingerprint(resource_id)
+        if resource_fingerprint in series_by_resource:
+            raise RuntimeError("Container Apps resource fingerprint collision")
+        resource_series = series_by_resource.setdefault(
+            resource_fingerprint, {}
+        )
         response = run_json(
             [
                 "az",
@@ -714,6 +758,9 @@ def query_metrics(
                     combined = series.setdefault(name, {}).setdefault(
                         timestamp, {}
                     )
+                    resource_point = resource_series.setdefault(
+                        name, {}
+                    ).setdefault(timestamp, {})
                     for aggregation in ("average", "maximum"):
                         value = point.get(aggregation)
                         if value is not None:
@@ -723,9 +770,17 @@ def query_metrics(
                             combined[aggregation] = combined.get(
                                 aggregation, 0.0
                             ) + float(value)
+                            resource_point[aggregation] = resource_point.get(
+                                aggregation, 0.0
+                            ) + float(value)
 
-    def summarize(name: str, divisor: float) -> dict[str, Any]:
-        points = list(series.get(name, {}).values())
+    def summarize(
+        metric_series: dict[str, dict[str, dict[str, float]]],
+        name: str,
+        divisor: float,
+        resources_with_metric: int,
+    ) -> dict[str, Any]:
+        points = list(metric_series.get(name, {}).values())
         averages = [
             point["average"] / divisor
             for point in points
@@ -738,12 +793,52 @@ def query_metrics(
         ]
         return {
             "samples": max(len(averages), len(maximums)),
-            "resources": len(metric_resources.get(name, set())),
+            "resources": resources_with_metric,
             "average": round(sum(averages) / len(averages), 6)
             if averages
             else None,
             "maximum": round(max(maximums), 6) if maximums else None,
         }
+
+    metric_definitions = {
+        "cpuCores": ("UsageNanoCores", 1_000_000_000.0),
+        "memoryBytes": ("WorkingSetBytes", 1.0),
+        "replicas": ("Replicas", 1.0),
+    }
+    by_resource = {
+        resource: {
+            output_name: summarize(
+                resource_series,
+                metric_name,
+                divisor,
+                int(bool(resource_series.get(metric_name))),
+            )
+            for output_name, (
+                metric_name,
+                divisor,
+            ) in metric_definitions.items()
+        }
+        for resource, resource_series in sorted(series_by_resource.items())
+    }
+    replica_transitions: list[dict[str, Any]] = []
+    for resource, resource_series in sorted(series_by_resource.items()):
+        previous: float | None = None
+        for timestamp, point in sorted(
+            resource_series.get("Replicas", {}).items()
+        ):
+            current = point.get("average")
+            if current is None:
+                continue
+            if previous is not None and current != previous:
+                replica_transitions.append(
+                    {
+                        "resource": resource,
+                        "at": timestamp,
+                        "from": round(previous, 6),
+                        "to": round(current, 6),
+                    }
+                )
+            previous = current
 
     return {
         "interval": "1m",
@@ -752,13 +847,33 @@ def query_metrics(
             "startedAt": query_started_at,
             "finishedAt": query_finished_at,
         },
-        "cpuCores": summarize("UsageNanoCores", 1_000_000_000.0),
-        "memoryBytes": summarize("WorkingSetBytes", 1.0),
-        "replicas": summarize("Replicas", 1.0),
+        "cpuCores": summarize(
+            series,
+            "UsageNanoCores",
+            1_000_000_000.0,
+            len(metric_resources.get("UsageNanoCores", set())),
+        ),
+        "memoryBytes": summarize(
+            series,
+            "WorkingSetBytes",
+            1.0,
+            len(metric_resources.get("WorkingSetBytes", set())),
+        ),
+        "replicas": summarize(
+            series,
+            "Replicas",
+            1.0,
+            len(metric_resources.get("Replicas", set())),
+        ),
+        "byResource": by_resource,
+        "replicaTransitions": replica_transitions,
     }
 
 
-def aggregate_events(messages: list[str]) -> dict[str, Any]:
+def aggregate_events(
+    messages: list[str],
+    include_ambient: bool = True,
+) -> dict[str, Any]:
     backend_header_durations: list[int] = []
     signing_durations: list[int] = []
     backend_transport_failures = 0
@@ -777,10 +892,20 @@ def aggregate_events(messages: list[str]) -> dict[str, Any]:
     listing_entries_validated = 0
     listing_validation_concurrency = 0
     listing_pages = 0
+    ambient_operation_object_classes: Counter[tuple[str, str]] = Counter()
     for message in messages:
         fields = parse_fields(message)
         event = fields.get("event")
         if event == "overmesh_backend_request":
+            if is_ambient_backend_request(fields):
+                if include_ambient:
+                    ambient_operation_object_classes[
+                        (
+                            fields["operation"],
+                            fields["object_class"],
+                        )
+                    ] += 1
+                continue
             try:
                 header_duration_us = int(
                     fields["response_headers_duration_us"]
@@ -837,7 +962,7 @@ def aggregate_events(messages: list[str]) -> dict[str, Any]:
             except (KeyError, ValueError):
                 continue
             listing_pages += 1
-    return {
+    result = {
         "backendRequests": {
             "count": len(backend_header_durations),
             "clientRequestCount": len(client_request_fingerprints),
@@ -870,6 +995,14 @@ def aggregate_events(messages: list[str]) -> dict[str, Any]:
             "validationConcurrency": listing_validation_concurrency,
         },
     }
+    if ambient_operation_object_classes:
+        result["ambientBackendRequests"] = {
+            "count": sum(ambient_operation_object_classes.values()),
+            "byOperationAndObjectClass": nested_counts(
+                ambient_operation_object_classes
+            ),
+        }
+    return result
 
 
 def nested_counts(values: Counter[tuple[str, str]]) -> dict[str, dict[str, int]]:
@@ -931,6 +1064,66 @@ def request_counts_by_fingerprint(
         if fingerprint in expected:
             counts[fingerprint] += 1
     return counts
+
+
+def request_operations_by_fingerprint(
+    messages: list[str],
+    expected: set[str],
+) -> dict[str, Counter[str]]:
+    operations: dict[str, Counter[str]] = {}
+    for message in messages:
+        fields = parse_fields(message)
+        if fields.get("event") != "overmesh_backend_request":
+            continue
+        fingerprint = fields.get("client_request_fingerprint")
+        if fingerprint in expected:
+            operations.setdefault(fingerprint, Counter())[
+                fields.get("operation", "unknown")
+            ] += 1
+    return operations
+
+
+def normalize_backend_request_budget(
+    expected_fingerprints: set[str],
+    operations_by_fingerprint: dict[str, Counter[str]],
+    allowed_variable_operations: list[str],
+) -> tuple[Counter[str], Counter[str]]:
+    allowed = set(allowed_variable_operations)
+    structural_counts: Counter[str] = Counter()
+    variable_counts: Counter[str] = Counter(
+        {operation: 0 for operation in allowed_variable_operations}
+    )
+    for fingerprint in expected_fingerprints:
+        operation_counts = operations_by_fingerprint.get(
+            fingerprint, Counter()
+        )
+        variable_count = sum(
+            count
+            for operation, count in operation_counts.items()
+            if operation in allowed
+        )
+        structural_counts[fingerprint] = (
+            sum(operation_counts.values()) - variable_count
+        )
+        for operation in allowed_variable_operations:
+            variable_counts[operation] += operation_counts[operation]
+    return structural_counts, variable_counts
+
+
+def backend_request_budget_is_valid(
+    expected_fingerprints: set[str],
+    structural_counts: Counter[str],
+    expected_budget: int | None,
+) -> bool:
+    distinct_counts = set(structural_counts.values())
+    return (
+        set(structural_counts) == expected_fingerprints
+        and len(distinct_counts) == 1
+        and (
+            expected_budget is None
+            or next(iter(distinct_counts), None) == expected_budget
+        )
+    )
 
 
 def listing_budget(
@@ -1093,19 +1286,19 @@ def record_telemetry_failure(
             f"case {benchmark_case['id']} has invalid server telemetry"
         )
     validity["status"] = "invalid"
-    validity["failures"].append(
-        {
-            "repeat": run["repeat"],
-            "targetOrder": run["targetOrder"],
-            "targetOrderPosition": run["targetOrderPosition"],
-            "startedAt": run["startedAt"],
-            "finishedAt": run["finishedAt"],
-            "phase": "measurement",
-            "reason": reason,
-            "exceptionClass": exception_class,
-            **details,
-        }
-    )
+    failure = {
+        "repeat": run["repeat"],
+        "targetOrder": run["targetOrder"],
+        "targetOrderPosition": run["targetOrderPosition"],
+        "startedAt": run["startedAt"],
+        "finishedAt": run["finishedAt"],
+        "phase": "measurement",
+        "reason": reason,
+        "exceptionClass": exception_class,
+        **details,
+    }
+    if failure not in validity["failures"]:
+        validity["failures"].append(failure)
 
 
 def fingerprint_count_diagnostics(
@@ -1348,6 +1541,7 @@ def collect_stable_repeated_aggregates(
 ) -> tuple[
     dict[tuple[str, str], dict[str, Any]],
     dict[str, Counter[str]],
+    dict[str, dict[str, Counter[str]]],
     dict[str, dict[str, set[str]]],
 ]:
     deadline = time.monotonic() + wait_seconds
@@ -1356,6 +1550,7 @@ def collect_stable_repeated_aggregates(
     latest: tuple[
         dict[tuple[str, str], dict[str, Any]],
         dict[str, Counter[str]],
+        dict[str, dict[str, Counter[str]]],
         dict[str, dict[str, set[str]]],
     ] | None = None
     while True:
@@ -1374,7 +1569,7 @@ def collect_stable_repeated_aggregates(
         complete = fingerprint_count_vector_complete(
             current_vector,
             gateway_cases,
-        )
+        ) and repeated_listing_results_complete(latest[0], gateway_cases)
         previous_vector, stable_polls = next_stability(
             previous_vector,
             stable_polls,
@@ -1393,8 +1588,9 @@ def collect_stable_repeated_aggregates(
                 + "; ".join(diagnostics)
                 if diagnostics
                 else (
-                    "complete aggregate fingerprint vector did not "
-                    f"stabilize for {stable_polls_required} polls"
+                    "aggregate fingerprint or listing-result evidence did "
+                    "not become complete and stabilize for "
+                    f"{stable_polls_required} polls"
                 )
             )
             raise RuntimeError(
@@ -1402,6 +1598,25 @@ def collect_stable_repeated_aggregates(
                 f"within {wait_seconds} seconds; {detail}"
             )
         time.sleep(poll_seconds)
+
+
+def repeated_listing_results_complete(
+    aggregate_metrics: dict[tuple[str, str], dict[str, Any]],
+    gateway_cases: list[dict[str, Any]],
+) -> bool:
+    for benchmark_case in gateway_cases:
+        if not benchmark_case["operation"].startswith("list_"):
+            continue
+        for run in benchmark_case.get("runs", []):
+            scope = f"{benchmark_case['id']}::repeat-{run['repeat']}"
+            metrics = aggregate_metrics.get(("run", scope))
+            if (
+                metrics is None
+                or metrics["listingScan"]["entriesReturned"]
+                != run["entriesReturned"]
+            ):
+                return False
+    return True
 
 
 def aggregate_placement_coverage(
@@ -1514,6 +1729,9 @@ def main() -> int:
         tuple[str, str], dict[str, Any]
     ] = {}
     aggregate_fingerprint_counts: dict[str, Counter[str]] = {}
+    aggregate_fingerprint_operations: dict[
+        str, dict[str, Counter[str]]
+    ] = {}
     aggregate_fingerprint_backends: dict[
         str, dict[str, set[str]]
     ] = {}
@@ -1522,6 +1740,7 @@ def main() -> int:
         (
             aggregate_metrics_by_scope,
             aggregate_fingerprint_counts,
+            aggregate_fingerprint_operations,
             aggregate_fingerprint_backends,
         ) = collect_stable_repeated_aggregates(
             workspace,
@@ -1581,23 +1800,17 @@ def main() -> int:
             raise RuntimeError(
                 f"case {benchmark_case['id']} has no backend request telemetry"
             )
+        ambient_requests = event_metrics.pop(
+            "ambientBackendRequests", None
+        )
+        if ambient_requests is not None:
+            benchmark_case["ambientBackendRequests"] = ambient_requests
         if event_metrics["backendRequests"]["unattributedRequests"] != 0:
             if runs is None:
                 raise RuntimeError(
                     f"case {benchmark_case['id']} has unattributed "
                     "backend requests"
                 )
-            record_telemetry_failure(
-                benchmark_case,
-                runs[-1],
-                "server-telemetry-result-mismatch",
-                "UnattributedBackendRequests",
-                {
-                    "unattributedBackendRequests": event_metrics[
-                        "backendRequests"
-                    ]["unattributedRequests"]
-                },
-            )
         benchmark_case["serverTelemetry"] = event_metrics
         if runs is not None:
             requests_per_operation_per_run: list[int] = []
@@ -1614,7 +1827,10 @@ def main() -> int:
                 run_metrics = (
                     aggregate_metrics_by_scope[("run", scope)]
                     if repeated
-                    else aggregate_events(run_messages)
+                    else aggregate_events(
+                        run_messages,
+                        include_ambient=False,
+                    )
                 )
                 if (
                     run_metrics["backendRequests"]["unattributedRequests"]
@@ -1682,39 +1898,46 @@ def main() -> int:
                         benchmark_case,
                         run,
                     )
-                    counts = (
-                        Counter(
-                            {
-                                fingerprint: (
-                                    aggregate_fingerprint_counts.get(
-                                        scope, Counter()
-                                    )[fingerprint]
-                                )
-                                for fingerprint in expected
-                                if aggregate_fingerprint_counts.get(
-                                    scope, Counter()
-                                )[fingerprint]
-                                > 0
-                            }
-                        )
+                    operations_by_fingerprint = (
+                        aggregate_fingerprint_operations.get(scope, {})
                         if repeated
-                        else request_counts_by_fingerprint(
+                        else request_operations_by_fingerprint(
                             run_messages,
                             expected,
                         )
                     )
+                    allowed_variable_operations = benchmark_case.get(
+                        "allowedVariableBackendOperations", []
+                    )
+                    if allowed_variable_operations:
+                        counts, variable_counts = (
+                            normalize_backend_request_budget(
+                                expected,
+                                operations_by_fingerprint,
+                                allowed_variable_operations,
+                            )
+                        )
+                    else:
+                        counts = Counter(
+                            {
+                                fingerprint: sum(
+                                    operations_by_fingerprint.get(
+                                        fingerprint, Counter()
+                                    ).values()
+                                )
+                                for fingerprint in expected
+                                if operations_by_fingerprint.get(fingerprint)
+                            }
+                        )
+                        variable_counts = Counter()
                     distinct_counts = set(counts.values())
                     expected_budget = benchmark_case.get(
                         "expectedBackendRequestsPerOperation"
                     )
-                    if (
-                        set(counts) != expected
-                        or len(distinct_counts) != 1
-                        or (
-                            expected_budget is not None
-                            and next(iter(distinct_counts), None)
-                            != expected_budget
-                        )
+                    if not backend_request_budget_is_valid(
+                        expected,
+                        counts,
+                        expected_budget,
                     ):
                         distribution = Counter(counts.values())
                         record_telemetry_failure(
@@ -1738,9 +1961,25 @@ def main() -> int:
                             },
                         )
                     elif benchmark_case["validity"]["status"] == "valid":
+                        structural_requests = next(iter(distinct_counts))
                         requests_per_operation_per_run.append(
-                            next(iter(distinct_counts))
+                            structural_requests
                         )
+                        if allowed_variable_operations:
+                            run["backendRequestBudget"] = {
+                                "structuralRequestsPerOperation": (
+                                    structural_requests
+                                ),
+                                "allowedVariableOperations": (
+                                    allowed_variable_operations
+                                ),
+                                "variableRequestsByOperation": {
+                                    operation: variable_counts[operation]
+                                    for operation in (
+                                        allowed_variable_operations
+                                    )
+                                },
+                            }
                 run["serverTelemetry"] = run_metrics
             case_is_valid = (
                 benchmark_case.get("validity", {}).get("status", "valid")
