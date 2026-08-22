@@ -97,6 +97,7 @@ class CompareLivePerformanceTests(unittest.TestCase):
                 comparison["nonRegression"]["blockingRegressions"],
                 ["get-1k-c1"],
             )
+            self.assertEqual(result["comparisons"], [])
 
     def test_non_baseline_contract_never_establishes_a_baseline(self) -> None:
         current = campaign("diagnostic", 2.0, 0.5)

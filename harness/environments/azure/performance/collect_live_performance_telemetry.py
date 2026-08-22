@@ -1065,25 +1065,47 @@ def fingerprint_count_vector_complete(
             counts = grouped.get((benchmark_case["id"], repeat), [])
             if not counts or any(count == 0 for count in counts):
                 return False
-            if runs is None:
-                continue
-            distinct_counts = set(counts)
-            if len(distinct_counts) != 1:
-                return False
-            per_repeat_counts.append(next(iter(distinct_counts)))
+            if runs is not None:
+                per_repeat_counts.extend(counts)
         if runs is None:
             continue
-        if len(set(per_repeat_counts)) != 1:
-            return False
         expected_budget = benchmark_case.get(
             "expectedBackendRequestsPerOperation"
         )
         if (
             expected_budget is not None
-            and per_repeat_counts[0] != expected_budget
+            and any(count < expected_budget for count in per_repeat_counts)
         ):
             return False
     return True
+
+
+def record_telemetry_failure(
+    benchmark_case: dict[str, Any],
+    run: dict[str, Any],
+    reason: str,
+    exception_class: str,
+    details: dict[str, Any],
+) -> None:
+    validity = benchmark_case.get("validity")
+    if not isinstance(validity, dict):
+        raise RuntimeError(
+            f"case {benchmark_case['id']} has invalid server telemetry"
+        )
+    validity["status"] = "invalid"
+    validity["failures"].append(
+        {
+            "repeat": run["repeat"],
+            "targetOrder": run["targetOrder"],
+            "targetOrderPosition": run["targetOrderPosition"],
+            "startedAt": run["startedAt"],
+            "finishedAt": run["finishedAt"],
+            "phase": "measurement",
+            "reason": reason,
+            "exceptionClass": exception_class,
+            **details,
+        }
+    )
 
 
 def fingerprint_count_diagnostics(
@@ -1589,10 +1611,19 @@ def main() -> int:
                         benchmark_case["operation"],
                     )
                     if budget["entriesReturned"] != run["entriesReturned"]:
-                        raise RuntimeError(
-                            f"case {benchmark_case['id']} repeat "
-                            f"{run['repeat']} client and server entry counts "
-                            "differ"
+                        record_telemetry_failure(
+                            benchmark_case,
+                            run,
+                            "server-telemetry-result-mismatch",
+                            "ListingResultCountMismatch",
+                            {
+                                "expectedEntriesReturned": run[
+                                    "entriesReturned"
+                                ],
+                                "observedEntriesReturned": budget[
+                                    "entriesReturned"
+                                ],
+                            },
                         )
                     expected_per_entry = benchmark_case.get(
                         "expectedRequestsPerEntryValidated"
@@ -1602,14 +1633,23 @@ def main() -> int:
                         and budget["requestsPerEntryValidated"]
                         != expected_per_entry
                     ):
-                        raise RuntimeError(
-                            f"case {benchmark_case['id']} repeat "
-                            f"{run['repeat']} requests per entry validated is "
-                            f"{budget['requestsPerEntryValidated']}, expected "
-                            f"{expected_per_entry}"
+                        record_telemetry_failure(
+                            benchmark_case,
+                            run,
+                            "backend-request-budget-mismatch",
+                            "BackendRequestBudgetMismatch",
+                            {
+                                "expectedRequestsPerEntryValidated": (
+                                    expected_per_entry
+                                ),
+                                "observedRequestsPerEntryValidated": budget[
+                                    "requestsPerEntryValidated"
+                                ],
+                            },
                         )
-                    listing_budgets.append(budget)
-                    run["listingBudget"] = budget
+                    if benchmark_case["validity"]["status"] == "valid":
+                        listing_budgets.append(budget)
+                        run["listingBudget"] = budget
                 else:
                     expected = measured_request_fingerprints_for_run(
                         campaign["runId"],
@@ -1638,17 +1678,49 @@ def main() -> int:
                         )
                     )
                     distinct_counts = set(counts.values())
-                    if set(counts) != expected or len(distinct_counts) != 1:
-                        raise RuntimeError(
-                            f"case {benchmark_case['id']} repeat "
-                            f"{run['repeat']} request budget varies by path "
-                            "or client operation"
-                        )
-                    requests_per_operation_per_run.append(
-                        next(iter(distinct_counts))
+                    expected_budget = benchmark_case.get(
+                        "expectedBackendRequestsPerOperation"
                     )
+                    if (
+                        set(counts) != expected
+                        or len(distinct_counts) != 1
+                        or (
+                            expected_budget is not None
+                            and next(iter(distinct_counts), None)
+                            != expected_budget
+                        )
+                    ):
+                        distribution = Counter(counts.values())
+                        record_telemetry_failure(
+                            benchmark_case,
+                            run,
+                            "backend-request-budget-mismatch",
+                            "BackendRequestBudgetMismatch",
+                            {
+                                "expectedBackendRequestsPerOperation": (
+                                    expected_budget
+                                    if expected_budget is not None
+                                    else "uniform"
+                                ),
+                                "observedBackendRequestCounts": [
+                                    {
+                                        "requestsPerOperation": count,
+                                        "operationCount": distribution[count],
+                                    }
+                                    for count in sorted(distribution)
+                                ],
+                            },
+                        )
+                    elif benchmark_case["validity"]["status"] == "valid":
+                        requests_per_operation_per_run.append(
+                            next(iter(distinct_counts))
+                        )
                 run["serverTelemetry"] = run_metrics
-            if is_listing:
+            case_is_valid = (
+                benchmark_case.get("validity", {}).get("status", "valid")
+                == "valid"
+            )
+            if is_listing and case_is_valid:
                 per_entry = [
                     budget["requestsPerEntryValidated"]
                     for budget in listing_budgets
@@ -1665,7 +1737,7 @@ def main() -> int:
                 benchmark_case["repeatability"][
                     "requestsPerEntryValidatedPerRun"
                 ] = per_entry
-            else:
+            elif not is_listing and case_is_valid:
                 if len(set(requests_per_operation_per_run)) != 1:
                     raise RuntimeError(
                         f"case {benchmark_case['id']} request budget varies "
@@ -1686,7 +1758,7 @@ def main() -> int:
                 benchmark_case["repeatability"][
                     "requestsPerOperationPerRun"
                 ] = requests_per_operation_per_run
-            if "pathPoolSize" in benchmark_case:
+            if case_is_valid and "pathPoolSize" in benchmark_case:
                 benchmark_case["placementCoverage"] = (
                     aggregate_placement_coverage(
                         campaign["runId"],

@@ -222,7 +222,11 @@
                       "enum": ["setup", "warmup", "measurement"]
                     },
                     "reason": {
-                      "const": "client-operation-failed"
+                      "enum": [
+                        "client-operation-failed",
+                        "backend-request-budget-mismatch",
+                        "server-telemetry-result-mismatch"
+                      ]
                     },
                     "exceptionClass": {
                       "type": "string",

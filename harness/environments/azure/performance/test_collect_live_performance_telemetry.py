@@ -26,6 +26,7 @@ from collect_live_performance_telemetry import (
     query_metrics,
     query_repeated_aggregate_batches,
     query_repeated_aggregates,
+    record_telemetry_failure,
     request_fingerprint,
     request_id,
     telemetry_query_windows,
@@ -498,6 +499,58 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
             True,
         )
         self.assertEqual((previous, stable), (complete, 2))
+
+    def test_stable_overcount_is_complete_regression_evidence(self) -> None:
+        case = {
+            "id": "put-block-100mib-c1",
+            "expectedBackendRequestsPerOperation": 442,
+            "runs": [{"repeat": 1}, {"repeat": 2}],
+        }
+        vector = (
+            ("put-block-100mib-c1", 1, "fingerprint-a", 442),
+            ("put-block-100mib-c1", 1, "fingerprint-b", 443),
+            ("put-block-100mib-c1", 2, "fingerprint-c", 442),
+            ("put-block-100mib-c1", 2, "fingerprint-d", 443),
+        )
+        self.assertTrue(fingerprint_count_vector_complete(vector, [case]))
+
+    def test_telemetry_failure_is_pseudonymous_case_evidence(self) -> None:
+        benchmark_case = {
+            "id": "put-block-100mib-c1",
+            "validity": {
+                "status": "valid",
+                "mandatory": True,
+                "expectedRuns": 3,
+                "completedRuns": 3,
+                "failures": [],
+            },
+        }
+        run = {
+            "repeat": 2,
+            "targetOrder": ["gateway", "direct"],
+            "targetOrderPosition": 1,
+            "startedAt": "2026-01-01T00:00:00Z",
+            "finishedAt": "2026-01-01T00:01:00Z",
+        }
+        record_telemetry_failure(
+            benchmark_case,
+            run,
+            "backend-request-budget-mismatch",
+            "BackendRequestBudgetMismatch",
+            {
+                "expectedBackendRequestsPerOperation": 442,
+                "observedBackendRequestCounts": [
+                    {"requestsPerOperation": 443, "operationCount": 1}
+                ],
+            },
+        )
+        self.assertEqual(
+            benchmark_case["validity"]["status"],
+            "invalid",
+        )
+        failure = benchmark_case["validity"]["failures"][0]
+        self.assertEqual(failure["repeat"], 2)
+        self.assertNotIn("fingerprint", failure)
 
     @patch("collect_live_performance_telemetry.time.sleep")
     @patch("collect_live_performance_telemetry.time.monotonic")

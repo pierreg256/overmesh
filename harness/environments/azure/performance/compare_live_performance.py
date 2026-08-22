@@ -494,6 +494,11 @@ def main() -> int:
         }
     )
     if invalid_cases:
+        current["comparisons"] = [
+            comparison
+            for comparison in current.get("comparisons", [])
+            if comparison.get("case") not in invalid_cases
+        ]
         current["historicalComparison"] = {
             "status": "invalid-cases",
             "apiVersion": "performance.overmesh.io/comparison/v1",
