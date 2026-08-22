@@ -155,3 +155,32 @@ record. Their hashes, the archive hash, and the signed canonical hash are:
 65b06e3372be2a30d059878cf499e91a6fcbbd5e5e27b14dcf817eebc32e178a  performance-v011-v5-failed-campaign-raw-evidence.tar.gz
 1b03c28e3d20015ae6558b141e6c6a66025ae4fe33ccc069af7430f92750a012  performance-v011-v5-failed-campaign.json
 ```
+
+The 0.11.0 `live-v5.1` fast diagnostic and its separate 5,000-entry listing
+confirmation are also retained as signed failed evidence:
+
+```text
+performance-v011-v5.1-fast-evidence.json
+performance-v011-v5.1-fast-evidence.sig.json
+performance-v011-v5.1-listing-confirmation-evidence.json
+performance-v011-v5.1-listing-confirmation-evidence.sig.json
+performance-v011-v5.1-analysis.md
+```
+
+Both client campaigns completed without client-operation failures. The fast
+diagnostic is invalid because the original read-path policy covered only 20 of
+24 required paths, ambient system-container requests were not isolated, and
+duration-dependent lock renewals violated a uniform 100 MiB request budget.
+The listing confirmation is invalid because Azure Monitor stabilization
+returned partial and cross-window listing counts. The companion analysis is
+interpretive and unsigned; the JSON evidence and its detached signatures are
+authoritative.
+
+The canonical evidence and signed archive hashes are:
+
+```text
+79e54525ffa263fe95aae9a7af5693a35756716a4fd0e297071faf36375878d9  performance-v011-v5.1-fast-evidence.json
+161d99dff2d579618f1f2e53a2a746d6df215b283fb7bc2f1f2d32bd896cd6a7  performance-v5.1-fast-signed-bundle.tar.gz
+9866c6b9ba60a0eaf9664c92c1744dab130659137cd4115ff6b1889b751e4f43  performance-v011-v5.1-listing-confirmation-evidence.json
+5eb65d9c16750ae3abc8030e4185abc642da21049526aa3e4d03c7d9927361a2  performance-v5.1-listing-confirmation-signed-bundle.tar.gz
+```
