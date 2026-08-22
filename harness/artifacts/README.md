@@ -126,3 +126,32 @@ was 1.259. These repeat spreads describe variation within the one-hour campaign
 and do not estimate drift between campaigns run on different days. Schema v5
 publishes this gate coverage and the direct-target maximum directly in its
 machine-readable evidence.
+
+The subsequent 0.11.0 `live-v5` workload completed all 9,600 measured client
+operations without a client error, but its server evidence failed closed.
+Three `put_block_sequence-16mib-c4` fingerprints were incomplete, and the
+100 MiB block-sequence cases did not produce a stable integer backend request
+budget. It is therefore retained as a signed failure diagnostic, explicitly
+marked `diagnostic-not-baseline`, rather than as a performance baseline:
+
+```text
+performance-v011-v5-failed-campaign.json
+performance-v011-v5-failed-campaign.sig.json
+```
+
+The corresponding unredacted diagnostic archive is retained on all three
+private validation Storage Accounts at:
+
+```text
+overmesh-system/release-evidence/0.11.0/raw/performance-v011-v5-failed-campaign-raw-evidence.tar.gz
+```
+
+It contains the original `client-performance.json` and the raw failed-campaign
+record. Their hashes, the archive hash, and the signed canonical hash are:
+
+```text
+4e771ee276e2d97c524522506ce1b89546314ad8b6b95e299f51f344cbcb7507  client-performance.json
+54203173d215bd07c07255ed01be49fb96a5812134536f6a9a5238bef061303a  performance-v011-v5-failed-campaign.raw.json
+65b06e3372be2a30d059878cf499e91a6fcbbd5e5e27b14dcf817eebc32e178a  performance-v011-v5-failed-campaign-raw-evidence.tar.gz
+1b03c28e3d20015ae6558b141e6c6a66025ae4fe33ccc069af7430f92750a012  performance-v011-v5-failed-campaign.json
+```
