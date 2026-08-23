@@ -439,6 +439,237 @@ class PerformanceContractTests(unittest.TestCase):
             {4.0},
         )
 
+    def test_v6_certified_current_matrix_has_paired_budgets_and_pages(
+        self,
+    ) -> None:
+        contract = load_contract(
+            Path(
+                "harness/performance/"
+                "live-v6-certified-current-matrix.toml"
+            )
+        )
+
+        self.assertEqual(contract.revision, "v6")
+        self.assertEqual(contract.campaign_purpose, "certified-current-matrix")
+        self.assertTrue(contract.baseline_eligible)
+        self.assertEqual(contract.p50_gate_policy, "stable-only")
+        self.assertEqual(contract.client_wall_time_budget_seconds, 7200)
+        self.assertIsNotNone(contract.certification)
+        self.assertEqual(
+            contract.certification.benchmark_host_sku,
+            "Standard_D2as_v5",
+        )
+        self.assertEqual(
+            contract.certification.pre_optimization_commit,
+            "5202eccff4b1e277342cf784dde285e891eb865b",
+        )
+        self.assertEqual(len(contract.cases), 43)
+        put = next(
+            case
+            for case in contract.cases
+            if case.id == "put_blob-1kib-c1"
+        )
+        self.assertEqual(put.backend_requests_per_operation, 33)
+        self.assertEqual(put.baseline_backend_requests_per_operation, 49)
+        self.assertEqual(
+            put.backend_request_budget_for("pre-optimization"),
+            49,
+        )
+        self.assertEqual(put.backend_request_budget_for("final"), 33)
+        overwrite = next(
+            case
+            for case in contract.cases
+            if case.id == "overwrite_blob-1kib-c1"
+        )
+        self.assertEqual(overwrite.backend_requests_per_operation, 37)
+        self.assertEqual(
+            overwrite.baseline_backend_requests_per_operation,
+            49,
+        )
+        delete = next(
+            case
+            for case in contract.cases
+            if case.id == "delete_blob-1kib-c1"
+        )
+        self.assertEqual(delete.backend_requests_per_operation, 31)
+        self.assertEqual(delete.baseline_backend_requests_per_operation, 43)
+        blocks = {
+            case.payload.id: (
+                case.baseline_backend_requests_per_operation,
+                case.backend_requests_per_operation,
+            )
+            for case in contract.cases
+            if case.operation == "put_block_sequence"
+        }
+        self.assertEqual(
+            blocks,
+            {
+                "16mib": (181, 153),
+                "100mib": (442, 396),
+            },
+        )
+        hierarchical = [
+            case
+            for case in contract.cases
+            if case.operation == "list_blobs_hierarchical"
+        ]
+        self.assertEqual(
+            {
+                (case.id, case.max_results, case.measured_iterations)
+                for case in hierarchical
+            },
+            {
+                (
+                    "list_blobs_hierarchical-list-hierarchical-5000-"
+                    "delimiter-page-c1",
+                    10,
+                    1,
+                ),
+                (
+                    "list_blobs_hierarchical-list-hierarchical-5000-"
+                    "comparable-page-c1",
+                    1000,
+                    1,
+                ),
+            },
+        )
+        planned = {
+            case["id"]: case for case in plan(contract)["cases"]
+        }
+        self.assertEqual(
+            plan(contract)["certification"],
+            {
+                "benchmarkHostSku": "Standard_D2as_v5",
+                "preOptimizationCommit": (
+                    "5202eccff4b1e277342cf784dde285e891eb865b"
+                ),
+                "preOptimizationProjectVersion": "0.11.0",
+                "finalCommit": (
+                    "123001619e5c75a8ffd241d4b1865b97a6a7cdef"
+                ),
+                "finalProjectVersion": "0.11.1",
+            },
+        )
+        self.assertEqual(
+            planned["put_blob-1kib-c1"][
+                "baselineBackendRequestsPerOperation"
+            ],
+            49,
+        )
+        self.assertEqual(
+            planned[
+                "list_blobs_hierarchical-list-hierarchical-5000-"
+                "delimiter-page-c1"
+            ]["maxResults"],
+            10,
+        )
+
+    def test_v6_rejects_weakened_or_incomplete_budget_contract(self) -> None:
+        source = Path(
+            "harness/performance/live-v6-certified-current-matrix.toml"
+        ).read_text(encoding="utf-8")
+        mutations = (
+            (
+                source.replace(
+                    "baseline_eligible = true",
+                    "baseline_eligible = false",
+                    1,
+                ),
+                "must be baseline eligible",
+            ),
+            (
+                source.replace(
+                    "baseline_backend_requests_per_operation = 49",
+                    "baseline_backend_requests_per_operation = 33",
+                    1,
+                ),
+                "must exceed the exact final budget",
+            ),
+            (
+                source.replace(
+                    "backend_requests_per_operation = 33",
+                    "backend_requests_per_operation = 34",
+                    1,
+                ),
+                "final request budget is invalid",
+            ),
+            (
+                source.replace(
+                    "client_wall_time_budget_seconds = 7200",
+                    "client_wall_time_budget_seconds = 3600",
+                    1,
+                ),
+                "requires a 7200-second wall-time budget",
+            ),
+            (
+                source.replace(
+                    "size_bytes = 1024",
+                    "size_bytes = 1025",
+                    1,
+                ),
+                "payload identity is invalid",
+            ),
+            (
+                source.replace(
+                    'naming_scheme = "perf/list/{fixture_id}/{index:05d}"',
+                    'naming_scheme = "fixture/{index:05d}"',
+                    1,
+                ),
+                "fixture identity is invalid",
+            ),
+            (
+                source.replace(
+                    "range_bytes = 1048576",
+                    "range_bytes = 1048575",
+                    1,
+                ),
+                "range identity is invalid",
+            ),
+            (
+                source.replace(
+                    "max_results = 1000",
+                    "max_results = 999",
+                    1,
+                ),
+                "listing max_results identity is invalid",
+            ),
+            (
+                source.replace(
+                    "benchmark_host_sku = \"Standard_D2as_v5\"",
+                    "benchmark_host_sku = \"Standard_D4as_v5\"",
+                    1,
+                ),
+                "certification identity is invalid",
+            ),
+            (
+                source.replace(
+                    "final_commit = "
+                    '"123001619e5c75a8ffd241d4b1865b97a6a7cdef"',
+                    "final_commit = "
+                    '"223001619e5c75a8ffd241d4b1865b97a6a7cdef"',
+                    1,
+                ),
+                "certification identity is invalid",
+            ),
+            (
+                source.replace(
+                    'case_id_suffix = "delimiter-page"',
+                    'case_id_suffix = "invalid_page"',
+                    1,
+                ),
+                "must be lowercase kebab-case",
+            ),
+        )
+        for document, message in mutations:
+            with (
+                self.subTest(message=message),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                path = Path(directory) / "invalid-v6.toml"
+                path.write_text(document, encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, message):
+                    load_contract(path)
+
     def test_v51_rejects_weakened_diagnostic_safeguards(self) -> None:
         source = Path("harness/performance/live-v5.1.toml").read_text(
             encoding="utf-8"

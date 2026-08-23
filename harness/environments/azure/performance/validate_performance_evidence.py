@@ -29,6 +29,15 @@ FORBIDDEN = [
     ),
     re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]"),
 ]
+CERTIFIED_PAIRING_IDENTITY_KEYS = {
+    "runtimeRole",
+    "projectVersion",
+    "benchmarkHost",
+    "deployment",
+    "commit",
+    "runId",
+    "environment",
+}
 
 
 def validate_v2_request_coverage(
@@ -123,6 +132,159 @@ def validate_block_staging_cost(
             )
 
 
+def validate_certified_current_matrix_campaign(
+    contract: Contract,
+    campaign: dict[str, Any],
+) -> str | None:
+    if contract.certification is None:
+        return None
+    runtime_role = campaign.get("runtimeRole")
+    benchmark_host = campaign.get("benchmarkHost")
+    if (
+        not isinstance(runtime_role, str)
+        or not isinstance(benchmark_host, dict)
+        or not isinstance(benchmark_host.get("sku"), str)
+        or not isinstance(benchmark_host.get("fingerprint"), str)
+        or not re.fullmatch(
+            r"host-[0-9a-f]{16}",
+            benchmark_host["fingerprint"],
+        )
+    ):
+        raise ValueError(
+            "certified current matrix campaign host evidence is incomplete"
+        )
+    for field in ("projectVersion", "deployment", "commit", "runId", "environment"):
+        if (
+            not isinstance(campaign.get(field), str)
+            or not campaign[field]
+        ):
+            raise ValueError(
+                "certified current matrix campaign identity is incomplete"
+            )
+    try:
+        contract.certification.validate_runtime(
+            runtime_role,
+            campaign.get("commit", ""),
+            campaign.get("projectVersion", ""),
+            benchmark_host["sku"],
+        )
+    except ValueError as error:
+        raise ValueError(str(error)) from error
+    return runtime_role
+
+
+def certified_pairing_identity(
+    identity: object,
+    label: str,
+    allow_evidence_sha256: bool = False,
+) -> dict[str, Any]:
+    if not isinstance(identity, dict):
+        raise ValueError(f"{label} pairing identity is missing")
+    allowed_keys = set(CERTIFIED_PAIRING_IDENTITY_KEYS)
+    if allow_evidence_sha256:
+        allowed_keys.add("evidenceSha256")
+    if set(identity) != CERTIFIED_PAIRING_IDENTITY_KEYS and not (
+        allow_evidence_sha256
+        and set(identity) == allowed_keys
+    ):
+        raise ValueError(f"{label} pairing identity has unexpected fields")
+    benchmark_host = identity.get("benchmarkHost")
+    if (
+        not isinstance(benchmark_host, dict)
+        or set(benchmark_host) != {"sku", "fingerprint"}
+        or not isinstance(benchmark_host.get("sku"), str)
+        or not re.fullmatch(
+            r"host-[0-9a-f]{16}",
+            str(benchmark_host.get("fingerprint")),
+        )
+        or any(
+            not isinstance(identity.get(field), str) or not identity[field]
+            for field in CERTIFIED_PAIRING_IDENTITY_KEYS
+            - {"benchmarkHost"}
+        )
+        or (
+            allow_evidence_sha256
+            and "evidenceSha256" in identity
+            and not re.fullmatch(
+                r"[0-9a-f]{64}",
+                str(identity["evidenceSha256"]),
+            )
+        )
+    ):
+        raise ValueError(f"{label} pairing identity is invalid")
+    return {
+        key: identity[key] for key in CERTIFIED_PAIRING_IDENTITY_KEYS
+    }
+
+
+def validate_certified_pairing_proof(
+    contract: Contract,
+    campaign: dict[str, Any],
+    historical: dict[str, Any],
+    runtime_role: str | None,
+) -> None:
+    if contract.certification is None:
+        return
+    current_identity = certified_pairing_identity(
+        {
+            "runtimeRole": campaign.get("runtimeRole"),
+            "projectVersion": campaign.get("projectVersion"),
+            "benchmarkHost": campaign.get("benchmarkHost"),
+            "deployment": campaign.get("deployment"),
+            "commit": campaign.get("commit"),
+            "runId": campaign.get("runId"),
+            "environment": campaign.get("environment"),
+        },
+        "current campaign",
+    )
+    current_proof = certified_pairing_identity(
+        historical.get("current"),
+        "current",
+    )
+    baseline_proof = certified_pairing_identity(
+        historical.get("baseline"),
+        "baseline",
+        allow_evidence_sha256=True,
+    )
+    status = historical.get("status")
+    if status == "baseline-established":
+        if (
+            runtime_role != "pre-optimization"
+            or current_proof != current_identity
+            or baseline_proof != current_identity
+        ):
+            raise ValueError(
+                "certified baseline establishment pairing proof is invalid"
+            )
+        return
+    if status != "compared" or runtime_role != "final":
+        raise ValueError(
+            "certified current matrix pairing proof has an invalid status"
+        )
+    if current_proof != current_identity:
+        raise ValueError(
+            "certified current matrix pairing proof does not match the campaign"
+        )
+    try:
+        contract.certification.validate_runtime(
+            baseline_proof["runtimeRole"],
+            baseline_proof["commit"],
+            baseline_proof["projectVersion"],
+            baseline_proof["benchmarkHost"]["sku"],
+        )
+    except ValueError as error:
+        raise ValueError("certified baseline pairing provenance is invalid") from error
+    if (
+        baseline_proof["runtimeRole"] != "pre-optimization"
+        or baseline_proof["benchmarkHost"]
+        != current_proof["benchmarkHost"]
+        or baseline_proof["deployment"] == current_proof["deployment"]
+        or baseline_proof["environment"] != current_proof["environment"]
+        or baseline_proof["runId"] == current_proof["runId"]
+    ):
+        raise ValueError("certified current matrix pairing proof is invalid")
+
+
 def validate_document(
     document: dict[str, Any],
     contract: Contract,
@@ -154,6 +316,10 @@ def validate_document(
             expected_contract_metadata["confirmationPass"] = (
                 contract.confirmation_pass
             )
+        if contract.certification is not None:
+            expected_contract_metadata["certification"] = (
+                contract.certification.document()
+            )
         actual_contract = document.get("contract", {})
         if any(
             actual_contract.get(key) != value
@@ -164,6 +330,10 @@ def validate_document(
             )
     if document.get("campaign", {}).get("isolatedEnvironment") is not True:
         raise ValueError("performance campaign is not marked as isolated")
+    runtime_role = validate_certified_current_matrix_campaign(
+        contract,
+        document.get("campaign", {}),
+    )
     if contract.schema_version in {4, 5} and not document.get("campaign", {}).get(
         "releaseTag"
     ):
@@ -256,7 +426,7 @@ def validate_document(
     if len(cases) != len(expected_keys) or indexed.keys() != expected_keys:
         raise ValueError("performance evidence case set does not match contract")
 
-    if contract.revision == "v5.1":
+    if contract.revision in {"v5.1", "v6"}:
         invalid_cases = []
         for key, case in indexed.items():
             validity = case.get("validity")
@@ -304,8 +474,37 @@ def validate_document(
         expected_iterations = (
             benchmark_case.measured_iterations * contract.campaign_repeats
         )
+        expected_backend_request_budget = (
+            benchmark_case.backend_request_budget_for(runtime_role)
+        )
+        is_listing_case = benchmark_case.operation in LISTING_OPERATIONS
         if case.get("iterations") != expected_iterations:
             raise ValueError(f"case {key} has an unexpected iteration count")
+        if contract.revision == "v6" and not is_listing_case:
+            if (
+                case.get("expectedBackendRequestsPerOperation")
+                != expected_backend_request_budget
+            ):
+                raise ValueError(
+                    f"case {key} does not record its runtime request budget"
+                )
+            if benchmark_case.baseline_backend_requests_per_operation is None:
+                if (
+                    "baselineBackendRequestsPerOperation" in case
+                    or "finalBackendRequestsPerOperation" in case
+                ):
+                    raise ValueError(
+                        f"case {key} has unexpected comparison budget metadata"
+                    )
+            elif (
+                case.get("baselineBackendRequestsPerOperation")
+                != benchmark_case.baseline_backend_requests_per_operation
+                or case.get("finalBackendRequestsPerOperation")
+                != benchmark_case.backend_requests_per_operation
+            ):
+                raise ValueError(
+                    f"case {key} has inconsistent comparison budget metadata"
+                )
         metrics = case.get("metrics", {})
         metric_names = ["p50Ms", "p90Ms", "p95Ms", "operationsPerSecond"]
         if contract.schema_version == 1:
@@ -472,7 +671,7 @@ def validate_document(
             if is_listing:
                 expected_listing_budget = (
                     benchmark_case.expected_requests_per_entry_validated
-                    if contract.revision == "v5.1"
+                    if contract.revision in {"v5.1", "v6"}
                     else benchmark_case.expected_requests_per_entry_scanned
                 )
                 if (
@@ -524,7 +723,7 @@ def validate_document(
             )
         if contract.schema_version in {4, 5}:
             if contract.schema_version == 5 and is_listing:
-                uses_validated_metric = contract.revision == "v5.1"
+                uses_validated_metric = contract.revision in {"v5.1", "v6"}
                 per_run = []
                 for run in case["runs"]:
                     validate_classified_backend_telemetry(
@@ -695,10 +894,10 @@ def validate_document(
                 len(set(requests_per_run)) != 1
                 or (
                     isinstance(
-                        benchmark_case.backend_requests_per_operation, int
+                        expected_backend_request_budget, int
                     )
                     and requests_per_run[0]
-                    != benchmark_case.backend_requests_per_operation
+                    != expected_backend_request_budget
                 )
                 or case["repeatability"].get(
                     "requestsPerOperationPerRun"
@@ -714,7 +913,7 @@ def validate_document(
                 "head_blob",
             }:
                 if (
-                    contract.revision == "v5.1"
+                    contract.revision in {"v5.1", "v6"}
                     and case.get("readPathPoolPolicy") != "repeat-strided"
                 ):
                     raise ValueError(
@@ -854,6 +1053,23 @@ def validate_document(
     )
     if historical.get("status") not in allowed_statuses:
         raise ValueError("historical comparison status is missing")
+    if contract.certification is not None:
+        expected_runtime_role = (
+            "pre-optimization"
+            if historical.get("status") == "baseline-established"
+            else "final"
+        )
+        if runtime_role != expected_runtime_role:
+            raise ValueError(
+                "certified current matrix historical status does not match "
+                "the runtime role"
+            )
+    validate_certified_pairing_proof(
+        contract,
+        document.get("campaign", {}),
+        historical,
+        runtime_role,
+    )
     if contract.schema_version >= 2:
         non_regression = historical.get("nonRegression", {})
         if non_regression.get("policy") != contract.non_regression.document():
@@ -974,7 +1190,7 @@ def validate_document(
                     (
                         (
                             "requestsPerEntryValidated"
-                            if contract.revision == "v5.1"
+                            if contract.revision in {"v5.1", "v6"}
                             else "requestsPerEntryScanned"
                         )
                         if benchmark_case.operation
@@ -996,9 +1212,16 @@ def validate_document(
                     or classifications.get("p50Latency", {}).get("status")
                     not in {"passed", "not-gated"}
                 )
+                invalid_final_budget = (
+                    contract.certification is not None
+                    and benchmark_case.operation not in LISTING_OPERATIONS
+                    and request_gate.get("finalBudget")
+                    != benchmark_case.backend_requests_per_operation
+                )
                 if (
                     request_gate.get("classification") != "blocking"
                     or request_gate.get("status") != "passed"
+                    or invalid_final_budget
                     or invalid_latency_classification
                     or classifications.get("p95Latency", {}).get(
                         "classification"

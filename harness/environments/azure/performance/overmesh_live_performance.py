@@ -8,6 +8,7 @@ import json
 import math
 import os
 import platform
+import re
 import statistics
 import sys
 import time
@@ -43,6 +44,20 @@ LISTING_OPERATIONS = {
 TRANSIENT_FIXTURE_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 FIXTURE_READ_ATTEMPTS = 8
 FIXTURE_SETUP_PAGE_SIZE = 1_000
+V51_REVISION = "v5.1"
+V6_REVISION = "v6"
+CERTIFIED_CURRENT_MATRIX_ROLE_BASELINE = "pre-optimization"
+CERTIFIED_CURRENT_MATRIX_ROLE_FINAL = "final"
+CERTIFIED_CURRENT_MATRIX_HOST_SKU = "Standard_D2as_v5"
+CERTIFIED_CURRENT_MATRIX_BASELINE_COMMIT = (
+    "5202eccff4b1e277342cf784dde285e891eb865b"
+)
+CERTIFIED_CURRENT_MATRIX_BASELINE_VERSION = "0.11.0"
+CERTIFIED_CURRENT_MATRIX_FINAL_COMMIT = (
+    "123001619e5c75a8ffd241d4b1865b97a6a7cdef"
+)
+CERTIFIED_CURRENT_MATRIX_FINAL_VERSION = "0.11.1"
+CERTIFIED_CURRENT_MATRIX_WALL_TIME_BUDGET_SECONDS = 7_200
 
 
 def retry_fixture_read(
@@ -99,8 +114,10 @@ class BenchmarkCase:
     range_bytes: int | None
     measured_iterations: int
     backend_requests_per_operation: int | str | None = None
+    baseline_backend_requests_per_operation: int | None = None
     allowed_variable_backend_operations: tuple[str, ...] = ()
     fixture: Fixture | None = None
+    case_id_suffix: str | None = None
     request_timeout_seconds: int | None = None
     max_results: int | None = None
     block_size_bytes: int | None = None
@@ -110,7 +127,17 @@ class BenchmarkCase:
     @property
     def id(self) -> str:
         variant = self.fixture.id if self.fixture is not None else self.payload.id
+        if self.case_id_suffix is not None:
+            variant = f"{variant}-{self.case_id_suffix}"
         return f"{self.operation}-{variant}-c{self.concurrency}"
+
+    def backend_request_budget_for(self, runtime_role: str | None) -> int | str | None:
+        if (
+            runtime_role == CERTIFIED_CURRENT_MATRIX_ROLE_BASELINE
+            and self.baseline_backend_requests_per_operation is not None
+        ):
+            return self.baseline_backend_requests_per_operation
+        return self.backend_requests_per_operation
 
 
 @dataclass(frozen=True)
@@ -158,6 +185,64 @@ class NonRegressionPolicy:
 
 
 @dataclass(frozen=True)
+class Certification:
+    benchmark_host_sku: str
+    pre_optimization_commit: str
+    pre_optimization_project_version: str
+    final_commit: str
+    final_project_version: str
+
+    def document(self) -> dict[str, str]:
+        return {
+            "benchmarkHostSku": self.benchmark_host_sku,
+            "preOptimizationCommit": self.pre_optimization_commit,
+            "preOptimizationProjectVersion": (
+                self.pre_optimization_project_version
+            ),
+            "finalCommit": self.final_commit,
+            "finalProjectVersion": self.final_project_version,
+        }
+
+    def validate_runtime(
+        self,
+        runtime_role: str,
+        commit: str,
+        project_version: str,
+        host_sku: str,
+    ) -> None:
+        if runtime_role not in {
+            CERTIFIED_CURRENT_MATRIX_ROLE_BASELINE,
+            CERTIFIED_CURRENT_MATRIX_ROLE_FINAL,
+        }:
+            raise ValueError(
+                "certified current matrix runtime role must be pre-optimization "
+                "or final"
+            )
+        if host_sku != self.benchmark_host_sku:
+            raise ValueError(
+                "certified current matrix requires benchmark host SKU "
+                f"{self.benchmark_host_sku}"
+            )
+        if runtime_role == CERTIFIED_CURRENT_MATRIX_ROLE_BASELINE:
+            if (
+                commit != self.pre_optimization_commit
+                or project_version != self.pre_optimization_project_version
+            ):
+                raise ValueError(
+                    "pre-optimization runtime provenance does not match the "
+                    "certified current matrix"
+                )
+        elif (
+            commit != self.final_commit
+            or project_version != self.final_project_version
+        ):
+            raise ValueError(
+                "final runtime provenance does not match the certified current "
+                "matrix"
+            )
+
+
+@dataclass(frozen=True)
 class Contract:
     schema_version: int
     revision: str | None
@@ -167,6 +252,7 @@ class Contract:
     latency_evidence: str | None
     p50_gate_policy: str | None
     confirmation_pass: dict[str, Any] | None
+    certification: Certification | None
     warmup_iterations: int
     measured_iterations: int | None
     request_timeout_seconds: int
@@ -220,6 +306,10 @@ def endpoint_fingerprint(endpoint: str) -> str:
     return "endpoint-" + hashlib.sha256(host.encode("utf-8")).hexdigest()[:16]
 
 
+def benchmark_host_fingerprint(host_id: str) -> str:
+    return "host-" + hashlib.sha256(host_id.encode("utf-8")).hexdigest()[:16]
+
+
 def require_positive_integer(value: object, name: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ValueError(f"{name} must be a positive integer")
@@ -263,6 +353,219 @@ def v4_request_budget(operation: str, payload_size: int) -> int:
     raise ValueError(f"schema_version 4 has no request budget for {operation}")
 
 
+def certified_current_matrix_case_ids() -> set[str]:
+    case_ids = {
+        f"put_blob-{payload}-c{concurrency}"
+        for payload, concurrencies in (
+            ("1kib", (1, 4, 16)),
+            ("1mib", (1, 4, 16)),
+            ("16mib", (1, 4)),
+        )
+        for concurrency in concurrencies
+    }
+    case_ids.update(
+        f"overwrite_blob-1kib-c{concurrency}"
+        for concurrency in (1, 4, 16)
+    )
+    case_ids.update(
+        f"get_blob-{payload}-c{concurrency}"
+        for payload in ("1kib", "1mib", "16mib")
+        for concurrency in (1, 4, 16)
+    )
+    case_ids.update(
+        f"get_range-16mib-c{concurrency}" for concurrency in (1, 4, 16)
+    )
+    case_ids.update(
+        f"head_blob-1mib-c{concurrency}" for concurrency in (1, 16)
+    )
+    case_ids.update(
+        f"delete_blob-1kib-c{concurrency}" for concurrency in (1, 4, 16)
+    )
+    case_ids.update(
+        {
+            "list_blobs_flat-list-flat-100-c1",
+            "list_blobs_flat-list-flat-100-c4",
+            "list_blobs_flat-list-flat-1000-c1",
+            "list_blobs_flat-list-flat-1000-c4",
+            "list_blobs_flat-list-flat-5000-c1",
+            "list_blobs_flat-list-flat-5000-c4",
+            (
+                "list_blobs_hierarchical-list-hierarchical-5000-"
+                "delimiter-page-c1"
+            ),
+            (
+                "list_blobs_hierarchical-list-hierarchical-5000-"
+                "comparable-page-c1"
+            ),
+            "list_blobs_paginated-list-flat-5000-c1",
+            "list_containers-list-containers-20-c1",
+            "put_block_sequence-16mib-c1",
+            "put_block_sequence-16mib-c4",
+            "put_block_sequence-100mib-c1",
+            "put_block_sequence-100mib-c4",
+            "get_block_list-16mib-c1",
+        }
+    )
+    return case_ids
+
+
+def validate_certified_current_matrix_identity(
+    payloads: dict[str, Payload],
+    fixtures: dict[str, Fixture],
+    cases: list[BenchmarkCase],
+) -> None:
+    if {
+        payload_id: payload.size_bytes for payload_id, payload in payloads.items()
+    } != {
+        "1kib": 1_024,
+        "1mib": 1_048_576,
+        "16mib": 16_777_216,
+        "100mib": 104_857_600,
+    }:
+        raise ValueError(
+            "certified-current-matrix payload identity is invalid"
+        )
+    fixture_identity = {
+        fixture_id: (
+            fixture.kind,
+            fixture.prefix,
+            fixture.naming_scheme,
+            fixture.blob_count,
+            fixture.container_count,
+            fixture.prefixes,
+            fixture.payload_size_bytes,
+            fixture.manifest_sha256,
+        )
+        for fixture_id, fixture in fixtures.items()
+    }
+    if fixture_identity != {
+        "list-flat-100": (
+            "blobs",
+            "perf/list/list-flat-100",
+            "perf/list/{fixture_id}/{index:05d}",
+            100,
+            0,
+            0,
+            1,
+            "83422563ab1ade9a824b2bb6cb8ca4792bd8658dafd3cac7bcdac6a4a6404817",
+        ),
+        "list-flat-1000": (
+            "blobs",
+            "perf/list/list-flat-1000",
+            "perf/list/{fixture_id}/{index:05d}",
+            1_000,
+            0,
+            0,
+            1,
+            "a5df19a4939438a3076d4e1b604603d386a370fd4bf6063ff994cb1513f74682",
+        ),
+        "list-flat-5000": (
+            "blobs",
+            "perf/list/list-flat-5000",
+            "perf/list/{fixture_id}/{index:05d}",
+            5_000,
+            0,
+            0,
+            1,
+            "6108c1c14845dec2f2fc98d4a17d4b86ced124d04f9c0744cd557b0b9ba6fc2d",
+        ),
+        "list-hierarchical-5000": (
+            "blobs",
+            "perf/list/list-hierarchical-5000",
+            "perf/list/{fixture_id}/{prefix:02d}/{index:05d}",
+            5_000,
+            0,
+            50,
+            1,
+            "b7269e56115a14c5b20c73f5d15bbbeb99d8bb97aea3406ff09417255eb387eb",
+        ),
+        "list-containers-20": (
+            "containers",
+            "omv5fixture",
+            "{container_prefix}-{index:02d}/fixture.bin",
+            0,
+            20,
+            0,
+            1,
+            "790dda770c05badcd64ea6b673d3332e516c821dab51d31ca026c9322cee82a1",
+        ),
+    }:
+        raise ValueError(
+            "certified-current-matrix fixture identity is invalid"
+        )
+    listing_max_results = {
+        case.id: case.max_results
+        for case in cases
+        if case.operation in LISTING_OPERATIONS
+    }
+    if listing_max_results != {
+        "list_blobs_flat-list-flat-100-c1": 5_000,
+        "list_blobs_flat-list-flat-100-c4": 5_000,
+        "list_blobs_flat-list-flat-1000-c1": 5_000,
+        "list_blobs_flat-list-flat-1000-c4": 5_000,
+        "list_blobs_flat-list-flat-5000-c1": 1_000,
+        "list_blobs_flat-list-flat-5000-c4": 1_000,
+        (
+            "list_blobs_hierarchical-list-hierarchical-5000-"
+            "delimiter-page-c1"
+        ): 10,
+        (
+            "list_blobs_hierarchical-list-hierarchical-5000-"
+            "comparable-page-c1"
+        ): 1_000,
+        "list_blobs_paginated-list-flat-5000-c1": 1_000,
+        "list_containers-list-containers-20-c1": 1_000,
+    }:
+        raise ValueError(
+            "certified-current-matrix listing max_results identity is invalid"
+        )
+    if {
+        (case.id, case.range_bytes)
+        for case in cases
+        if case.operation == "get_range"
+    } != {
+        ("get_range-16mib-c1", 1_048_576),
+        ("get_range-16mib-c4", 1_048_576),
+        ("get_range-16mib-c16", 1_048_576),
+    }:
+        raise ValueError(
+            "certified-current-matrix range identity is invalid"
+        )
+    if {
+        (
+            case.id,
+            case.block_size_bytes,
+            case.allowed_variable_backend_operations,
+        )
+        for case in cases
+        if case.operation == "put_block_sequence"
+    } != {
+        ("put_block_sequence-16mib-c1", 4_194_304, ("control_renew_lock",)),
+        ("put_block_sequence-16mib-c4", 4_194_304, ("control_renew_lock",)),
+        (
+            "put_block_sequence-100mib-c1",
+            8_388_608,
+            ("control_renew_lock",),
+        ),
+        (
+            "put_block_sequence-100mib-c4",
+            8_388_608,
+            ("control_renew_lock",),
+        ),
+    }:
+        raise ValueError(
+            "certified-current-matrix block-size identity is invalid"
+        )
+    if any(
+        case.allowed_variable_backend_operations
+        and case.operation != "put_block_sequence"
+        for case in cases
+    ):
+        raise ValueError(
+            "certified-current-matrix variable request identity is invalid"
+        )
+
+
 def load_contract(path: Path) -> Contract:
     document = tomllib.loads(path.read_text(encoding="utf-8"))
     schema_version = document.get("schema_version")
@@ -288,8 +591,8 @@ def load_contract(path: Path) -> Contract:
     if sorted(target_order) != ["direct", "gateway"]:
         raise ValueError("target_order must contain direct and gateway exactly once")
     revision = document.get("contract_revision")
-    if revision is not None and revision != "v5.1":
-        raise ValueError("contract_revision must be v5.1 when present")
+    if revision is not None and revision not in {V51_REVISION, V6_REVISION}:
+        raise ValueError("contract_revision must be v5.1 or v6 when present")
     target_order_policy = document.get("target_order_policy", "fixed")
     if target_order_policy not in {"fixed", "counterbalanced"}:
         raise ValueError(
@@ -314,7 +617,9 @@ def load_contract(path: Path) -> Contract:
     latency_evidence = document.get("latency_evidence")
     p50_gate_policy = document.get("p50_gate_policy")
     confirmation_pass = document.get("confirmation_pass")
-    if revision == "v5.1":
+    certification_document = document.get("certification")
+    certification = None
+    if revision == V51_REVISION:
         expected_sampling_keys = {"artifact", "sha256", "method"}
         if campaign_purpose not in {
             "diagnostic-fast",
@@ -429,6 +734,115 @@ def load_contract(path: Path) -> Contract:
             raise ValueError(
                 "confirmation_pass is valid only for diagnostic-fast"
             )
+    elif revision == V6_REVISION:
+        expected_certification_keys = {
+            "benchmark_host_sku",
+            "pre_optimization_commit",
+            "pre_optimization_project_version",
+            "final_commit",
+            "final_project_version",
+        }
+        if campaign_purpose != "certified-current-matrix":
+            raise ValueError(
+                "contract_revision v6 requires certified-current-matrix purpose"
+            )
+        if baseline_eligible is not True:
+            raise ValueError(
+                "contract_revision v6 must be baseline eligible"
+            )
+        client_wall_time_budget_seconds = require_positive_integer(
+            client_wall_time_budget_seconds,
+            "client_wall_time_budget_seconds",
+        )
+        if (
+            client_wall_time_budget_seconds
+            != CERTIFIED_CURRENT_MATRIX_WALL_TIME_BUDGET_SECONDS
+        ):
+            raise ValueError(
+                "contract_revision v6 requires a 7200-second wall-time budget"
+            )
+        if latency_evidence != "individual-samples":
+            raise ValueError(
+                "contract_revision v6 requires individual latency samples"
+            )
+        if p50_gate_policy != "stable-only":
+            raise ValueError(
+                "contract_revision v6 requires stable-only p50 gating"
+            )
+        if schema_version != 5:
+            raise ValueError("contract_revision v6 requires schema_version 5")
+        if target_order_policy != "counterbalanced":
+            raise ValueError(
+                "contract_revision v6 requires counterbalanced target order"
+            )
+        if p50_comparison_statistic != "median-per-run":
+            raise ValueError(
+                "contract_revision v6 requires median-per-run p50 comparison"
+            )
+        if confirmation_pass is not None or sampling_basis is not None:
+            raise ValueError(
+                "contract_revision v6 does not permit diagnostic metadata"
+            )
+        if (
+            not isinstance(certification_document, dict)
+            or set(certification_document) != expected_certification_keys
+            or not all(
+                isinstance(value, str) and value
+                for value in certification_document.values()
+            )
+        ):
+            raise ValueError(
+                "contract_revision v6 requires complete certification metadata"
+            )
+        pre_optimization_commit = certification_document[
+            "pre_optimization_commit"
+        ]
+        final_commit = certification_document["final_commit"]
+        if (
+            len(pre_optimization_commit) != 40
+            or any(
+                character not in "0123456789abcdef"
+                for character in pre_optimization_commit
+            )
+        ):
+            raise ValueError(
+                "certification.pre_optimization_commit must be a commit SHA"
+            )
+        if (
+            len(final_commit) != 40
+            or any(
+                character not in "0123456789abcdef"
+                for character in final_commit
+            )
+        ):
+            raise ValueError(
+                "certification.final_commit must be a commit SHA"
+            )
+        if (
+            certification_document["benchmark_host_sku"]
+            != CERTIFIED_CURRENT_MATRIX_HOST_SKU
+            or pre_optimization_commit
+            != CERTIFIED_CURRENT_MATRIX_BASELINE_COMMIT
+            or certification_document["pre_optimization_project_version"]
+            != CERTIFIED_CURRENT_MATRIX_BASELINE_VERSION
+            or final_commit != CERTIFIED_CURRENT_MATRIX_FINAL_COMMIT
+            or certification_document["final_project_version"]
+            != CERTIFIED_CURRENT_MATRIX_FINAL_VERSION
+        ):
+            raise ValueError(
+                "certified-current-matrix certification identity is invalid"
+            )
+        certification = Certification(
+            benchmark_host_sku=certification_document["benchmark_host_sku"],
+            pre_optimization_commit=pre_optimization_commit,
+            pre_optimization_project_version=certification_document[
+                "pre_optimization_project_version"
+            ],
+            final_commit=final_commit,
+            final_project_version=certification_document[
+                "final_project_version"
+            ],
+        )
     elif any(
         value is not None
         for value in (
@@ -442,10 +856,11 @@ def load_contract(path: Path) -> Contract:
             latency_evidence,
             p50_gate_policy,
             confirmation_pass,
+            certification_document,
         )
     ):
         raise ValueError(
-            "v5.1 contract metadata requires contract_revision = v5.1"
+            "revisioned contract metadata requires contract_revision"
         )
 
     policy_document = document.get("non_regression")
@@ -472,7 +887,7 @@ def load_contract(path: Path) -> Contract:
         if schema_version == 5:
             expected_keys.add(
                 "requests_per_entry_validated"
-                if revision == "v5.1"
+                if revision in {V51_REVISION, V6_REVISION}
                 else "requests_per_entry_scanned"
             )
         if not isinstance(policy_document, dict) or set(policy_document) != expected_keys:
@@ -493,7 +908,7 @@ def load_contract(path: Path) -> Contract:
             and policy_document[
                 (
                     "requests_per_entry_validated"
-                    if revision == "v5.1"
+                    if revision in {V51_REVISION, V6_REVISION}
                     else "requests_per_entry_scanned"
                 )
             ]
@@ -508,12 +923,14 @@ def load_contract(path: Path) -> Contract:
             p95_latency="informational",
             requests_per_entry_scanned=(
                 "blocking"
-                if schema_version == 5 and revision != "v5.1"
+                if schema_version == 5
+                and revision not in {V51_REVISION, V6_REVISION}
                 else None
             ),
             requests_per_entry_validated=(
                 "blocking"
-                if schema_version == 5 and revision == "v5.1"
+                if schema_version == 5
+                and revision in {V51_REVISION, V6_REVISION}
                 else None
             ),
             p50_stability_spread_ratio_threshold=require_ratio(
@@ -671,19 +1088,49 @@ def load_contract(path: Path) -> Contract:
             )
         else:
             backend_requests_per_operation = None
+        raw_baseline_budget = workload.get(
+            "baseline_backend_requests_per_operation"
+        )
+        baseline_backend_requests_per_operation = None
+        if raw_baseline_budget is not None:
+            if (
+                revision != V6_REVISION
+                or operation in LISTING_OPERATIONS
+                or not isinstance(backend_requests_per_operation, int)
+            ):
+                raise ValueError(
+                    "baseline_backend_requests_per_operation is valid only "
+                    "for v6 non-listing workloads with an exact final budget"
+                )
+            baseline_backend_requests_per_operation = require_positive_integer(
+                raw_baseline_budget,
+                (
+                    f"workload[{workload_index}]."
+                    "baseline_backend_requests_per_operation"
+                ),
+            )
+            if (
+                baseline_backend_requests_per_operation
+                <= backend_requests_per_operation
+            ):
+                raise ValueError(
+                    "baseline_backend_requests_per_operation must exceed the "
+                    "exact final budget"
+                )
         raw_variable_operations = workload.get(
             "allowed_variable_backend_operations"
         )
         allowed_variable_backend_operations: tuple[str, ...] = ()
         if raw_variable_operations is not None:
             if (
-                revision != "v5.1"
+                revision not in {V51_REVISION, V6_REVISION}
                 or operation in LISTING_OPERATIONS
                 or not isinstance(backend_requests_per_operation, int)
             ):
                 raise ValueError(
                     "allowed_variable_backend_operations is valid only for "
-                    "v5.1 non-listing workloads with an integer "
+                    "v5.1 non-listing workloads or v6 non-listing workloads "
+                    "with an integer "
                     "backend_requests_per_operation"
                 )
             if (
@@ -725,6 +1172,19 @@ def load_contract(path: Path) -> Contract:
             raise ValueError(
                 f"workload[{workload_index}] fixture is valid only for listing"
             )
+        case_id_suffix = workload.get("case_id_suffix")
+        if case_id_suffix is not None:
+            if (
+                revision != V6_REVISION
+                or operation not in LISTING_OPERATIONS
+                or not isinstance(case_id_suffix, str)
+                or not case_id_suffix
+                or not re.fullmatch(r"[a-z0-9-]+", case_id_suffix)
+            ):
+                raise ValueError(
+                    "case_id_suffix is valid only for v6 listing workloads "
+                    "and must be lowercase kebab-case"
+                )
         if schema_version == 5:
             if (
                 operation in LISTING_OPERATIONS
@@ -765,7 +1225,7 @@ def load_contract(path: Path) -> Contract:
             )
         per_entry_key = (
             "requests_per_entry_validated"
-            if revision == "v5.1"
+            if revision in {V51_REVISION, V6_REVISION}
             else "requests_per_entry_scanned"
         )
         expected_per_entry = workload.get(per_entry_key)
@@ -807,18 +1267,26 @@ def load_contract(path: Path) -> Contract:
                     backend_requests_per_operation=(
                         backend_requests_per_operation
                     ),
+                    baseline_backend_requests_per_operation=(
+                        baseline_backend_requests_per_operation
+                    ),
                     allowed_variable_backend_operations=(
                         allowed_variable_backend_operations
                     ),
                     fixture=fixture,
+                    case_id_suffix=case_id_suffix,
                     request_timeout_seconds=request_timeout_seconds,
                     max_results=max_results,
                     block_size_bytes=block_size_bytes,
                     expected_requests_per_entry_scanned=(
-                        expected_per_entry if revision != "v5.1" else None
+                        expected_per_entry
+                        if revision not in {V51_REVISION, V6_REVISION}
+                        else None
                     ),
                     expected_requests_per_entry_validated=(
-                        expected_per_entry if revision == "v5.1" else None
+                        expected_per_entry
+                        if revision in {V51_REVISION, V6_REVISION}
+                        else None
                     ),
                 )
                 if schema_version == 4:
@@ -887,6 +1355,34 @@ def load_contract(path: Path) -> Contract:
                             and fixture.blob_count == 5_000
                             else None
                         )
+                    elif revision == V6_REVISION:
+                        if operation in READ_OPERATIONS:
+                            expected_iterations = 20
+                        elif operation in {
+                            "put_blob",
+                            "overwrite_blob",
+                            "delete_blob",
+                        }:
+                            expected_iterations = 10
+                        elif operation == "list_blobs_flat":
+                            expected_iterations = {
+                                100: 10,
+                                1_000: 3,
+                                5_000: 1,
+                            }.get(fixture.blob_count if fixture else 0)
+                        elif operation in {
+                            "list_blobs_hierarchical",
+                            "list_blobs_paginated",
+                        }:
+                            expected_iterations = 1
+                        elif operation == "list_containers":
+                            expected_iterations = 5
+                        elif operation == "put_block_sequence":
+                            expected_iterations = 5
+                        elif operation == "get_block_list":
+                            expected_iterations = 10
+                        else:
+                            expected_iterations = None
                     elif operation in READ_OPERATIONS:
                         expected_iterations = 60
                     elif operation in {
@@ -1023,6 +1519,87 @@ def load_contract(path: Path) -> Contract:
             raise ValueError(
                 "diagnostic-fast must contain the approved 38-case matrix"
             )
+    elif revision == V6_REVISION:
+        by_id = {case.id: case for case in cases}
+        if set(by_id) != certified_current_matrix_case_ids():
+            raise ValueError(
+                "certified-current-matrix does not match the approved matrix"
+            )
+        validate_certified_current_matrix_identity(payloads, fixtures, cases)
+        for case in cases:
+            if case.operation in LISTING_OPERATIONS:
+                if (
+                    case.expected_requests_per_entry_validated != 4.0
+                    or case.backend_requests_per_operation is not None
+                    or case.baseline_backend_requests_per_operation is not None
+                ):
+                    raise ValueError(
+                        "certified-current-matrix listing budgets must be "
+                        "exactly four requests per validated entry"
+                    )
+            elif not isinstance(case.backend_requests_per_operation, int):
+                raise ValueError(
+                    "certified-current-matrix requires exact final request "
+                    "budgets for every non-listing workload"
+                )
+        final_budget_by_operation = {
+            "put_blob": 33,
+            "overwrite_blob": 37,
+            "delete_blob": 31,
+            "get_blob": None,
+            "get_range": 15,
+            "head_blob": 10,
+            "put_block_sequence": None,
+            "get_block_list": 18,
+        }
+        for case in cases:
+            if case.operation in LISTING_OPERATIONS:
+                continue
+            expected_final = final_budget_by_operation[case.operation]
+            if case.operation == "get_blob":
+                expected_final = 18 if case.payload.size_bytes == 16 * 1024 * 1024 else 15
+            elif case.operation == "put_block_sequence":
+                expected_final = (
+                    396
+                    if case.payload.size_bytes == 100 * 1024 * 1024
+                    else 153
+                )
+            if case.backend_requests_per_operation != expected_final:
+                raise ValueError(
+                    "certified-current-matrix final request budget is invalid "
+                    f"for {case.id}"
+                )
+            expected_baseline = {
+                "put_blob": 49,
+                "overwrite_blob": 49,
+                "delete_blob": 43,
+                "put_block_sequence": (
+                    442
+                    if case.payload.size_bytes == 100 * 1024 * 1024
+                    else 181
+                ),
+            }.get(case.operation)
+            if case.baseline_backend_requests_per_operation != expected_baseline:
+                raise ValueError(
+                    "certified-current-matrix baseline request budget is "
+                    f"invalid for {case.id}"
+                )
+        hierarchy = [
+            case
+            for case in cases
+            if case.operation == "list_blobs_hierarchical"
+        ]
+        if {
+            (case.case_id_suffix, case.max_results, case.measured_iterations)
+            for case in hierarchy
+        } != {
+            ("delimiter-page", 10, 1),
+            ("comparable-page", 1_000, 1),
+        }:
+            raise ValueError(
+                "certified-current-matrix requires delimiter and comparable "
+                "hierarchical listing cases"
+            )
 
     return Contract(
         schema_version=schema_version,
@@ -1033,10 +1610,11 @@ def load_contract(path: Path) -> Contract:
         latency_evidence=latency_evidence,
         p50_gate_policy=p50_gate_policy,
         confirmation_pass=confirmation_pass,
+        certification=certification,
         warmup_iterations=require_positive_integer(
             document.get("warmup_iterations"), "warmup_iterations"
         )
-        if revision != "v5.1"
+        if revision != V51_REVISION
         else require_nonnegative_integer(
             document.get("warmup_iterations"), "warmup_iterations"
         ),
@@ -1089,6 +1667,11 @@ def plan(contract: Contract) -> dict[str, Any]:
         **(
             {"confirmationPass": contract.confirmation_pass}
             if contract.confirmation_pass is not None
+            else {}
+        ),
+        **(
+            {"certification": contract.certification.document()}
+            if contract.certification is not None
             else {}
         ),
         "warmupIterations": contract.warmup_iterations,
@@ -1146,6 +1729,18 @@ def plan(contract: Contract) -> dict[str, Any]:
                 ),
                 **(
                     {
+                        "baselineBackendRequestsPerOperation": (
+                            benchmark_case.baseline_backend_requests_per_operation
+                        )
+                    }
+                    if (
+                        benchmark_case.baseline_backend_requests_per_operation
+                        is not None
+                    )
+                    else {}
+                ),
+                **(
+                    {
                         "allowedVariableBackendOperations": list(
                             benchmark_case.allowed_variable_backend_operations
                         )
@@ -1189,6 +1784,11 @@ def plan(contract: Contract) -> dict[str, Any]:
                     else {}
                 ),
                 **(
+                    {"caseIdSuffix": benchmark_case.case_id_suffix}
+                    if benchmark_case.case_id_suffix is not None
+                    else {}
+                ),
+                **(
                     {"blockSizeBytes": benchmark_case.block_size_bytes}
                     if benchmark_case.block_size_bytes is not None
                     else {}
@@ -1221,7 +1821,7 @@ def plan(contract: Contract) -> dict[str, Any]:
                     {"listingRequestBudget": "establish"}
                     if (
                         benchmark_case.expected_requests_per_entry_validated
-                        if contract.revision == "v5.1"
+                        if contract.revision in {V51_REVISION, V6_REVISION}
                         else benchmark_case.expected_requests_per_entry_scanned
                     )
                     == "establish"
@@ -1426,7 +2026,7 @@ def read_path_pool_index(
         raise ValueError("read path pool is unavailable")
     repeat_offset = (
         repeat_index * benchmark_case.measured_iterations
-        if contract.revision == "v5.1"
+        if contract.revision in {V51_REVISION, V6_REVISION}
         else 0
     )
     return (
@@ -1483,6 +2083,14 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
     ]
     if contract.schema_version in {4, 5}:
         required_environment.append("OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG")
+    if contract.certification is not None:
+        required_environment.extend(
+            [
+                "OVERMESH_LIVE_PERFORMANCE_RUNTIME_ROLE",
+                "OVERMESH_LIVE_PERFORMANCE_HOST_ID",
+                "OVERMESH_LIVE_PERFORMANCE_HOST_SKU",
+            ]
+        )
     missing = [name for name in required_environment if not os.environ.get(name)]
     if missing:
         raise RuntimeError(
@@ -1503,6 +2111,26 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
     project_version = os.environ.get("OVERMESH_LIVE_PERFORMANCE_PROJECT_VERSION")
     if not project_version:
         raise RuntimeError("OVERMESH_LIVE_PERFORMANCE_PROJECT_VERSION is required")
+    runtime_role = None
+    benchmark_host = None
+    if contract.certification is not None:
+        runtime_role = os.environ["OVERMESH_LIVE_PERFORMANCE_RUNTIME_ROLE"]
+        host_sku = os.environ["OVERMESH_LIVE_PERFORMANCE_HOST_SKU"]
+        try:
+            contract.certification.validate_runtime(
+                runtime_role,
+                commit,
+                project_version,
+                host_sku,
+            )
+        except ValueError as error:
+            raise RuntimeError(str(error)) from error
+        benchmark_host = {
+            "sku": host_sku,
+            "fingerprint": benchmark_host_fingerprint(
+                os.environ["OVERMESH_LIVE_PERFORMANCE_HOST_ID"]
+            ),
+        }
 
     container = os.environ["OVERMESH_LIVE_CUSTOMER_CONTAINER"]
     credential = ManagedIdentityCredential(
@@ -2554,7 +3182,7 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                     bytes_per_operation,
                 ),
             }
-            if contract.revision == "v5.1":
+            if contract.revision in {V51_REVISION, V6_REVISION}:
                 result["validity"] = {
                     "status": "valid",
                     "mandatory": True,
@@ -2581,15 +3209,26 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                 and contract.read_path_pool_size is not None
             ):
                 result["pathPoolSize"] = contract.read_path_pool_size
-                if contract.revision == "v5.1":
+                if contract.revision in {V51_REVISION, V6_REVISION}:
                     result["readPathPoolPolicy"] = "repeat-strided"
-            if isinstance(
-                benchmark_case.backend_requests_per_operation, int
-            ):
+            expected_backend_request_budget = (
+                benchmark_case.backend_request_budget_for(runtime_role)
+            )
+            if isinstance(expected_backend_request_budget, int):
                 result["expectedBackendRequestsPerOperation"] = (
+                    expected_backend_request_budget
+                )
+            if (
+                benchmark_case.baseline_backend_requests_per_operation
+                is not None
+            ):
+                result["baselineBackendRequestsPerOperation"] = (
+                    benchmark_case.baseline_backend_requests_per_operation
+                )
+                result["finalBackendRequestsPerOperation"] = (
                     benchmark_case.backend_requests_per_operation
                 )
-            elif benchmark_case.backend_requests_per_operation == "establish":
+            if expected_backend_request_budget == "establish":
                 result["backendRequestBudget"] = "establish"
             if benchmark_case.allowed_variable_backend_operations:
                 result["allowedVariableBackendOperations"] = list(
@@ -2772,6 +3411,8 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
             "environment": os.environ[
                 "OVERMESH_LIVE_PERFORMANCE_ENVIRONMENT"
             ],
+            **({"runtimeRole": runtime_role} if runtime_role is not None else {}),
+            **({"benchmarkHost": benchmark_host} if benchmark_host is not None else {}),
             "isolatedEnvironment": True,
             "storageApiVersion": next(iter(storage_api_versions.values())),
             **(
@@ -2833,6 +3474,11 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
             **(
                 {"confirmationPass": contract.confirmation_pass}
                 if contract.confirmation_pass is not None
+                else {}
+            ),
+            **(
+                {"certification": contract.certification.document()}
+                if contract.certification is not None
                 else {}
             ),
             "targetOrderPolicy": contract.target_order_policy,

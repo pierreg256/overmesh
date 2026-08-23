@@ -60,7 +60,273 @@ def campaign(run_id: str, latency_ratio: float, throughput_ratio: float) -> dict
     }
 
 
+def certified_current_matrix_campaign(
+    run_id: str,
+    runtime_role: str,
+    observed_budget: int,
+) -> dict:
+    document = campaign(run_id, 2.0, 0.5)
+    document["contract"] = {
+        "sha256": "certified-contract",
+        "schemaVersion": 5,
+        "revision": "v6",
+        "p50GatePolicy": "stable-only",
+        "certification": {
+            "benchmarkHostSku": "Standard_D2as_v5",
+            "preOptimizationCommit": (
+                "5202eccff4b1e277342cf784dde285e891eb865b"
+            ),
+            "preOptimizationProjectVersion": "0.11.0",
+            "finalProjectVersion": "0.11.1",
+        },
+        "nonRegression": {
+            "backendRequestsPerOperation": "blocking",
+            "requestsPerEntryValidated": "blocking",
+            "p50Latency": "derived",
+            "p50StabilitySpreadRatioThreshold": 1.1,
+            "p50RegressionRatioThreshold": 1.1,
+            "p95Latency": "informational",
+        },
+    }
+    document["campaign"].update(
+        {
+            "runtimeRole": runtime_role,
+            "projectVersion": (
+                "0.11.0"
+                if runtime_role == "pre-optimization"
+                else "0.11.1"
+            ),
+            "commit": (
+                "5202eccff4b1e277342cf784dde285e891eb865b"
+                if runtime_role == "pre-optimization"
+                else "f" * 40
+            ),
+            "benchmarkHost": {
+                "sku": "Standard_D2as_v5",
+                "fingerprint": "host-0123456789abcdef",
+            },
+            "deployment": f"deployment-{runtime_role}",
+            "environment": "isolated-performance",
+        }
+    )
+    for case in document["cases"]:
+        case["operation"] = "put_blob"
+        case["repeatability"] = {
+            "p50MsPerRun": [10.0, 10.1, 10.2],
+            "medianP50Ms": 10.1,
+            "p50Classification": "blocking",
+        }
+        case["expectedBackendRequestsPerOperation"] = (
+            observed_budget
+        )
+        case["baselineBackendRequestsPerOperation"] = 45
+        case["finalBackendRequestsPerOperation"] = 41
+    gateway = document["cases"][1]
+    gateway["serverTelemetry"]["backendRequests"]["count"] = (
+        observed_budget * gateway["iterations"]
+    )
+    return document
+
+
 class CompareLivePerformanceTests(unittest.TestCase):
+    def test_v6_compares_paired_structural_budgets_at_final_exact_count(
+        self,
+    ) -> None:
+        baseline = certified_current_matrix_campaign(
+            "baseline",
+            "pre-optimization",
+            45,
+        )
+        current = certified_current_matrix_campaign("current", "final", 41)
+
+        comparison = build_comparison(current, baseline)
+
+        request_gate = comparison["cases"][0]["nonRegression"][
+            "backendRequestsPerOperation"
+        ]
+        self.assertEqual(
+            request_gate,
+            {
+                "classification": "blocking",
+                "baseline": 45.0,
+                "current": 41.0,
+                "finalBudget": 41,
+                "status": "passed",
+            },
+        )
+        self.assertEqual(comparison["nonRegression"]["gateStatus"], "passed")
+
+    def test_v6_excludes_allowed_lock_renewals_from_structural_budget(self) -> None:
+        def block_sequence(
+            run_id: str,
+            runtime_role: str,
+            renewals_per_run: int,
+        ) -> dict:
+            document = certified_current_matrix_campaign(
+                run_id,
+                runtime_role,
+                438,
+            )
+            for case in document["cases"]:
+                case["operation"] = "put_block_sequence"
+                case["iterations"] = 30
+                case["expectedBackendRequestsPerOperation"] = 438
+                case.pop("baselineBackendRequestsPerOperation")
+                case.pop("finalBackendRequestsPerOperation")
+            gateway = document["cases"][1]
+            gateway["allowedVariableBackendOperations"] = [
+                "control_renew_lock"
+            ]
+            gateway["runs"] = [
+                {
+                    "iterations": 10,
+                    "serverTelemetry": {
+                        "backendRequests": {
+                            "count": 4380 + renewals_per_run,
+                        }
+                    },
+                    "backendRequestBudget": {
+                        "structuralRequestsPerOperation": 438,
+                        "allowedVariableOperations": [
+                            "control_renew_lock"
+                        ],
+                        "variableRequestsByOperation": {
+                            "control_renew_lock": renewals_per_run,
+                        },
+                    },
+                }
+                for _ in range(3)
+            ]
+            gateway["serverTelemetry"]["backendRequests"]["count"] = (
+                438 * 30 + 3 * renewals_per_run
+            )
+            return document
+
+        baseline = block_sequence("baseline", "pre-optimization", 1)
+        current = block_sequence("current", "final", 3)
+        comparison = build_comparison(current, baseline)
+
+        request_gate = comparison["cases"][0]["nonRegression"][
+            "backendRequestsPerOperation"
+        ]
+        self.assertEqual(request_gate["baseline"], 438.0)
+        self.assertEqual(request_gate["current"], 438.0)
+        self.assertEqual(request_gate["status"], "passed")
+        self.assertEqual(
+            comparison["cases"][0]["serverTelemetryChange"][
+                "backendRequestsPerOperation"
+            ],
+            1.0,
+        )
+
+    def test_v6_rejects_count_above_final_budget_and_host_mismatch(self) -> None:
+        baseline = certified_current_matrix_campaign(
+            "baseline",
+            "pre-optimization",
+            45,
+        )
+        current = certified_current_matrix_campaign("current", "final", 42)
+        comparison = build_comparison(current, baseline)
+        self.assertEqual(
+            comparison["cases"][0]["nonRegression"][
+                "backendRequestsPerOperation"
+            ]["status"],
+            "failed",
+        )
+        self.assertEqual(comparison["nonRegression"]["gateStatus"], "failed")
+
+        current = certified_current_matrix_campaign("current", "final", 40)
+        comparison = build_comparison(current, baseline)
+        self.assertEqual(
+            comparison["cases"][0]["nonRegression"][
+                "backendRequestsPerOperation"
+            ]["status"],
+            "failed",
+        )
+
+        current = certified_current_matrix_campaign("current", "final", 41)
+        current["campaign"]["benchmarkHost"]["fingerprint"] = (
+            "host-fedcba9876543210"
+        )
+        with self.assertRaisesRegex(ValueError, "same benchmark host"):
+            build_comparison(current, baseline)
+
+        current = certified_current_matrix_campaign("current", "final", 41)
+        current["campaign"]["deployment"] = baseline["campaign"]["deployment"]
+        with self.assertRaisesRegex(ValueError, "different deployments"):
+            build_comparison(current, baseline)
+
+        current = certified_current_matrix_campaign("current", "final", 41)
+        current["campaign"]["environment"] = "other-environment"
+        with self.assertRaisesRegex(ValueError, "same environment"):
+            build_comparison(current, baseline)
+
+        current = certified_current_matrix_campaign("baseline", "final", 41)
+        with self.assertRaisesRegex(ValueError, "different run IDs"):
+            build_comparison(current, baseline)
+
+    def test_v6_final_runtime_cannot_establish_a_baseline(self) -> None:
+        current = certified_current_matrix_campaign("current", "final", 41)
+        with tempfile.TemporaryDirectory() as directory:
+            current_path = Path(directory) / "current.json"
+            output_path = Path(directory) / "output.json"
+            current_path.write_text(json.dumps(current), encoding="utf-8")
+            with patch(
+                "sys.argv",
+                [
+                    "compare_live_performance.py",
+                    "--current",
+                    str(current_path),
+                    "--output",
+                    str(output_path),
+                ],
+            ):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "only from the pre-optimization runtime",
+                ):
+                    main()
+
+    def test_v6_baseline_establishment_embeds_self_pairing_proof(self) -> None:
+        baseline = certified_current_matrix_campaign(
+            "baseline",
+            "pre-optimization",
+            45,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            current_path = Path(directory) / "current.json"
+            output_path = Path(directory) / "output.json"
+            current_path.write_text(json.dumps(baseline), encoding="utf-8")
+            with patch(
+                "sys.argv",
+                [
+                    "compare_live_performance.py",
+                    "--current",
+                    str(current_path),
+                    "--output",
+                    str(output_path),
+                ],
+            ):
+                self.assertEqual(main(), 0)
+
+            historical = json.loads(output_path.read_text(encoding="utf-8"))[
+                "historicalComparison"
+            ]
+            self.assertEqual(historical["status"], "baseline-established")
+            self.assertEqual(historical["baseline"], historical["current"])
+            self.assertEqual(
+                set(historical["current"]),
+                {
+                    "runtimeRole",
+                    "projectVersion",
+                    "benchmarkHost",
+                    "deployment",
+                    "commit",
+                    "runId",
+                    "environment",
+                },
+            )
+
     def test_invalid_case_fails_campaign_without_dropping_evidence(self) -> None:
         current = campaign("invalid", 2.0, 0.5)
         current["contract"]["baselineEligible"] = False

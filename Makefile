@@ -83,6 +83,13 @@ performance-contract-check:
 	python3 harness/environments/azure/performance/overmesh_live_performance.py \
 		--contract harness/performance/live-v5.1-listing-confirmation.toml \
 		--plan >/dev/null
+	python3 harness/environments/azure/performance/overmesh_live_performance.py \
+		--contract harness/performance/live-v6-certified-current-matrix.toml \
+		--plan >/dev/null
+	python3 harness/environments/azure/performance/client_observed_campaign.py \
+		--contract harness/performance/client-observed-v1.toml \
+		--check-publication \
+		--plan >/dev/null
 	PYTHONPATH=harness/environments/azure/performance \
 		python3 -m unittest discover \
 		-s harness/environments/azure/performance \
@@ -143,6 +150,9 @@ test-live-azure-reconciliation:
 
 test-live-azure-performance:
 	./harness/environments/azure/validate-live-performance.sh
+
+test-live-azure-client-observed:
+	./harness/environments/azure/validate-client-observed.sh
 
 test-live-azure:
 	$${HARNESS_LIVE_AZURE_COMMAND:-./harness/environments/azure/validate-live-azure.sh}

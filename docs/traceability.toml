@@ -145,6 +145,10 @@ path = "harness/artifacts/README.md"
 reason = "Operator description of retained release evidence and private raw retention."
 
 [[excluded]]
+path = "harness/artifacts/client-observed/README.md"
+reason = "Operator description of the client-observed campaign protocol and its retained bundles."
+
+[[excluded]]
 path = "harness/artifacts/live/0.11.0/performance-v011-v5.1-analysis.md"
 reason = "Release evidence analysis retained for peer review, not project documentation."
 
