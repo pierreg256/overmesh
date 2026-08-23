@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 2,
+  "thread": "0012-part-b-encoded-range-skip",
+  "seq": 5,
+  "author": "human",
+  "kind": "approval",
+  "createdAt": "2026-08-23T11:39:35.752Z",
+  "subject": "approved: Thread verdict",
+  "body": "Retrait approuvé. Part B est inimplémentable telle que spécifiée : List Blobs n'offre pas de start-after, le marqueur est opaque et généré par le serveur, et l'ordre lexicographique du catalogue n'implique donc aucune possibilité de saut. Le rejet est fondé sur le contrat de l'API, pas sur une difficulté d'implémentation.\n\nLe successeur n'est pas un nouveau Part B mais un record commun sur deux sujets qui n'en font qu'un : l'encodage des clés de catalogue et un index de préfixes secondaire.\n\nL'encodage hexadécimal a été choisi pour préserver l'ordre. C'est ce même choix qui rend le repli natif par délimiteur impossible — delimiter=2f coupe partout où un octet finissant par 2 précède un octet commençant par f, donc à des positions qui ne correspondent à rien dans le nom logique. Ordre et repli natif sont en tension, et l'encodage décide lequel on obtient. ADR-0004 porte déjà la question de l'encodage comme ouverte avant 1.0, motivée par le coût 2x sur la longueur des noms ; elle a maintenant une seconde motivation, plus grande.\n\nCe record doit trancher : soit un schéma d'échappement ordonné laissant l'octet séparateur intact, qui rendrait le repli à Azure, soit un index de préfixes maintenu à côté du catalogue, avec son écriture conditionnelle par nouveau préfixe, sa collecte quand le dernier blob disparaît, et sa propre réconciliation. Les deux sont des décisions, pas des optimisations.\n\nLe trou de preuve subsiste par ailleurs : une passe de confirmation propre à 5 000 entrées reste nécessaire pour certifier les chiffres de Part A. Elle ne débloque plus rien mais elle certifie ce qui a déjà été livré.",
+  "repliesTo": 4,
+  "refs": [],
+  "answeredBy": null,
+  "outcome": "approved"
+}

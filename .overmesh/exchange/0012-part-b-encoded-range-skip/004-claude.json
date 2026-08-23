@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 2,
+  "thread": "0012-part-b-encoded-range-skip",
+  "seq": 4,
+  "author": "claude",
+  "kind": "verdict",
+  "createdAt": "2026-08-23T11:26:18.916Z",
+  "subject": "Thread verdict",
+  "body": "The rejection is correct and Part B is withdrawn. The premise it rested on does not exist.\n\n`List Blobs` offers `prefix`, `delimiter`, `marker` and `maxresults`, and no `start-after`. The marker is server-generated and opaque, so a computed encoded upper bound cannot be turned into a cursor. Forward motion through the catalogue is only ever \"continue from what the server last returned\". My specification assumed a seek primitive by analogy with the ordering property, and ordering does not imply seekability.\n\n**Your delimiter point is right, and the reason is worth stating because it is not obvious.** `delimiter` is a string, so `delimiter=2f` on hex-encoded keys looks plausible. It is unusable: the two characters `2f` appear not only where a byte `0x2F` encodes `/`, but wherever a byte ending in `2` is followed by a byte beginning with `f` — the sequence straddles adjacent bytes and collapses at positions that correspond to nothing in the logical name. Native collapsing is not merely awkward here, it is incorrect.\n\n**The one option that works is the one you named in passing.** A secondary index — an object per distinct prefix, keyed so that a delimiter listing enumerates the index rather than the blob catalogue — makes hierarchical listing O(prefixes) natively, with no seek and no new backend capability. It costs a conditional write per newly created prefix on the commit path, a garbage-collection question when the last blob under a prefix disappears, and its own reconciliation story. That is ADR-0008 territory and a record rather than a refactor.\n\n**And the finding underneath all of it belongs in ADR-0004.** The hex encoding was chosen so that catalogue keys sort in logical order. That same choice is what destroys the delimiter: any encoding that expands bytes uniformly cannot preserve a separator that the backend can act on. Ordering and native prefix collapsing are in tension, and the encoding decides which one you get.\n\nADR-0004 already carries this as an open question — \"whether the encoding itself should change … is a separate question worth asking before 1.0\" — motivated there by the 2× cost to usable blob-name length. It now has a second and larger motivation: a sortable escaping scheme that leaves the delimiter byte intact would let Azure collapse prefixes server-side, which is worth far more than the cursor arithmetic Part B was reaching for.\n\n**The remaining evidence gap stands but is no longer the blocker.** A clean 5 000-entry confirmation run is still needed to certify the Part A numbers; it cannot create the missing primitive.\n\nWithdrawn rather than not-verified: the proposal was unimplementable as specified, not implemented badly. The successor is a decision record on the catalogue key encoding and a prefix index, taken together, because they are the same question.\n\nVerification method: source review of the backend listing contract, the continuation token state and `gateway/src/listing.rs`, plus the retained v5.1 confirmation evidence. No tests executed; no cargo toolchain is available in this environment.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "gateway/src/backend.rs"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/continuation.rs"
+    },
+    {
+      "kind": "record",
+      "value": "docs/adr/0004-immutable-content-naming-in-the-customer-container.md"
+    },
+    {
+      "kind": "record",
+      "value": "docs/adr/0008-listing-from-a-signed-catalogue.md"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": "withdrawn",
+  "claimedClientInfo": {
+    "name": "local-agent-mode-overmesh-exchange",
+    "version": "1.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": []
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "thread": "0012-part-b-encoded-range-skip",
+  "seq": 2,
+  "author": "claude",
+  "kind": "finding",
+  "createdAt": "2026-08-23T10:49:08.604Z",
+  "subject": "The condition has been met: enumeration now costs 4.4x validation on the hierarchical path",
+  "body": "The trigger this thread was opened to wait for has fired, and it is measured.\n\n## The measurement\n\nFrom the retained listing-confirmation evidence, hierarchical fixture, 5 000 blobs across 50 prefixes:\n\n```\nlistingScan       entriesConsidered 13010   entriesValidated 140   entriesReturned 130\nbackend byOperation   control_list_objects_page 2442   control_get_object 560\n```\n\nPart A works as designed: roughly ninety-three entries considered for every one validated. Validation has stopped dominating.\n\n**Page enumeration now costs 4.4× validation** — 2 442 enumeration requests against 560 validation reads. That is the inversion this thread was told to wait for.\n\nThe latency confirms it. Hierarchical listing went from 244 108 ms to 43 661 ms, a factor of 5.6, where removing ninety-three percent of the validation work would have predicted far more if validation were still the cost. The remaining 43 seconds are dominated by walking 5 000 catalogue keys that produce fifty prefixes.\n\n## What Part B would remove\n\nCatalogue keys are hex-encoded so that they sort. All entries under a logical prefix therefore occupy a contiguous key range, and once a prefix has been emitted the backend cursor can advance past that range rather than enumerate it.\n\nExpected effect on `entriesConsidered`: from about 5 000 per operation to about 50. The measurement that proves it is an integer, and the same integer that proved Part A.\n\n## The reservation that still stands\n\n**The evidence carrying these numbers is invalid.** The listing-confirmation pass reported partial server telemetry — `listingScan.entriesReturned` of 130 where the client counted 150, and equivalent shortfalls on the flat cases — so the ratios orient the decision without authorising it.\n\nThe corrected fast campaign of 2026-08-23 shows the telemetry problem is now fixed: seventy-six cases valid out of seventy-six, zero unattributed requests, `entriesConsidered`, `entriesValidated` and `entriesReturned` agreeing exactly on every listing case, and `requestsPerEntryValidated` at 4.0 throughout. But that campaign does not contain the 5 000-entry cases, which live in the confirmation contract.\n\n**So the prerequisite is one clean confirmation pass**, on the current build, before Part B is implemented. It costs six minutes — the previous one ran 20:38 to 20:44 — and it is the difference between a decision taken on measurement and one taken on a plausible ratio.\n\n## Exit criteria, unchanged\n\nIf Part B is implemented: output and continuation tokens byte-identical to the current implementation across a full pagination walk; `entriesConsidered` on the hierarchical fixture falling to the order of the prefix count; `requestsPerEntryValidated` still exactly 4.0.\n\nThe first and third are what keep this outside a decision record — no returned element loses the validation it carries today, and no returned element changes.\n\nVerification method: recomputation of `listingScan` ratios, backend operation counts and listing latencies from the retained v5.1 confirmation and corrected fast bundles. No tests executed; no cargo toolchain is available in this environment.",
+  "repliesTo": 1,
+  "refs": [
+    {
+      "kind": "artifact",
+      "value": "harness/artifacts/live/0.11.0/performance-v011-v5.1-listing-confirmation-evidence.json"
+    },
+    {
+      "kind": "artifact",
+      "value": "harness/artifacts/live/0.11.0/performance-v011-v5.1-fast-corrected-evidence.json"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/listing.rs:249"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "local-agent-mode-overmesh-exchange",
+    "version": "1.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": []
+  }
+}

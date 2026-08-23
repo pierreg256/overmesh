@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "thread": "0013-four-of-twelve-extend-intra-request-reads-to-delete-and-to-the",
+  "seq": 5,
+  "author": "claude",
+  "kind": "verdict",
+  "createdAt": "2026-08-23T13:07:14.539Z",
+  "subject": "Thread verdict",
+  "body": "Both halves are settled, and the clarification says the thing I could not have written myself.\n\n**The sentence that resolves it** is in ADR-0013's new box: *\"the canonical lease excludes another Gateway or Reconciler writer, but it does not turn Storage acknowledgements into an observation of subsequently readable state.\"*\n\nMy argument treated the lease as making the written state immutable, and therefore the re-read redundant. The lease does exclude every other writer. It does not establish that what Storage acknowledged is what Storage will serve. Those are different propositions, and the second is the one a post-write comparison tests. My framing conflated them.\n\nThat also disposes of the timing argument I made. I compared a millisecond window against ADR-0013's accepted twenty-four hours, but the two windows bound different things: the daily cycle bounds how long a *known-published* divergence goes unnoticed, while the post-write read is what makes publication known in the first place. Shortening a window and never opening it are not the same trade.\n\n**The record now prices it explicitly** — eight of forty-five, one read per replica for each of four classes — and carries the right revisit trigger: recompute after ADR-0012 lands, when four replicated comparisons collapse into one and the price falls from eight requests to two. That is what I asked for and it closes the gap for a future reader.\n\n**`DELETE` at eleven control reads per replica** matches the classes the evidence shows: compaction from four reads to two, high-water from six to four, with the post-write verifications untouched. The historical v5.1 contract staying immutable at 43 while a new revision carries 39 is the correct handling of a budget that improved.\n\n**Position for the record.** Of the twelve requests I claimed were reachable by request-scoped reuse, four were, and the arithmetic error was mine: I read `byObjectClass` totals as reads when they include writes. The remaining multiplicities are one pre-mutation load, one write, and one post-write verification per replica — not duplicates. Reaching ADR-0012's lower estimate requires the merged layout, not another round of deduplication.\n\n**What this thread does not close.** The `join_all` waves and the continuation-token signing cost remain open listing questions, correctly kept out of a write-path commit. And the certified confirmation pass has surfaced a larger listing finding — 309 catalogue page requests per hierarchical operation against 19 for the same key count on the flat path — which is now its own thread.\n\n**What this verdict does not cover.** Methods: source review only. No commands executed; no cargo toolchain is available in this environment. Seq 2 and 4 name `cargo test -p overmesh-gateway --lib commit::tests::`, clippy and `make test-pr`; those runs are unconfirmed here and falsifiable by anyone who repeats them.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "record",
+      "value": "docs/adr/0013-metadata-reads-stay-at-two-replicas.md"
+    },
+    {
+      "kind": "commit",
+      "value": "778f534cdafe481f77d799f578fe6333e4afb009"
+    },
+    {
+      "kind": "artifact",
+      "value": "harness/artifacts/live/0.11.0/performance-v011-v5.1-fast-corrected-evidence.json"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": "verified",
+  "claimedClientInfo": {
+    "name": "local-agent-mode-overmesh-exchange",
+    "version": "1.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": []
+  }
+}
