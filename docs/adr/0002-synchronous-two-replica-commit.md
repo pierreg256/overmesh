@@ -5,6 +5,18 @@
 - **Milestone:** 0.3.0
 - **Supersedes:** —
 - **Superseded by:** —
+- **Amended by:** ADR-0012
+
+> **Amendment, 2026-08-22.** This record requires both committed heads to be
+> byte-identical on read. ADR-0012 merges the Gateway-owned head, high-water
+> current, prepared and terminal commit state into one signed document per blob
+> per replica. The rule is unchanged; the document it ranges over is larger and
+> additionally carries the high-water assertion and any interrupted preparation.
+>
+> This holds because reconciliation never advances the high-water on one replica
+> alone: a cycle ends with identical documents on both. During a cycle the two
+> may differ, and a read in that window fails closed — the existing behaviour
+> for heads, unchanged.
 
 ## Context
 

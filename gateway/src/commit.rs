@@ -19,11 +19,11 @@ use crate::{
     catalog::{CatalogError, catalog_key, validate_catalog_entry},
     identity::{ControlToken, SharedControlTokenProvider},
     manifest::{
-        BLOCK_MANIFEST_PAGE_SIZE, BlockDescriptor, BlockManifest, BlockManifestPage,
-        BlockManifestPageReference, CommitManifest, HistoryCompactionCheckpoint, ManifestError,
-        ManifestSigner, ManifestState, ReconciliationRecord, ReconciliationRecordAction,
-        SignatureDomain, SignedDocument, commit_manifest_object_prefix, logical_etag, sha256_bytes,
-        validate_block_manifest_layout, validate_block_manifest_page,
+        BLOCK_MANIFEST_PAGE_SIZE, BlobCommitState, BlockDescriptor, BlockManifest,
+        BlockManifestPage, BlockManifestPageReference, CommitManifest, HistoryCompactionCheckpoint,
+        ManifestError, ManifestSigner, ManifestState, ReconciliationRecord,
+        ReconciliationRecordAction, SignatureDomain, SignedDocument, logical_etag, sha256_bytes,
+        validate_blob_commit_state, validate_block_manifest_layout, validate_block_manifest_page,
     },
     read::ReadService,
     resource::{LogicalBlobId, stable_component},
@@ -120,22 +120,25 @@ impl Default for CommitServiceOptions {
     }
 }
 
-pub(crate) struct LoadedHead {
-    pub(crate) signed: SignedDocument<CommitManifest>,
+pub(crate) struct LoadedState {
+    pub(crate) signed: SignedDocument<BlobCommitState>,
     pub(crate) bytes: Vec<u8>,
     pub(crate) backend_etag: Option<String>,
+}
+
+impl LoadedState {
+    pub(crate) fn current(&self) -> Option<&CommitManifest> {
+        self.signed.payload.current()
+    }
+
+    pub(crate) fn prepared(&self) -> Option<&CommitManifest> {
+        self.signed.payload.prepared()
+    }
 }
 
 struct EncodedBlockPage {
     reference: BlockManifestPageReference,
     bytes: Vec<u8>,
-}
-
-#[derive(Clone)]
-struct LoadedHighWater {
-    signed: SignedDocument<CommitManifest>,
-    bytes: Vec<u8>,
-    backend_etag: Option<String>,
 }
 
 #[derive(Clone)]
@@ -145,10 +148,20 @@ pub(crate) struct LoadedCompactionCheckpoint {
     pub(crate) backend_etag: Option<String>,
 }
 
-pub(crate) struct ValidatedHighWaterSnapshot {
-    compaction: Option<LoadedCompactionCheckpoint>,
-    primary_current: Option<LoadedHighWater>,
-    secondary_current: Option<LoadedHighWater>,
+/// The terminal form of the generation a merged commit-state document
+/// publishes. It is the durable high-water history entry, which never carries a
+/// preparation, so an idempotent replay can republish it safely.
+pub(crate) struct TerminalCommitState {
+    pub(crate) signed: SignedDocument<BlobCommitState>,
+    pub(crate) bytes: Vec<u8>,
+}
+
+/// The Reconciler-owned safety state validated once under the canonical commit
+/// lease and reused for the whole request. ADR-0012 makes this reuse sound by
+/// making the lease canonical; ADR-0010 keeps the state itself replicated.
+pub(crate) struct ValidatedCommitContext {
+    pub(crate) compaction: Option<LoadedCompactionCheckpoint>,
+    pub(crate) current_terminal: Option<TerminalCommitState>,
 }
 
 mod delete;
@@ -158,6 +171,7 @@ mod quarantine;
 mod recovery;
 mod write;
 
+pub(crate) use high_water::validate_publication_floor;
 pub(crate) use quarantine::ensure_not_quarantined;
 
 impl CommitCoordinator {
@@ -356,10 +370,32 @@ impl CommitService {
     }
 }
 
-pub(crate) fn strict_current_head<'a>(
-    primary: Option<&'a LoadedHead>,
-    secondary: Option<&'a LoadedHead>,
-) -> Result<Option<&'a LoadedHead>, CommitError> {
+pub(crate) fn blob_state_key(path_hash: &str) -> String {
+    format!("heads/{path_hash}.json")
+}
+
+/// The write path resolves the generation both replicas publish. ADR-0002, as
+/// amended by ADR-0012, requires byte-identical merged documents on read; under
+/// the canonical commit lease a divergence confined to an interrupted
+/// preparation is recoverable and is re-driven rather than failed closed.
+pub(crate) fn resolve_write_state<'a>(
+    primary: Option<&'a LoadedState>,
+    secondary: Option<&'a LoadedState>,
+) -> Result<Option<&'a LoadedState>, CommitError> {
+    match (primary, secondary) {
+        (None, None) => Ok(None),
+        (Some(state), None) | (None, Some(state)) if state.current().is_none() => Ok(None),
+        (Some(primary), Some(secondary)) if primary.current() == secondary.current() => {
+            Ok(primary.current().is_some().then_some(primary))
+        }
+        _ => Err(CommitError::ReplicaDrift),
+    }
+}
+
+pub(crate) fn strict_current_state<'a>(
+    primary: Option<&'a LoadedState>,
+    secondary: Option<&'a LoadedState>,
+) -> Result<Option<&'a LoadedState>, CommitError> {
     match (primary, secondary) {
         (None, None) => Ok(None),
         (Some(primary), Some(secondary)) if primary.bytes == secondary.bytes => Ok(Some(primary)),
@@ -367,36 +403,100 @@ pub(crate) fn strict_current_head<'a>(
     }
 }
 
-pub(crate) async fn load_head(
-    backend: &dyn ReplicaBackend,
-    head_key: &str,
-    control_token: &ControlToken,
+/// Verifies a merged commit-state document. Every element ADR-0012 merged is
+/// verified here once: canonical encoding, the signature that covers the
+/// current generation, the high-water assertion it carries, any interrupted
+/// preparation, and the binding to its own object key.
+pub(crate) fn verify_state_bytes(
+    bytes: &[u8],
+    state_key: &str,
     signer: &dyn ManifestSigner,
-) -> Result<Option<LoadedHead>, CommitError> {
-    let Some(object) = backend.control_get_object(head_key, control_token).await? else {
-        return Ok(None);
-    };
-    let signed = SignedDocument::<CommitManifest>::from_bytes(&object.bytes)?;
+) -> Result<SignedDocument<BlobCommitState>, CommitError> {
+    let signed = SignedDocument::<BlobCommitState>::from_bytes(bytes)?;
+    if signed.canonical_bytes()? != bytes {
+        return Err(CommitError::VerificationFailed);
+    }
     signed.verify(
-        SignatureDomain::CommitManifest,
+        SignatureDomain::BlobCommitState,
         &signed.payload.signing_key_id,
         signer,
     )?;
-    if !matches!(
-        signed.payload.state,
-        ManifestState::Committed | ManifestState::Tombstoned
-    ) {
+    validate_blob_commit_state(&signed.payload)?;
+    if blob_state_key(&signed.payload.path_hash) != state_key {
         return Err(CommitError::VerificationFailed);
     }
-    if signed.payload.state == ManifestState::Tombstoned {
-        validate_tombstone_manifest(&signed.payload)?;
+    if signed
+        .payload
+        .current()
+        .is_some_and(|current| current.state == ManifestState::Tombstoned)
+    {
+        validate_tombstone_manifest(signed.payload.current().expect("checked current"))?;
     }
+    Ok(signed)
+}
 
-    Ok(Some(LoadedHead {
+/// Loads and fully verifies the merged commit-state document.
+pub(crate) async fn load_state(
+    backend: &dyn ReplicaBackend,
+    state_key: &str,
+    control_token: &ControlToken,
+    signer: &dyn ManifestSigner,
+) -> Result<Option<LoadedState>, CommitError> {
+    let Some(object) = backend.control_get_object(state_key, control_token).await? else {
+        return Ok(None);
+    };
+    let signed = verify_state_bytes(&object.bytes, state_key, signer)?;
+    Ok(Some(LoadedState {
         signed,
         bytes: object.bytes,
         backend_etag: object.etag,
     }))
+}
+
+/// Publishes a merged commit-state document to both replicas under the
+/// conditional transition ADR-0012 requires, then proves under ADR-0013 that
+/// both replicas hold byte-identical bytes.
+pub(crate) async fn publish_blob_state(
+    primary: &dyn ReplicaBackend,
+    secondary: &dyn ReplicaBackend,
+    state_key: &str,
+    bytes: &[u8],
+    primary_condition: PutCondition,
+    secondary_condition: PutCondition,
+    control_token: &ControlToken,
+) -> Result<(Option<String>, Option<String>), CommitError> {
+    let (primary_publish, secondary_publish) = tokio::join!(
+        primary.control_put_bytes(
+            state_key,
+            bytes.to_vec(),
+            "application/json",
+            primary_condition,
+            control_token
+        ),
+        secondary.control_put_bytes(
+            state_key,
+            bytes.to_vec(),
+            "application/json",
+            secondary_condition,
+            control_token
+        )
+    );
+    let (primary_result, secondary_result) = match (primary_publish, secondary_publish) {
+        (Ok(primary_result), Ok(secondary_result)) => (primary_result, secondary_result),
+        (Err(first), Err(second)) if is_condition_error(&first) && is_condition_error(&second) => {
+            return Err(CommitError::ConditionFailed);
+        }
+        (Err(error), Ok(_)) | (Ok(_), Err(error)) => {
+            warn!(error = %error, "only one replica published the merged commit state");
+            return Err(CommitError::Ambiguous);
+        }
+        (Err(first), Err(second)) => {
+            warn!(primary_error = %first, secondary_error = %second, "both commit state publications failed");
+            return Err(CommitError::Backend(first));
+        }
+    };
+    verify_identical_objects(primary, secondary, state_key, bytes, control_token).await?;
+    Ok((primary_result.etag, secondary_result.etag))
 }
 
 fn validate_tombstone_manifest(manifest: &CommitManifest) -> Result<(), CommitError> {
@@ -448,11 +548,34 @@ fn delete_result(
     })
 }
 
-pub(crate) fn head_condition(head: Option<&LoadedHead>) -> PutCondition {
-    match head.and_then(|value| value.backend_etag.clone()) {
-        Some(etag) => PutCondition::IfMatch(etag),
-        None => PutCondition::IfAbsent,
+/// Adopts an interrupted preparation for the same write so a retry re-publishes
+/// the identical generation. ADR-0012 makes the prepared manifest a state of the
+/// merged document, and the absence of an overwrite is the interruption signal.
+pub(crate) fn adopt_interrupted_preparation(
+    primary_state: Option<&LoadedState>,
+    secondary_state: Option<&LoadedState>,
+    prepared: &mut CommitManifest,
+) -> Result<(), CommitError> {
+    let existing = primary_state
+        .and_then(LoadedState::prepared)
+        .or_else(|| secondary_state.and_then(LoadedState::prepared));
+    let Some(existing) = existing else {
+        return Ok(());
+    };
+    if existing.write_id != prepared.write_id {
+        return Ok(());
     }
+    prepared.committed_at_unix_ms = existing.committed_at_unix_ms;
+    prepared.deleted_at_unix_ms = existing.deleted_at_unix_ms;
+    if existing == prepared {
+        Ok(())
+    } else {
+        Err(CommitError::IdempotencyConflict)
+    }
+}
+
+pub(crate) fn state_condition(state: Option<&LoadedState>) -> PutCondition {
+    head_condition_from_etag(state.and_then(|value| value.backend_etag.as_deref()))
 }
 
 fn head_condition_from_object(object: Option<&ObjectValue>) -> PutCondition {
@@ -549,47 +672,11 @@ pub(crate) async fn verify_identical_objects(
     }
 }
 
-pub(crate) async fn load_or_repair_commit_manifest(
-    primary: &dyn ReplicaBackend,
-    secondary: &dyn ReplicaBackend,
-    object_key: &str,
-    control_token: &ControlToken,
-    signer: &dyn ManifestSigner,
-) -> Result<Option<(SignedDocument<CommitManifest>, Vec<u8>)>, CommitError> {
-    let (primary_value, secondary_value) = tokio::try_join!(
-        primary.control_get_object(object_key, control_token),
-        secondary.control_get_object(object_key, control_token)
-    )?;
-    let (bytes, repair_backend) = match (&primary_value, &secondary_value) {
-        (None, None) => return Ok(None),
-        (Some(primary), Some(secondary)) if primary.bytes == secondary.bytes => {
-            (primary.bytes.clone(), None)
-        }
-        (Some(value), None) => (value.bytes.clone(), Some(secondary)),
-        (None, Some(value)) => (value.bytes.clone(), Some(primary)),
-        (Some(_), Some(_)) => return Err(CommitError::VerificationFailed),
-    };
-    let signed = SignedDocument::<CommitManifest>::from_bytes(&bytes)?;
-    if signed.canonical_bytes()? != bytes {
-        return Err(CommitError::VerificationFailed);
-    }
-    signed.verify(
-        SignatureDomain::CommitManifest,
-        &signed.payload.signing_key_id,
-        signer,
-    )?;
-    if let Some(backend) = repair_backend {
-        control_put_bytes_idempotent(backend, object_key, bytes.clone(), control_token).await?;
-    }
-    verify_identical_objects(primary, secondary, object_key, &bytes, control_token).await?;
-    Ok(Some((signed, bytes)))
-}
-
 pub(crate) async fn publish_catalog_current(
     primary: &dyn ReplicaBackend,
     secondary: &dyn ReplicaBackend,
     logical_blob: &LogicalBlobId,
-    committed: &SignedDocument<CommitManifest>,
+    committed: &SignedDocument<BlobCommitState>,
     committed_bytes: &[u8],
     control_token: &ControlToken,
     signer: &dyn ManifestSigner,
@@ -604,7 +691,7 @@ pub(crate) async fn publish_catalog_current(
         replica_ids,
         signer,
     )?;
-    if expected.signed_head.payload != committed.payload {
+    if expected.signed_state.payload != committed.payload {
         return Err(CommitError::VerificationFailed);
     }
     let (primary_current, secondary_current) = tokio::try_join!(
@@ -687,11 +774,15 @@ fn validate_catalog_predecessors(
     object_key: &str,
     primary: Option<&ObjectValue>,
     secondary: Option<&ObjectValue>,
-    expected: &SignedDocument<CommitManifest>,
+    expected: &SignedDocument<BlobCommitState>,
     expected_bytes: &[u8],
     replica_ids: [&str; 2],
     signer: &dyn ManifestSigner,
 ) -> Result<(), CommitError> {
+    let expected_head = expected
+        .payload
+        .current()
+        .ok_or(CommitError::VerificationFailed)?;
     let mut predecessor: Option<&[u8]> = None;
     for current in [primary, secondary].into_iter().flatten() {
         if current.bytes == expected_bytes {
@@ -705,9 +796,15 @@ fn validate_catalog_predecessors(
             replica_ids,
             signer,
         )?;
-        let old = &validated.signed_head.payload;
-        if old.logical_version.saturating_add(1) != expected.payload.logical_version
-            || expected.payload.previous_logical_etag.as_deref() != Some(old.logical_etag.as_str())
+        let old = validated.head().ok_or(CommitError::VerificationFailed)?;
+        // ADR-0012 removes the immutable terminal manifest, so a retried write
+        // re-signs the same generation. Two signatures of one generation are the
+        // same catalogue truth, not a conflicting predecessor.
+        if old == expected_head {
+            continue;
+        }
+        if old.logical_version.saturating_add(1) != expected_head.logical_version
+            || expected_head.previous_logical_etag.as_deref() != Some(old.logical_etag.as_str())
         {
             return Err(CommitError::VerificationFailed);
         }

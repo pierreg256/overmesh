@@ -11,26 +11,26 @@ impl CommitCoordinator {
         control_token: &ControlToken,
     ) -> Result<CommitResult, CommitError> {
         let path_hash = logical_blob.path_hash();
-        let head_key = format!("heads/{path_hash}.json");
-        let (primary_head, secondary_head) = tokio::try_join!(
-            load_head(
+        let state_key = blob_state_key(&path_hash);
+        let (primary_state, secondary_state) = tokio::try_join!(
+            load_state(
                 self.primary.as_ref(),
-                &head_key,
+                &state_key,
                 control_token,
                 self.signer.as_ref()
             ),
-            load_head(
+            load_state(
                 self.secondary.as_ref(),
-                &head_key,
+                &state_key,
                 control_token,
                 self.signer.as_ref()
             )
         )?;
         if let Some(result) = self
             .recover_partial_publication(
-                primary_head.as_ref(),
-                secondary_head.as_ref(),
-                &head_key,
+                primary_state.as_ref(),
+                secondary_state.as_ref(),
+                &state_key,
                 logical_blob,
                 principal,
                 write_id,
@@ -41,72 +41,88 @@ impl CommitCoordinator {
         {
             return Ok(result);
         }
-        let current = strict_current_head(primary_head.as_ref(), secondary_head.as_ref())?;
+        let current_state = resolve_write_state(primary_state.as_ref(), secondary_state.as_ref())?;
+        let current = current_state.and_then(LoadedState::current);
         if let Some(head) = current
-            && head.signed.payload.write_id == write_id
+            && head.write_id == write_id
         {
-            if head.signed.payload.content_sha256 == content.content_sha256
-                && head.signed.payload.state == ManifestState::Committed
+            if head.content_sha256 == content.content_sha256
+                && head.state == ManifestState::Committed
             {
-                self.authorize_replay(principal, &head.signed.payload)
-                    .await?;
-                let _ = Self::validate_or_repair_high_water(
+                // Authorization precedes every repair a replay performs.
+                self.authorize_replay(principal, head).await?;
+                let context = Self::validate_commit_context(
                     self.primary.as_ref(),
                     self.secondary.as_ref(),
                     &path_hash,
                     logical_blob.canonical(),
                     self.ring_version,
-                    current,
+                    current_state,
                     control_token,
                     self.signer.as_ref(),
                 )
                 .await?;
-                // Listing exposes this generation only after both heads contain these exact bytes.
+                // A replay republishes the terminal form of the published
+                // generation. The loaded document may still carry an unrelated
+                // interrupted preparation, which is not catalogue or history
+                // truth.
+                let terminal = context
+                    .current_terminal
+                    .as_ref()
+                    .ok_or(CommitError::VerificationFailed)?;
+                // Listing exposes this generation only after both replicas hold
+                // these exact merged bytes.
                 publish_catalog_current(
                     self.primary.as_ref(),
                     self.secondary.as_ref(),
                     logical_blob,
-                    &head.signed,
-                    &head.bytes,
+                    &terminal.signed,
+                    &terminal.bytes,
                     control_token,
                     self.signer.as_ref(),
                 )
                 .await?;
+                Self::publish_state_history(
+                    self.primary.as_ref(),
+                    self.secondary.as_ref(),
+                    &path_hash,
+                    head,
+                    &terminal.bytes,
+                    control_token,
+                )
+                .await?;
                 return Ok(CommitResult {
-                    logical_version: head.signed.payload.logical_version,
-                    logical_etag: head.signed.payload.logical_etag.clone(),
+                    logical_version: head.logical_version,
+                    logical_etag: head.logical_etag.clone(),
                     write_id: write_id.to_owned(),
                     idempotent_replay: true,
                 });
             }
             return Err(CommitError::IdempotencyConflict);
         }
-        let validated_high_water = Self::validate_or_repair_high_water(
+        let context = Self::validate_commit_context(
             self.primary.as_ref(),
             self.secondary.as_ref(),
             &path_hash,
             logical_blob.canonical(),
             self.ring_version,
-            current,
+            current_state,
             control_token,
             self.signer.as_ref(),
         )
         .await?;
         match (&logical_condition, current) {
             (LogicalCondition::None, _) | (LogicalCondition::IfAbsent, None) => {}
-            (LogicalCondition::IfAbsent, Some(head))
-                if head.signed.payload.state == ManifestState::Tombstoned => {}
+            (LogicalCondition::IfAbsent, Some(head)) if head.state == ManifestState::Tombstoned => {
+            }
             (LogicalCondition::IfAbsent, Some(_)) => return Err(CommitError::ConditionFailed),
             (LogicalCondition::IfMatch(expected), Some(head))
-                if head.signed.payload.state == ManifestState::Committed
-                    && &head.signed.payload.logical_etag == expected => {}
+                if head.state == ManifestState::Committed && &head.logical_etag == expected => {}
             (LogicalCondition::IfMatch(_), _) => return Err(CommitError::ConditionFailed),
         }
 
-        let logical_version = current
-            .map(|head| head.signed.payload.logical_version + 1)
-            .unwrap_or(1);
-        let previous_logical_etag = current.map(|head| head.signed.payload.logical_etag.clone());
+        let logical_version = current.map(|head| head.logical_version + 1).unwrap_or(1);
+        let previous_logical_etag = current.map(|head| head.logical_etag.clone());
         let logical_etag = logical_etag(
             logical_blob.canonical(),
             logical_version,
@@ -122,8 +138,6 @@ impl CommitCoordinator {
                 .unwrap_or(&content.content_sha256)
         );
         let block_manifest_key = format!("{version_prefix}/block-manifest.json");
-        let prepared_manifest_key = format!("{version_prefix}/prepared.json");
-        let committed_manifest_key = format!("{version_prefix}/committed.json");
 
         let (signed_block, block_bytes) = Self::load_or_create_block_manifest(
             self.primary.as_ref(),
@@ -179,97 +193,33 @@ impl CommitCoordinator {
             prepared_replicas: Vec::new(),
             signing_key_id: self.signer.key_id().to_owned(),
         };
-        let (signed_prepared, prepared_bytes) = if let Some((signed, bytes)) =
-            load_or_repair_commit_manifest(
-                self.primary.as_ref(),
-                self.secondary.as_ref(),
-                &prepared_manifest_key,
-                control_token,
-                self.signer.as_ref(),
-            )
-            .await?
-        {
-            prepared_payload.committed_at_unix_ms = signed.payload.committed_at_unix_ms;
-            if signed.payload != prepared_payload {
-                return Err(CommitError::IdempotencyConflict);
-            }
-            (signed, bytes)
-        } else {
-            let signed = SignedDocument::create(
-                prepared_payload,
-                SignatureDomain::CommitManifest,
-                self.signer.as_ref(),
-            )
-            .await?;
-            let bytes = signed.canonical_bytes()?;
-            tokio::try_join!(
-                control_put_bytes_idempotent(
-                    self.primary.as_ref(),
-                    &prepared_manifest_key,
-                    bytes.clone(),
-                    control_token
-                ),
-                control_put_bytes_idempotent(
-                    self.secondary.as_ref(),
-                    &prepared_manifest_key,
-                    bytes.clone(),
-                    control_token
-                )
-            )?;
-            (signed, bytes)
-        };
-        verify_identical_objects(
-            self.primary.as_ref(),
-            self.secondary.as_ref(),
-            &prepared_manifest_key,
-            &prepared_bytes,
-            control_token,
-        )
-        .await?;
-
+        adopt_interrupted_preparation(
+            primary_state.as_ref(),
+            secondary_state.as_ref(),
+            &mut prepared_payload,
+        )?;
         let committed_payload = CommitManifest {
             state: ManifestState::Committed,
             prepared_replicas: vec![self.primary.id().to_owned(), self.secondary.id().to_owned()],
-            ..signed_prepared.payload
+            ..prepared_payload.clone()
         };
-        let (signed_committed, committed_bytes) = if let Some((signed, bytes)) =
-            load_or_repair_commit_manifest(
-                self.primary.as_ref(),
-                self.secondary.as_ref(),
-                &committed_manifest_key,
+        validate_publication_floor(&committed_payload, current, context.compaction.as_ref())?;
+
+        let prepared_etags = self
+            .publish_prepared_state(
+                logical_blob,
+                &state_key,
+                current_state,
+                primary_state.as_ref(),
+                secondary_state.as_ref(),
+                prepared_payload,
                 control_token,
-                self.signer.as_ref(),
-            )
-            .await?
-        {
-            if signed.payload != committed_payload {
-                return Err(CommitError::IdempotencyConflict);
-            }
-            (signed, bytes)
-        } else {
-            let signed = SignedDocument::create(
-                committed_payload,
-                SignatureDomain::CommitManifest,
-                self.signer.as_ref(),
             )
             .await?;
-            let bytes = signed.canonical_bytes()?;
-            tokio::try_join!(
-                control_put_bytes_idempotent(
-                    self.primary.as_ref(),
-                    &committed_manifest_key,
-                    bytes.clone(),
-                    control_token
-                ),
-                control_put_bytes_idempotent(
-                    self.secondary.as_ref(),
-                    &committed_manifest_key,
-                    bytes.clone(),
-                    control_token
-                )
-            )?;
-            (signed, bytes)
-        };
+
+        let (signed_committed, committed_bytes) = self
+            .sign_commit_state(logical_blob, Some(committed_payload), None)
+            .await?;
 
         publish_catalog_current(
             self.primary.as_ref(),
@@ -282,76 +232,29 @@ impl CommitCoordinator {
         )
         .await?;
 
-        let primary_condition = head_condition(primary_head.as_ref());
-        let secondary_condition = head_condition(secondary_head.as_ref());
-        let (primary_publish, secondary_publish) = tokio::join!(
-            self.primary.control_put_bytes(
-                &head_key,
-                committed_bytes.clone(),
-                "application/json",
-                primary_condition,
-                control_token
-            ),
-            self.secondary.control_put_bytes(
-                &head_key,
-                committed_bytes.clone(),
-                "application/json",
-                secondary_condition,
-                control_token
-            )
-        );
-        match (primary_publish, secondary_publish) {
-            (Ok(_), Ok(_)) => {}
-            (Err(first), Err(second))
-                if is_condition_error(&first) && is_condition_error(&second) =>
-            {
-                return Err(CommitError::ConditionFailed);
-            }
-            (Err(error), Ok(_)) | (Ok(_), Err(error)) => {
-                warn!(error = %error, "only one replica published the committed head");
-                return Err(CommitError::Ambiguous);
-            }
-            (Err(first), Err(second)) => {
-                warn!(primary_error = %first, secondary_error = %second, "both head publications failed");
-                return Err(CommitError::Backend(first));
-            }
-        }
-
-        verify_identical_objects(
+        publish_blob_state(
             self.primary.as_ref(),
             self.secondary.as_ref(),
-            &head_key,
+            &state_key,
+            &committed_bytes,
+            PutCondition::IfMatch(prepared_etags.0.ok_or(CommitError::VerificationFailed)?),
+            PutCondition::IfMatch(prepared_etags.1.ok_or(CommitError::VerificationFailed)?),
+            control_token,
+        )
+        .await?;
+
+        Self::publish_state_history(
+            self.primary.as_ref(),
+            self.secondary.as_ref(),
+            &path_hash,
+            signed_committed
+                .payload
+                .current()
+                .ok_or(CommitError::VerificationFailed)?,
             &committed_bytes,
             control_token,
         )
         .await?;
-        match validated_high_water {
-            Some(snapshot) => {
-                Self::publish_high_water_with_snapshot(
-                    self.primary.as_ref(),
-                    self.secondary.as_ref(),
-                    &path_hash,
-                    &signed_committed,
-                    &committed_bytes,
-                    snapshot,
-                    control_token,
-                    self.signer.as_ref(),
-                )
-                .await?;
-            }
-            None => {
-                Self::publish_high_water(
-                    self.primary.as_ref(),
-                    self.secondary.as_ref(),
-                    &path_hash,
-                    &signed_committed,
-                    &committed_bytes,
-                    control_token,
-                    self.signer.as_ref(),
-                )
-                .await?;
-            }
-        }
 
         Ok(CommitResult {
             logical_version,
@@ -359,6 +262,67 @@ impl CommitCoordinator {
             write_id: write_id.to_owned(),
             idempotent_replay: false,
         })
+    }
+
+    /// Signs one merged commit-state document. ADR-0012 requires the current
+    /// generation, its high-water assertion and any preparation to be signed
+    /// together under the Gateway identity.
+    pub(in crate::commit) async fn sign_commit_state(
+        &self,
+        logical_blob: &LogicalBlobId,
+        current: Option<CommitManifest>,
+        prepared: Option<CommitManifest>,
+    ) -> Result<(SignedDocument<BlobCommitState>, Vec<u8>), CommitError> {
+        let state = BlobCommitState::new(
+            logical_blob.canonical(),
+            self.ring_version,
+            current,
+            prepared,
+            self.signer.key_id(),
+        );
+        validate_blob_commit_state(&state)?;
+        let signed = SignedDocument::create(
+            state,
+            SignatureDomain::BlobCommitState,
+            self.signer.as_ref(),
+        )
+        .await?;
+        let bytes = signed.canonical_bytes()?;
+        Ok((signed, bytes))
+    }
+
+    /// Moves the merged document into its `Prepared` state. The transition is
+    /// conditional on the loaded entity tag, so a concurrent writer cannot skip
+    /// preparation, and the returned entity tags make the commit transition
+    /// conditional on that preparation.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::commit) async fn publish_prepared_state(
+        &self,
+        logical_blob: &LogicalBlobId,
+        state_key: &str,
+        current_state: Option<&LoadedState>,
+        primary_state: Option<&LoadedState>,
+        secondary_state: Option<&LoadedState>,
+        prepared: CommitManifest,
+        control_token: &ControlToken,
+    ) -> Result<(Option<String>, Option<String>), CommitError> {
+        let (_, prepared_bytes) = self
+            .sign_commit_state(
+                logical_blob,
+                current_state.and_then(LoadedState::current).cloned(),
+                Some(prepared),
+            )
+            .await?;
+        publish_blob_state(
+            self.primary.as_ref(),
+            self.secondary.as_ref(),
+            state_key,
+            &prepared_bytes,
+            state_condition(primary_state),
+            state_condition(secondary_state),
+            control_token,
+        )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]

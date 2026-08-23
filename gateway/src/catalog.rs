@@ -2,8 +2,8 @@ use thiserror::Error;
 
 use crate::{
     manifest::{
-        CommitManifest, ManifestError, ManifestSigner, ManifestState, SignatureDomain,
-        SignedDocument, logical_etag, sha256_bytes,
+        BlobCommitState, CommitManifest, ManifestError, ManifestSigner, ManifestState,
+        SignatureDomain, SignedDocument, logical_etag, sha256_bytes, validate_blob_commit_state,
     },
     resource::{LogicalBlobId, LogicalResourceError},
 };
@@ -26,7 +26,16 @@ pub enum CatalogError {
 
 pub struct ValidatedCatalogEntry {
     pub logical_blob: LogicalBlobId,
-    pub signed_head: SignedDocument<CommitManifest>,
+    pub signed_state: SignedDocument<BlobCommitState>,
+}
+
+impl ValidatedCatalogEntry {
+    /// The committed generation the entry publishes. Catalogue entries are
+    /// terminal snapshots of the ADR-0012 commit-state document, so a validated
+    /// entry always carries one.
+    pub fn head(&self) -> Option<&CommitManifest> {
+        self.signed_state.payload.current()
+    }
 }
 
 pub fn catalog_key(logical_blob: &LogicalBlobId) -> String {
@@ -87,16 +96,29 @@ pub fn validate_catalog_entry_for_logical_blob(
     if object_key != catalog_key(logical_blob) {
         return Err(CatalogError::InvalidPath);
     }
-    let signed_head = SignedDocument::<CommitManifest>::from_bytes(bytes)?;
-    if signed_head.canonical_bytes()? != bytes {
+    let signed_state = SignedDocument::<BlobCommitState>::from_bytes(bytes)?;
+    if signed_state.canonical_bytes()? != bytes {
         return Err(CatalogError::VerificationFailed);
     }
-    signed_head.verify(
-        SignatureDomain::CommitManifest,
-        &signed_head.payload.signing_key_id,
+    signed_state.verify(
+        SignatureDomain::BlobCommitState,
+        &signed_state.payload.signing_key_id,
         signer,
     )?;
-    let head = &signed_head.payload;
+    validate_blob_commit_state(&signed_state.payload)?;
+    // A catalogue entry is a terminal snapshot: an interrupted preparation is
+    // never published to listing.
+    if signed_state.payload.prepared().is_some()
+        || signed_state.payload.blob != logical_blob.canonical()
+        || signed_state.payload.path_hash != logical_blob.path_hash()
+        || signed_state.payload.ring_version != ring_version
+    {
+        return Err(CatalogError::VerificationFailed);
+    }
+    let head = signed_state
+        .payload
+        .current()
+        .ok_or(CatalogError::VerificationFailed)?;
     if head.blob != logical_blob.canonical()
         || head.ring_version != ring_version
         || head.logical_version == 0
@@ -118,7 +140,7 @@ pub fn validate_catalog_entry_for_logical_blob(
     }
     Ok(ValidatedCatalogEntry {
         logical_blob: logical_blob.clone(),
-        signed_head,
+        signed_state,
     })
 }
 

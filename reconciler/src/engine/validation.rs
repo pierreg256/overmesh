@@ -37,110 +37,74 @@ impl ReconcilerEngine {
         let Some(head_object_value) = backend.control_get_object(head_object, token).await? else {
             return Ok(ReplicaValidation::MissingHead);
         };
-        let signed = SignedDocument::<CommitManifest>::from_bytes(&head_object_value.bytes)
-            .context("committed head is not valid JSON")?;
-        signed
-            .verify(
-                SignatureDomain::CommitManifest,
-                &signed.payload.signing_key_id,
-                self.signer.as_ref(),
-            )
-            .context("committed head signature validation failed")?;
+        // ADR-0012: one signed document carries the committed generation, its
+        // high-water assertion and any interrupted preparation.
+        let signed = parse_blob_commit_state(
+            &head_object_value.bytes,
+            self.signer.as_ref(),
+            "committed head",
+        )?;
+        let Some(manifest) = signed.payload.current().cloned() else {
+            return Ok(ReplicaValidation::MissingHead);
+        };
         ensure!(
-            matches!(
-                signed.payload.state,
-                ManifestState::Committed | ManifestState::Tombstoned
-            ),
-            "head references a non-committed state"
-        );
-        ensure!(
-            signed.payload.ring_version == self.ring.ring_version,
+            manifest.ring_version == self.ring.ring_version,
             "head Ring version does not match the active Ring"
         );
-        let logical_blob = parse_signed_logical_blob(&signed.payload.blob, "committed head")?;
+        let logical_blob = parse_signed_logical_blob(&manifest.blob, "committed head")?;
         ensure!(
             head_object == head_object_key(&logical_blob),
             "head object path does not match the signed blob path"
         );
-        if signed.payload.state == ManifestState::Tombstoned {
+        if manifest.state == ManifestState::Tombstoned {
             ensure!(
-                signed.payload.deleted_at_unix_ms.is_some()
-                    && signed.payload.previous_logical_etag.is_some()
-                    && signed.payload.version_object_prefix.is_some()
-                    && signed.payload.content_length == 0
-                    && signed.payload.content_container.is_empty()
-                    && signed.payload.content_object.is_empty()
-                    && signed.payload.block_manifest_object.is_empty()
-                    && signed.payload.block_manifest_sha256.is_empty()
-                    && signed.payload.prepared_replicas.len() == 2,
+                manifest.deleted_at_unix_ms.is_some()
+                    && manifest.previous_logical_etag.is_some()
+                    && manifest.version_object_prefix.is_some()
+                    && manifest.content_length == 0
+                    && manifest.content_container.is_empty()
+                    && manifest.content_object.is_empty()
+                    && manifest.block_manifest_object.is_empty()
+                    && manifest.block_manifest_sha256.is_empty()
+                    && manifest.prepared_replicas.len() == 2,
                 "tombstone structure is invalid"
             );
         }
-        let high_water_checkpoint = validate_high_water(
-            backend,
-            head_object,
-            &signed,
-            &logical_blob,
-            token,
-            self.signer.as_ref(),
-        )
-        .await?;
+        let terminal = signed.payload.prepared().is_none();
+        drop(signed);
+        let high_water_checkpoint =
+            validate_high_water(backend, head_object, &manifest, token, self.signer.as_ref())
+                .await?;
         let head = ValidatedHead {
             logical_blob,
-            signed,
+            manifest,
             bytes: head_object_value.bytes,
             backend_etag: head_object_value.etag,
         };
-        let committed_object = committed_manifest_object(&head.signed.payload)?;
-        let Some(committed_value) = backend.control_get_object(&committed_object, token).await?
-        else {
-            return Ok(ReplicaValidation::Incomplete {
-                head,
-                reason: "the committed manifest sidecar is missing".to_owned(),
-            });
-        };
-        ensure!(
-            committed_value.bytes == head.bytes,
-            "committed manifest sidecar differs from the published head"
-        );
-        if head.signed.payload.state == ManifestState::Tombstoned {
-            let Some(high_water_checkpoint) = high_water_checkpoint else {
-                return Ok(ReplicaValidation::Incomplete {
-                    head,
-                    reason: "the durable tombstone high-water checkpoint is missing".to_owned(),
-                });
-            };
-            if high_water_checkpoint == head.bytes {
+        if head.manifest.state == ManifestState::Tombstoned {
+            if let Some(high_water_checkpoint) = high_water_checkpoint {
                 return Ok(ReplicaValidation::Valid(ValidatedReplica {
                     head,
                     block_manifest: None,
                     block_pages: Vec::new(),
-                    committed_manifest: committed_value.bytes,
                     high_water_checkpoint,
                 }));
             }
-            let previous = SignedDocument::<CommitManifest>::from_bytes(&high_water_checkpoint)
-                .context("previous high-water checkpoint is not a signed commit manifest")?;
-            let previous_logical_blob = parse_signed_logical_blob(
-                &previous.payload.blob,
-                "previous high-water checkpoint",
-            )?;
-            ensure!(
-                previous.payload.state == ManifestState::Committed
-                    && previous_logical_blob == head.logical_blob
-                    && previous.payload.logical_version.saturating_add(1)
-                        == head.signed.payload.logical_version
-                    && head.signed.payload.previous_logical_etag.as_deref()
-                        == Some(previous.payload.logical_etag.as_str()),
-                "tombstone does not directly extend the durable high-water checkpoint"
-            );
+            if !terminal {
+                return Ok(ReplicaValidation::Incomplete {
+                    head,
+                    reason: "the durable tombstone high-water checkpoint is missing".to_owned(),
+                });
+            }
+            // The signed tombstone was published before its durable history
+            // entry. The head is already terminal, so its own bytes are the
+            // checkpoint and no Gateway-owned state has to be minted.
             let tombstone_checkpoint = head.bytes.clone();
             return Ok(ReplicaValidation::RecoverableTombstone {
                 replica: ValidatedReplica {
                     head,
                     block_manifest: None,
                     block_pages: Vec::new(),
-                    committed_manifest: committed_value.bytes,
                     high_water_checkpoint: tombstone_checkpoint,
                 },
                 reason: "the signed tombstone head was published before its high-water checkpoint"
@@ -154,46 +118,45 @@ impl ReconcilerEngine {
             });
         };
 
+        /// The durable per-version history entry is the independent witness
+        /// that the published generation was retained (ADR-0012).
         async fn validate_high_water(
             backend: &dyn ReplicaBackend,
             head_object: &str,
-            head: &SignedDocument<CommitManifest>,
-            logical_blob: &LogicalBlobId,
+            manifest: &CommitManifest,
             token: &ControlToken,
             signer: &dyn ManifestSigner,
         ) -> Result<Option<Vec<u8>>> {
             let path_hash = head_hash(head_object)?;
-            let object_key = format!("high-water/{path_hash}/current.json");
-            if let Some(value) = backend.control_get_object(&object_key, token).await? {
-                let highest = SignedDocument::<CommitManifest>::from_bytes(&value.bytes)
-                    .context("high-water checkpoint is not a signed commit manifest")?;
-                highest
-                    .verify(
-                        SignatureDomain::CommitManifest,
-                        &highest.payload.signing_key_id,
-                        signer,
-                    )
-                    .context("high-water checkpoint signature validation failed")?;
-                let highest_logical_blob =
-                    parse_signed_logical_blob(&highest.payload.blob, "high-water checkpoint")?;
-                ensure!(
-                    highest_logical_blob == *logical_blob
-                        && highest.payload.logical_version <= head.payload.logical_version,
-                    "committed head was replayed below the durable high-water version"
-                );
-                if highest.payload.logical_version == head.payload.logical_version {
-                    ensure!(
-                        value.bytes == head.canonical_bytes()?,
-                        "committed head does not match the durable high-water checkpoint"
-                    );
-                }
-                return Ok(Some(value.bytes));
-            }
-            Ok(None)
+            let object_key = high_water_history_key(path_hash, manifest);
+            // ADR-0012 folds the high-water current object into the merged
+            // document, so the retained per-version history is the witness that
+            // the published generation has not been replayed backwards.
+            let successor_prefix = format!(
+                "high-water/{path_hash}/history/{:020}",
+                manifest.logical_version.saturating_add(1)
+            );
+            let (value, successors) = tokio::try_join!(
+                backend.control_get_object(&object_key, token),
+                backend.control_list_objects(&successor_prefix, token)
+            )?;
+            ensure!(
+                successors.is_empty(),
+                "committed head was replayed below the durable high-water version"
+            );
+            let Some(value) = value else {
+                return Ok(None);
+            };
+            let history = parse_blob_commit_state(&value.bytes, signer, "high-water checkpoint")?;
+            ensure!(
+                history.payload.prepared().is_none() && history.payload.current() == Some(manifest),
+                "committed head does not match the durable high-water checkpoint"
+            );
+            Ok(Some(value.bytes))
         }
 
         let Some(block_value) = backend
-            .control_get_object(&head.signed.payload.block_manifest_object, token)
+            .control_get_object(&head.manifest.block_manifest_object, token)
             .await?
         else {
             return Ok(ReplicaValidation::Incomplete {
@@ -202,7 +165,7 @@ impl ReconcilerEngine {
             });
         };
         ensure!(
-            sha256_bytes(&block_value.bytes) == head.signed.payload.block_manifest_sha256,
+            sha256_bytes(&block_value.bytes) == head.manifest.block_manifest_sha256,
             "block manifest hash does not match the committed head"
         );
         let signed_block = SignedDocument::<BlockManifest>::from_bytes(&block_value.bytes)
@@ -214,7 +177,7 @@ impl ReconcilerEngine {
                 self.signer.as_ref(),
             )
             .context("block manifest signature validation failed")?;
-        validate_block_manifest_link(&head.signed.payload, &signed_block.payload)
+        validate_block_manifest_link(&head.manifest, &signed_block.payload)
             .context("block manifest structure validation failed")?;
         let mut block_pages = Vec::with_capacity(signed_block.payload.pages.len());
         let mut blocks = Vec::with_capacity(usize::try_from(signed_block.payload.block_count)?);
@@ -238,12 +201,12 @@ impl ReconcilerEngine {
             block_pages.push((reference.object.clone(), page_value.bytes));
         }
 
-        validate_block_layout(&head.signed.payload, &blocks)?;
+        validate_block_layout(&head.manifest, &blocks)?;
         let block_lengths = blocks.iter().map(|block| block.length).collect::<Vec<_>>();
         let Some(content_validation) = backend
             .service_validate_data_object(
-                &head.signed.payload.content_container,
-                &head.signed.payload.content_object,
+                &head.manifest.content_container,
+                &head.manifest.content_object,
                 &block_lengths,
                 token,
             )
@@ -254,12 +217,11 @@ impl ReconcilerEngine {
                 reason: "the immutable content object is missing".to_owned(),
             });
         };
-        validate_content_digests(&head.signed.payload, &blocks, &content_validation)?;
+        validate_content_digests(&head.manifest, &blocks, &content_validation)?;
         Ok(ReplicaValidation::Valid(ValidatedReplica {
             head,
             block_manifest: Some(block_value.bytes),
             block_pages,
-            committed_manifest: committed_value.bytes,
             high_water_checkpoint,
         }))
     }

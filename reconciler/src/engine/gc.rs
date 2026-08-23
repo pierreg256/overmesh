@@ -38,12 +38,11 @@ impl ReconcilerEngine {
             "replica heads differ before garbage-collection planning"
         );
         ensure!(
-            first.high_water_checkpoint == first.head.bytes
-                && second.high_water_checkpoint == second.head.bytes
-                && first.high_water_checkpoint == second.high_water_checkpoint,
+            first.high_water_checkpoint == second.high_water_checkpoint,
             "current head and durable high-water checkpoints do not correspond exactly"
         );
-        let active = &first.head.signed.payload;
+        let active = &first.head.manifest;
+        let active_bytes = &first.high_water_checkpoint;
         let active_logical_blob = &first.head.logical_blob;
         let health = if active.state == ManifestState::Tombstoned {
             HealthState::Tombstoned
@@ -71,7 +70,7 @@ impl ReconcilerEngine {
                 head_object,
                 active,
                 active_logical_blob,
-                &first.head.bytes,
+                active_bytes,
                 checkpoint.as_ref(),
                 first_backend,
                 second_backend,
@@ -96,8 +95,8 @@ impl ReconcilerEngine {
         let now = now_unix_ms();
         let mut eligible_through = None;
         for pair in history.entries.windows(2) {
-            let predecessor = &pair[0].signed.payload;
-            let successor = &pair[1].signed.payload;
+            let predecessor = &pair[0].manifest;
+            let successor = &pair[1].manifest;
             let eligible_at = successor
                 .committed_at_unix_ms
                 .checked_add(delay_ms)
@@ -115,7 +114,7 @@ impl ReconcilerEngine {
         let mut collected_versions = Vec::new();
         if let Some(through) = new_through {
             for entry in &history.entries {
-                let manifest = &entry.signed.payload;
+                let manifest = &entry.manifest;
                 if manifest.logical_version <= latest_through || manifest.logical_version > through
                 {
                     continue;
@@ -209,7 +208,7 @@ impl ReconcilerEngine {
             let terminal = history
                 .entries
                 .iter()
-                .find(|entry| entry.signed.payload.logical_version == target)
+                .find(|entry| entry.manifest.logical_version == target)
                 .context("compaction target is not present in retained history")?;
             let evidence = latest_evidence
                 .as_ref()
@@ -226,12 +225,9 @@ impl ReconcilerEngine {
                     ring_version: self.ring.ring_version,
                     checkpoint_version,
                     compacted_through_logical_version: target,
-                    compacted_through_state: terminal.signed.payload.state,
-                    compacted_through_logical_etag: terminal.signed.payload.logical_etag.clone(),
-                    compacted_through_committed_at_unix_ms: terminal
-                        .signed
-                        .payload
-                        .committed_at_unix_ms,
+                    compacted_through_state: terminal.manifest.state,
+                    compacted_through_logical_etag: terminal.manifest.logical_etag.clone(),
+                    compacted_through_committed_at_unix_ms: terminal.manifest.committed_at_unix_ms,
                     covered_terminal_manifest_sha256: sha256_bytes(&terminal.bytes),
                     previous_checkpoint_sha256: checkpoint
                         .as_ref()
@@ -282,7 +278,7 @@ impl ReconcilerEngine {
             history
                 .entries
                 .iter()
-                .filter(|entry| entry.signed.payload.logical_version <= effective_floor)
+                .filter(|entry| entry.manifest.logical_version <= effective_floor)
                 .map(history_entry_delete),
         );
         history_deletes.sort_by(|left, right| left.object_key.cmp(&right.object_key));
@@ -474,7 +470,7 @@ impl ReconcilerEngine {
         second_backend: &dyn ReplicaBackend,
         token: &ControlToken,
     ) -> Result<(DataDelete, BTreeSet<String>)> {
-        let manifest = &history.signed.payload;
+        let manifest = &history.manifest;
         ensure!(
             manifest.state == ManifestState::Committed,
             "only committed generations may be physically collected"
@@ -510,17 +506,6 @@ impl ReconcilerEngine {
             values.insert(object_key.clone(), bytes);
         }
 
-        let committed_key = format!("{version_prefix}/committed.json");
-        if let Some(bytes) = values.get(&committed_key) {
-            ensure!(
-                bytes == &history.bytes,
-                "candidate committed sidecar differs from signed high-water history"
-            );
-        }
-        let prepared_key = format!("{version_prefix}/prepared.json");
-        if let Some(bytes) = values.get(&prepared_key) {
-            validate_prepared_candidate(bytes, manifest, self.signer.as_ref())?;
-        }
         let block_key = format!("{version_prefix}/block-manifest.json");
         let block_manifest = if let Some(bytes) = values.get(&block_key) {
             ensure!(
@@ -591,7 +576,7 @@ impl ReconcilerEngine {
         second_backend: &dyn ReplicaBackend,
         token: &ControlToken,
     ) -> Result<BTreeSet<String>> {
-        let manifest = &history.signed.payload;
+        let manifest = &history.manifest;
         ensure!(
             manifest.state == ManifestState::Tombstoned,
             "only tombstones may use the tombstone collection path"
@@ -613,38 +598,12 @@ impl ReconcilerEngine {
             .into_iter()
             .chain(second_objects)
             .collect::<BTreeSet<_>>();
-        for object_key in &objects {
-            let relative = object_key
-                .strip_prefix(&prefix)
-                .context("tombstone metadata is outside its signed namespace")?;
-            ensure!(
-                matches!(relative, "prepared.json" | "committed.json"),
-                "tombstone namespace contains an unknown metadata object"
-            );
-            let (first_value, second_value) = tokio::try_join!(
-                first_backend.control_get_object(object_key, token),
-                second_backend.control_get_object(object_key, token)
-            )?;
-            let bytes = match (first_value, second_value) {
-                (Some(first), Some(second)) => {
-                    ensure!(
-                        first.bytes == second.bytes,
-                        "tombstone metadata bytes differ between replicas"
-                    );
-                    first.bytes
-                }
-                (Some(value), None) | (None, Some(value)) => value.bytes,
-                (None, None) => bail!("listed tombstone metadata object is missing"),
-            };
-            if relative == "committed.json" {
-                ensure!(
-                    bytes == history.bytes,
-                    "tombstone committed sidecar differs from signed high-water history"
-                );
-            } else {
-                validate_prepared_candidate(&bytes, manifest, self.signer.as_ref())?;
-            }
-        }
+        // ADR-0012 leaves no per-version metadata behind a tombstone: the
+        // prepared and terminal manifests are states of the merged document.
+        ensure!(
+            objects.is_empty(),
+            "tombstone namespace contains an unknown metadata object"
+        );
         Ok(objects)
     }
 }
@@ -658,10 +617,9 @@ fn metadata_page_index(version_prefix: &str, object_key: &str) -> Result<Option<
     let relative = object_key
         .strip_prefix(&format!("{version_prefix}/"))
         .context("candidate metadata object is outside the signed version namespace")?;
-    if matches!(
-        relative,
-        "prepared.json" | "committed.json" | "block-manifest.json"
-    ) {
+    // ADR-0012 merges the prepared and terminal manifests into the commit-state
+    // document, so a version namespace holds only block metadata.
+    if relative == "block-manifest.json" {
         return Ok(None);
     }
     let page = relative
@@ -673,48 +631,6 @@ fn metadata_page_index(version_prefix: &str, object_key: &str) -> Result<Option<
         page.parse::<u32>()
             .context("candidate block page index is invalid")?,
     ))
-}
-
-fn validate_prepared_candidate(
-    bytes: &[u8],
-    committed: &CommitManifest,
-    signer: &dyn ManifestSigner,
-) -> Result<()> {
-    let signed = SignedDocument::<CommitManifest>::from_bytes(bytes)
-        .context("candidate prepared manifest is not valid JSON")?;
-    ensure!(
-        signed.canonical_bytes()? == bytes,
-        "candidate prepared manifest is not canonically encoded"
-    );
-    signed
-        .verify(
-            SignatureDomain::CommitManifest,
-            &signed.payload.signing_key_id,
-            signer,
-        )
-        .context("candidate prepared manifest signature validation failed")?;
-    let prepared = &signed.payload;
-    ensure!(
-        prepared.state == ManifestState::Prepared
-            && prepared.blob == committed.blob
-            && prepared.write_id == committed.write_id
-            && prepared.logical_version == committed.logical_version
-            && prepared.logical_etag == committed.logical_etag
-            && prepared.previous_logical_etag == committed.previous_logical_etag
-            && prepared.ring_version == committed.ring_version
-            && prepared.content_length == committed.content_length
-            && prepared.content_sha256 == committed.content_sha256
-            && prepared.content_container == committed.content_container
-            && prepared.content_object == committed.content_object
-            && prepared.block_manifest_object == committed.block_manifest_object
-            && prepared.block_manifest_sha256 == committed.block_manifest_sha256
-            && prepared.version_object_prefix == committed.version_object_prefix
-            && prepared.committed_at_unix_ms == committed.committed_at_unix_ms
-            && prepared.deleted_at_unix_ms == committed.deleted_at_unix_ms
-            && prepared.prepared_replicas.is_empty(),
-        "candidate prepared manifest is not the precursor of signed committed history"
-    );
-    Ok(())
 }
 
 fn history_entry_delete(entry: &ValidatedHistoryEntry) -> ControlDelete {

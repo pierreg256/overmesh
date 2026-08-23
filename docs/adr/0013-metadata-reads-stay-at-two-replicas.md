@@ -123,15 +123,19 @@ twice is a material cost rather than one extra request, the trade is worth
 recomputing — but the answer would more likely be to shrink the document than
 to stop comparing it.
 
-**After ADR-0012 is implemented and measured**, recompute the price before
-reopening post-write verification. The merged layout should collapse the four
-current comparisons into one replicated comparison, changing the trade from
-eight requests to two without weakening the decision.
+**ADR-0012 is now implemented and measured.** The merged layout collapsed the
+per-object comparisons into two replicated comparisons of one document — one
+after the prepared transition and one after the commit transition — so a first
+`PUT` verifies publication in four reads rather than eight, without weakening
+the decision. Reopening post-write verification would now save four requests
+out of roughly thirty-seven, which is a worse trade than before.
 
 ## Implementation status
 
 No change. This record documents a decision not to change existing behaviour,
-so that the change is not made silently later.
+so that the change is not made silently later. The `R = 2` component survived
+the ADR-0012 layout change intact: the merged commit-state document is loaded
+from both replicas and verified on both replicas after every transition.
 
 ## Verified by
 

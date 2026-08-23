@@ -171,6 +171,7 @@ async fn noncanonical_head_blob_is_quarantined_fail_closed() {
         replicas: &["storage-a", "storage-b"],
     })
     .await;
+    let signed = signed_commit_state(&signed, signer.as_ref()).await;
     first.put_control(
         &head_object,
         signed.canonical_bytes().expect("canonical head bytes"),

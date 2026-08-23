@@ -16,16 +16,15 @@ use crate::{
     backend::BackendError,
     commit::{
         CommitCoordinator, CommitError, CommitResult, CommitService, LogicalCondition,
-        caller_put_file_idempotent, control_put_bytes_idempotent, ensure_not_quarantined,
-        head_condition, load_head, maintain_lease, publish_catalog_current, strict_current_head,
-        verify_identical_objects,
+        blob_state_key, caller_put_file_idempotent, control_put_bytes_idempotent,
+        ensure_not_quarantined, load_state, maintain_lease, publish_catalog_current,
+        resolve_write_state, state_condition, strict_current_state, verify_identical_objects,
     },
     identity::ControlToken,
     manifest::{
         BlockDescriptor, BlockManifest, BlockManifestPage, CommitManifest, ManifestError,
         ManifestSigner, ManifestState, SignatureDomain, SignedDocument, StagedBlock,
-        UploadGeneration, commit_manifest_object_prefix, sha256_bytes,
-        validate_block_manifest_link, validate_block_manifest_page,
+        UploadGeneration, sha256_bytes, validate_block_manifest_link, validate_block_manifest_page,
     },
     read::validate_committed_head,
     resource::{LogicalBlobId, stable_component},
@@ -185,7 +184,18 @@ impl BlockService {
             coordinator.signer.as_ref(),
         )
         .await?;
-        let current = load_current_head(&coordinator, logical_blob, &control_token).await?;
+        // Staging binds the base logical version and ETag into stage metadata.
+        // Both replicas agree on that generation even while a preparation
+        // reached only one of them, and nothing here is returned to the client
+        // as committed state, so this write path is not refused by a divergence
+        // it does not depend on. It does not hold the canonical commit lease.
+        let current = load_head_pair(
+            &coordinator,
+            logical_blob,
+            &control_token,
+            StatePairPolicy::Writable,
+        )
+        .await?;
         let base_logical_version = current
             .as_ref()
             .map_or(0, |head| head.payload.logical_version);
@@ -682,7 +692,16 @@ impl BlockService {
         {
             return Ok(result);
         }
-        let current_head = load_head_pair(coordinator, logical_blob, control_token).await?;
+        // This runs under the canonical commit lease and is about to rewrite the
+        // document, so a one-sided preparation over the same published
+        // generation is re-driven rather than refused.
+        let current_head = load_head_pair(
+            coordinator,
+            logical_blob,
+            control_token,
+            StatePairPolicy::Writable,
+        )
+        .await?;
         let upload_id = effective_upload_id(
             upload_id,
             logical_blob,
@@ -716,7 +735,7 @@ impl BlockService {
             if committed_ids != requested_ids {
                 return Err(BlockError::Conflict);
             }
-            let _ = CommitCoordinator::validate_or_repair_high_water(
+            let context = CommitCoordinator::validate_commit_context(
                 coordinator.primary.as_ref(),
                 coordinator.secondary.as_ref(),
                 &logical_blob.path_hash(),
@@ -727,14 +746,30 @@ impl BlockService {
                 coordinator.signer.as_ref(),
             )
             .await?;
+            // A replay republishes the terminal form of the published
+            // generation, never a document that still carries an unrelated
+            // interrupted preparation.
+            let terminal = context
+                .current_terminal
+                .as_ref()
+                .ok_or(CommitError::VerificationFailed)?;
             publish_catalog_current(
                 coordinator.primary.as_ref(),
                 coordinator.secondary.as_ref(),
                 logical_blob,
-                &head.loaded.signed,
-                &head.loaded.bytes,
+                &terminal.signed,
+                &terminal.bytes,
                 control_token,
                 coordinator.signer.as_ref(),
+            )
+            .await?;
+            CommitCoordinator::publish_state_history(
+                coordinator.primary.as_ref(),
+                coordinator.secondary.as_ref(),
+                &logical_blob.path_hash(),
+                &head.payload,
+                &terminal.bytes,
+                control_token,
             )
             .await?;
             return Ok(CommitResult {
@@ -745,9 +780,14 @@ impl BlockService {
             });
         }
         let current = self
-            .load_current_blocks(coordinator, logical_blob, control_token)
+            .load_current_blocks(
+                coordinator,
+                logical_blob,
+                control_token,
+                StatePairPolicy::Writable,
+            )
             .await?;
-        let _ = CommitCoordinator::validate_or_repair_high_water(
+        let _ = CommitCoordinator::validate_commit_context(
             coordinator.primary.as_ref(),
             coordinator.secondary.as_ref(),
             &logical_blob.path_hash(),
@@ -884,21 +924,26 @@ impl BlockService {
             .as_ref()
             .is_some_and(|head| head.payload.state == ManifestState::Committed);
         let committed = if matches!(list_type, BlockListType::Committed | BlockListType::All) {
-            self.load_current_blocks(&coordinator, logical_blob, &control_token)
-                .await?
-                .map(|current| {
-                    current
-                        .blocks
-                        .into_iter()
-                        .filter_map(|block| {
-                            block.client_block_id.map(|block_id| BlockItem {
-                                block_id,
-                                size: block.length,
-                            })
+            self.load_current_blocks(
+                &coordinator,
+                logical_blob,
+                &control_token,
+                StatePairPolicy::Strict,
+            )
+            .await?
+            .map(|current| {
+                current
+                    .blocks
+                    .into_iter()
+                    .filter_map(|block| {
+                        block.client_block_id.map(|block_id| BlockItem {
+                            block_id,
+                            size: block.length,
                         })
-                        .collect()
-                })
-                .unwrap_or_default()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
         } else {
             Vec::new()
         };
@@ -940,8 +985,10 @@ impl BlockService {
         coordinator: &CommitCoordinator,
         logical_blob: &LogicalBlobId,
         control_token: &ControlToken,
+        policy: StatePairPolicy,
     ) -> Result<Option<CurrentBlocks>, BlockError> {
-        let Some(current) = load_current_head(coordinator, logical_blob, control_token).await?
+        let Some(current) =
+            load_head_pair(coordinator, logical_blob, control_token, policy).await?
         else {
             return Ok(None);
         };
@@ -1025,67 +1072,80 @@ impl BlockService {
         selections: &[BlockSelection],
         control_token: &ControlToken,
     ) -> Result<Option<CommitResult>, BlockError> {
-        let head_key = format!("heads/{}.json", logical_blob.path_hash());
+        let path_hash = logical_blob.path_hash();
+        let state_key = blob_state_key(&path_hash);
         let (primary, secondary) = tokio::try_join!(
-            load_head(
+            load_state(
                 coordinator.primary.as_ref(),
-                &head_key,
+                &state_key,
                 control_token,
                 coordinator.signer.as_ref()
             ),
-            load_head(
+            load_state(
                 coordinator.secondary.as_ref(),
-                &head_key,
+                &state_key,
                 control_token,
                 coordinator.signer.as_ref()
             )
         )?;
-        let (committed, lagging, lagging_backend) = match (primary.as_ref(), secondary.as_ref()) {
-            (Some(committed), None) if committed.signed.payload.write_id == write_id => {
-                (committed, None, coordinator.secondary.as_ref())
-            }
-            (None, Some(committed)) if committed.signed.payload.write_id == write_id => {
-                (committed, None, coordinator.primary.as_ref())
-            }
-            (Some(committed), Some(lagging))
-                if committed.signed.payload.write_id == write_id
-                    && committed.signed.payload.previous_logical_etag.as_deref()
-                        == Some(&lagging.signed.payload.logical_etag)
-                    && committed.signed.payload.logical_version
-                        == lagging.signed.payload.logical_version.saturating_add(1) =>
-            {
-                (committed, Some(lagging), coordinator.secondary.as_ref())
-            }
-            (Some(lagging), Some(committed))
-                if committed.signed.payload.write_id == write_id
-                    && committed.signed.payload.previous_logical_etag.as_deref()
-                        == Some(&lagging.signed.payload.logical_etag)
-                    && committed.signed.payload.logical_version
-                        == lagging.signed.payload.logical_version.saturating_add(1) =>
-            {
-                (committed, Some(lagging), coordinator.primary.as_ref())
-            }
-            _ => return Ok(None),
+        let published = |state: &crate::commit::LoadedState| {
+            state
+                .current()
+                .is_some_and(|current| current.write_id == write_id)
         };
-        if committed.signed.payload.state != ManifestState::Committed {
+        let extends = |committed: &crate::commit::LoadedState,
+                       lagging: &crate::commit::LoadedState| {
+            let Some(committed) = committed.current() else {
+                return false;
+            };
+            if committed.write_id != write_id {
+                return false;
+            }
+            match lagging.current() {
+                None => committed.logical_version == 1 && committed.previous_logical_etag.is_none(),
+                Some(lagging) => {
+                    committed.previous_logical_etag.as_deref() == Some(&lagging.logical_etag)
+                        && committed.logical_version == lagging.logical_version.saturating_add(1)
+                }
+            }
+        };
+        let (committed_state, lagging, lagging_backend) =
+            match (primary.as_ref(), secondary.as_ref()) {
+                (Some(state), None) if published(state) => {
+                    (state, None, coordinator.secondary.as_ref())
+                }
+                (None, Some(state)) if published(state) => {
+                    (state, None, coordinator.primary.as_ref())
+                }
+                (Some(state), Some(lagging)) if extends(state, lagging) => {
+                    (state, Some(lagging), coordinator.secondary.as_ref())
+                }
+                (Some(lagging), Some(state)) if extends(state, lagging) => {
+                    (state, Some(lagging), coordinator.primary.as_ref())
+                }
+                _ => return Ok(None),
+            };
+        let committed = committed_state
+            .current()
+            .ok_or(BlockError::VerificationFailed)?;
+        if committed.state != ManifestState::Committed {
             return Err(BlockError::VerificationFailed);
         }
         CommitCoordinator::validate_recovery_candidate(
             coordinator.primary.as_ref(),
             coordinator.secondary.as_ref(),
-            &logical_blob.path_hash(),
+            &path_hash,
             logical_blob.canonical(),
             coordinator.ring_version,
             committed,
+            lagging.and_then(crate::commit::LoadedState::current),
             control_token,
             coordinator.signer.as_ref(),
         )
         .await?;
-        coordinator
-            .authorize_replay(principal, &committed.signed.payload)
-            .await?;
+        coordinator.authorize_replay(principal, committed).await?;
         validate_committed_head(
-            &committed.signed.payload,
+            committed,
             logical_blob,
             coordinator.ring_version,
             coordinator.primary.id(),
@@ -1093,7 +1153,7 @@ impl BlockService {
         )
         .map_err(|_| BlockError::VerificationFailed)?;
         let current = self
-            .load_blocks_for_head(coordinator, &committed.signed.payload, control_token)
+            .load_blocks_for_head(coordinator, committed, control_token)
             .await?;
         let committed_ids = current
             .blocks
@@ -1107,38 +1167,22 @@ impl BlockService {
         if committed_ids != requested_ids {
             return Err(BlockError::Conflict);
         }
-        let sidecar_key = format!(
-            "{}/committed.json",
-            commit_manifest_object_prefix(&committed.signed.payload)?
-        );
-        let (primary_sidecar, secondary_sidecar, primary_digest, secondary_digest) = tokio::try_join!(
-            coordinator
-                .primary
-                .control_get_object(&sidecar_key, control_token),
-            coordinator
-                .secondary
-                .control_get_object(&sidecar_key, control_token),
+        let (primary_digest, secondary_digest) = tokio::try_join!(
             coordinator.primary.caller_digest_data_object(
-                &committed.signed.payload.content_container,
-                &committed.signed.payload.content_object,
+                &committed.content_container,
+                &committed.content_object,
                 &principal.access_token
             ),
             coordinator.secondary.caller_digest_data_object(
-                &committed.signed.payload.content_container,
-                &committed.signed.payload.content_object,
+                &committed.content_container,
+                &committed.content_object,
                 &principal.access_token
             )
         )?;
-        if primary_sidecar.as_ref().map(|value| value.bytes.as_slice())
-            != Some(committed.bytes.as_slice())
-            || secondary_sidecar
-                .as_ref()
-                .map(|value| value.bytes.as_slice())
-                != Some(committed.bytes.as_slice())
-            || primary_digest.as_ref() != secondary_digest.as_ref()
+        if primary_digest.as_ref() != secondary_digest.as_ref()
             || primary_digest.as_ref().is_none_or(|digest| {
-                digest.length != committed.signed.payload.content_length
-                    || digest.sha256 != committed.signed.payload.content_sha256
+                digest.length != committed.content_length
+                    || digest.sha256 != committed.content_sha256
             })
         {
             return Err(BlockError::VerificationFailed);
@@ -1147,42 +1191,41 @@ impl BlockService {
             coordinator.primary.as_ref(),
             coordinator.secondary.as_ref(),
             logical_blob,
-            &committed.signed,
-            &committed.bytes,
+            &committed_state.signed,
+            &committed_state.bytes,
             control_token,
             coordinator.signer.as_ref(),
         )
         .await?;
         lagging_backend
             .control_put_bytes(
-                &head_key,
-                committed.bytes.clone(),
+                &state_key,
+                committed_state.bytes.clone(),
                 "application/json",
-                head_condition(lagging),
+                state_condition(lagging),
                 control_token,
             )
             .await?;
         verify_identical_objects(
             coordinator.primary.as_ref(),
             coordinator.secondary.as_ref(),
-            &head_key,
-            &committed.bytes,
+            &state_key,
+            &committed_state.bytes,
             control_token,
         )
         .await?;
-        CommitCoordinator::publish_high_water(
+        CommitCoordinator::publish_state_history(
             coordinator.primary.as_ref(),
             coordinator.secondary.as_ref(),
-            &logical_blob.path_hash(),
-            &committed.signed,
-            &committed.bytes,
+            &path_hash,
+            committed,
+            &committed_state.bytes,
             control_token,
-            coordinator.signer.as_ref(),
         )
         .await?;
         Ok(Some(CommitResult {
-            logical_version: committed.signed.payload.logical_version,
-            logical_etag: committed.signed.payload.logical_etag.clone(),
+            logical_version: committed.logical_version,
+            logical_etag: committed.logical_etag.clone(),
             write_id: write_id.to_owned(),
             idempotent_replay: true,
         }))
@@ -1409,99 +1452,88 @@ pub fn parse_block_list_xml(bytes: &[u8]) -> Result<Vec<BlockSelection>, BlockEr
 }
 
 struct CurrentHead {
-    loaded: crate::commit::LoadedHead,
+    loaded: crate::commit::LoadedState,
     payload: CommitManifest,
 }
 
+/// How much divergence between the two merged commit-state documents a caller
+/// tolerates.
+///
+/// ADR-0002, as amended by ADR-0012, requires byte-identical documents on read.
+/// ADR-0012 also makes the prepared manifest a state of that document, so two
+/// replicas can hold different bytes while publishing the same generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StatePairPolicy {
+    /// Anything that returns committed state to a client fails closed on any
+    /// divergence, because a read must never resolve a divergence it cannot
+    /// repair.
+    Strict,
+    /// Write paths accept a divergence confined to an interrupted preparation.
+    ///
+    /// This is safe because both replicas still agree on the published
+    /// generation, and that generation is the only thing these callers consume:
+    /// it is used to drive a write — binding a stage to its base state, or
+    /// re-driving a block-list commit — and never returned to a client as
+    /// committed state. It is not a statement about which lock a caller holds.
+    Writable,
+}
+
+/// Read-only view of the published generation. Kept fail-closed: `GET`, `HEAD`
+/// and `Get Block List` expose committed state to clients and must not read
+/// through a divergence they cannot repair.
 async fn load_current_head(
     coordinator: &CommitCoordinator,
     logical_blob: &LogicalBlobId,
     control_token: &ControlToken,
 ) -> Result<Option<CurrentHead>, BlockError> {
-    let path_hash = logical_blob.path_hash();
-    let head_key = format!("heads/{path_hash}.json");
-    let high_water_key = format!("high-water/{path_hash}/current.json");
-    let (primary_head, secondary_head, primary_high, secondary_high) = tokio::try_join!(
-        load_head(
-            coordinator.primary.as_ref(),
-            &head_key,
-            control_token,
-            coordinator.signer.as_ref()
-        ),
-        load_head(
-            coordinator.secondary.as_ref(),
-            &head_key,
-            control_token,
-            coordinator.signer.as_ref()
-        ),
-        load_head(
-            coordinator.primary.as_ref(),
-            &high_water_key,
-            control_token,
-            coordinator.signer.as_ref()
-        ),
-        load_head(
-            coordinator.secondary.as_ref(),
-            &high_water_key,
-            control_token,
-            coordinator.signer.as_ref()
-        )
-    )?;
-    let current = strict_current_head(primary_head.as_ref(), secondary_head.as_ref())?;
-    let high = strict_current_head(primary_high.as_ref(), secondary_high.as_ref())?;
-    match (current, high) {
-        (None, None) => Ok(None),
-        (Some(current), Some(high)) if current.bytes == high.bytes => {
-            if current.signed.payload.state == ManifestState::Committed {
-                validate_committed_head(
-                    &current.signed.payload,
-                    logical_blob,
-                    coordinator.ring_version,
-                    coordinator.primary.id(),
-                    coordinator.secondary.id(),
-                )
-                .map_err(|_| BlockError::VerificationFailed)?;
-            }
-            Ok(Some(CurrentHead {
-                loaded: crate::commit::LoadedHead {
-                    signed: current.signed.clone(),
-                    bytes: current.bytes.clone(),
-                    backend_etag: current.backend_etag.clone(),
-                },
-                payload: current.signed.payload.clone(),
-            }))
-        }
-        _ => Err(BlockError::VerificationFailed),
-    }
+    load_head_pair(
+        coordinator,
+        logical_blob,
+        control_token,
+        StatePairPolicy::Strict,
+    )
+    .await
 }
 
 async fn load_head_pair(
     coordinator: &CommitCoordinator,
     logical_blob: &LogicalBlobId,
     control_token: &ControlToken,
+    policy: StatePairPolicy,
 ) -> Result<Option<CurrentHead>, BlockError> {
     let path_hash = logical_blob.path_hash();
-    let head_key = format!("heads/{path_hash}.json");
-    let (primary_head, secondary_head) = tokio::try_join!(
-        load_head(
+    let state_key = blob_state_key(&path_hash);
+    let (primary_state, secondary_state) = tokio::try_join!(
+        load_state(
             coordinator.primary.as_ref(),
-            &head_key,
+            &state_key,
             control_token,
             coordinator.signer.as_ref()
         ),
-        load_head(
+        load_state(
             coordinator.secondary.as_ref(),
-            &head_key,
+            &state_key,
             control_token,
             coordinator.signer.as_ref()
         )
     )?;
-    let Some(current) = strict_current_head(primary_head.as_ref(), secondary_head.as_ref())? else {
+    let resolved = match policy {
+        StatePairPolicy::Strict => {
+            strict_current_state(primary_state.as_ref(), secondary_state.as_ref())?
+        }
+        StatePairPolicy::Writable => {
+            resolve_write_state(primary_state.as_ref(), secondary_state.as_ref())?
+        }
+    };
+    let Some(state) = resolved else {
         return Ok(None);
     };
-    if current.signed.payload.state == ManifestState::Committed {
+    let Some(current) = state.current() else {
+        return Ok(None);
+    };
+    if current.state == ManifestState::Committed {
         validate_committed_head(
-            &current.signed.payload,
+            current,
             logical_blob,
             coordinator.ring_version,
             coordinator.primary.id(),
@@ -1509,13 +1541,14 @@ async fn load_head_pair(
         )
         .map_err(|_| BlockError::VerificationFailed)?;
     }
+    let payload = current.clone();
     Ok(Some(CurrentHead {
-        loaded: crate::commit::LoadedHead {
-            signed: current.signed.clone(),
-            bytes: current.bytes.clone(),
-            backend_etag: current.backend_etag.clone(),
+        loaded: crate::commit::LoadedState {
+            signed: state.signed.clone(),
+            bytes: state.bytes.clone(),
+            backend_etag: state.backend_etag.clone(),
         },
-        payload: current.signed.payload.clone(),
+        payload,
     }))
 }
 

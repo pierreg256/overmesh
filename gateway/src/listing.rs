@@ -18,6 +18,7 @@ use crate::{
         catalog_containers_prefix, catalog_listing_prefix, logical_blob_from_catalog_key,
         validate_catalog_entry,
     },
+    commit::{blob_state_key, verify_state_bytes},
     continuation::{
         ContinuationBinding, ContinuationError, ContinuationScope, ContinuationState, issue, verify,
     },
@@ -728,31 +729,30 @@ impl ListingService {
         let _validation_permit = self.validation_limiter.acquire().await.map_err(|error| {
             ListingError::Backend(BackendError::InvalidResponse(error.to_string()))
         })?;
-        let head_key = format!("heads/{}.json", logical_blob.path_hash());
-        let (primary_catalog, secondary_catalog, primary_head, secondary_head) = tokio::try_join!(
+        let state_key = blob_state_key(&logical_blob.path_hash());
+        let (primary_catalog, secondary_catalog, primary_state, secondary_state) = tokio::try_join!(
             primary.control_get_object(object_key, token),
             secondary.control_get_object(object_key, token),
-            primary.control_get_object(&head_key, token),
-            secondary.control_get_object(&head_key, token)
+            primary.control_get_object(&state_key, token),
+            secondary.control_get_object(&state_key, token)
         )?;
         let (
             Some(primary_catalog),
             Some(secondary_catalog),
-            Some(primary_head),
-            Some(secondary_head),
+            Some(primary_state),
+            Some(secondary_state),
         ) = (
             primary_catalog,
             secondary_catalog,
-            primary_head,
-            secondary_head,
+            primary_state,
+            secondary_state,
         )
         else {
             return Ok(None);
         };
-        if primary_catalog.bytes != secondary_catalog.bytes
-            || primary_catalog.bytes != primary_head.bytes
-            || primary_catalog.bytes != secondary_head.bytes
-        {
+        // The catalogue entry is a terminal snapshot, so both replicas must hold
+        // exactly the same bytes for it.
+        if primary_catalog.bytes != secondary_catalog.bytes {
             return Ok(None);
         }
         let entry = match validate_catalog_entry(
@@ -766,11 +766,43 @@ impl ListingService {
             Ok(value) => value,
             Err(_) => return Ok(None),
         };
+        // Currency is only meaningful against documents Overmesh signed, so each
+        // replica's document is verified independently: canonical encoding, the
+        // BlobCommitState signature, structural validity, and the binding to
+        // this object key.
+        //
+        // ADR-0012 makes the prepared manifest a state of that document, so the
+        // two replicas can hold different bytes while publishing the same
+        // generation. Byte inequality alone would hide a committed blob for the
+        // whole window of an interrupted preparation, which is a liveness
+        // failure rather than a safety one. What listing requires is that both
+        // replicas agree on the *published generation*.
+        let (Ok(primary_published), Ok(secondary_published)) = (
+            verify_state_bytes(&primary_state.bytes, &state_key, self.signer.as_ref()),
+            verify_state_bytes(&secondary_state.bytes, &state_key, self.signer.as_ref()),
+        ) else {
+            return Ok(None);
+        };
+        if primary_published.payload.blob != logical_blob.canonical()
+            || secondary_published.payload.blob != logical_blob.canonical()
+        {
+            return Ok(None);
+        }
+        let published_current = primary_published.payload.current();
+        if published_current != secondary_published.payload.current() {
+            return Ok(None);
+        }
+        // The agreed generation must be the one the catalogue entry publishes.
+        if published_current != entry.head() {
+            return Ok(None);
+        }
         let path_hash = entry.logical_blob.path_hash();
         if quarantined.contains(&path_hash) {
             return Ok(None);
         }
-        let head = entry.signed_head.payload;
+        let Some(head) = entry.head().cloned() else {
+            return Ok(None);
+        };
         if head.state != ManifestState::Committed {
             return Ok(None);
         }

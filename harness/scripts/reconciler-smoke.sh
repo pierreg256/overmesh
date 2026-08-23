@@ -95,6 +95,22 @@ storage_put() {
     "https://127.0.0.1:$replica_port/devstoreaccount1/overmesh-system/$object_key"
 }
 
+# ADR-0012 keeps the immutable per-version high-water history outside the merged
+# commit-state document. Its key is derived from the published generation.
+history_key_for() {
+  local state_file=$1
+  local path_hash=$2
+  local version
+  local write_id
+  local stable
+  version=$(grep -o '"logicalVersion":[0-9]*' "$state_file" | head -1 | cut -d: -f2)
+  write_id=$(grep -o '"writeId":"[^"]*"' "$state_file" | head -1 | cut -d'"' -f4)
+  test -n "$version"
+  test -n "$write_id"
+  stable=$(printf '%s' "$write_id" | shasum -a 256 | awk '{print $1}')
+  printf 'high-water/%s/history/%020d-%s.json' "$path_hash" "$version" "$stable"
+}
+
 storage_delete_if_exists() {
   local replica_port=$1
   local object_key=$2
@@ -210,8 +226,17 @@ storage_get 12100 "$repair_head" .harness/reconcile-head-a.json
 storage_get 12101 "$repair_head" .harness/reconcile-head-b.json
 cmp .harness/reconcile-head-a.json .harness/reconcile-head-b.json
 
-repair_high_water="high-water/$repair_hash/current.json"
+# ADR-0012 removes the separate high-water current object; the durable
+# per-version history entry is the witness that is repaired.
+removed_high_water_status=$(curl --insecure --silent --output /dev/null \
+  --write-out '%{http_code}' \
+  -H "Authorization: ******" \
+  -H 'x-ms-version: 2025-11-05' \
+  "https://127.0.0.1:12100/devstoreaccount1/overmesh-system/high-water/$repair_hash/current.json")
+test "$removed_high_water_status" != "200"
+repair_high_water=$(history_key_for .harness/reconcile-head-a.json "$repair_hash")
 storage_get 12100 "$repair_high_water" .harness/reconcile-high-water-before-a.json
+cmp .harness/reconcile-head-a.json .harness/reconcile-high-water-before-a.json
 storage_get 12101 "$repair_high_water" .harness/reconcile-high-water-before-b.json
 cmp .harness/reconcile-high-water-before-a.json .harness/reconcile-high-water-before-b.json
 curl --insecure --fail --silent --output /dev/null -X DELETE \
@@ -399,7 +424,7 @@ done
 storage_get 12100 "$delete_head" .harness/reconcile-tombstone-after-gc-a.json
 storage_get 12101 "$delete_head" .harness/reconcile-tombstone-after-gc-b.json
 cmp .harness/reconcile-tombstone-after-gc-a.json .harness/reconcile-tombstone-after-gc-b.json
-delete_high_water="high-water/$delete_hash/current.json"
+delete_high_water=$(history_key_for .harness/reconcile-tombstone-after-gc-a.json "$delete_hash")
 storage_get 12100 "$delete_high_water" .harness/reconcile-delete-high-water-a.json
 cmp .harness/reconcile-tombstone-after-gc-a.json .harness/reconcile-delete-high-water-a.json
 compaction_checkpoint="high-water/$delete_hash/compaction/current.json"
@@ -418,16 +443,12 @@ cargo run --quiet -p overmesh-harness -- \
 
 storage_put 12100 "$delete_head" .harness/reconcile-delete-old-head.json application/json
 storage_put 12101 "$delete_head" .harness/reconcile-delete-old-head.json application/json
-storage_put 12100 "$delete_high_water" .harness/reconcile-delete-old-head.json application/json
-storage_put 12101 "$delete_high_water" .harness/reconcile-delete-old-head.json application/json
 replay_token=$(cargo run --quiet -p overmesh-harness -- issue-token valid --principal caller)
 test "$(curl --silent --output .harness/reconcile-compaction-replay.xml \
   --write-out '%{http_code}' --head \
   -H "Authorization: Bearer $replay_token" \
   -H 'x-ms-version: 2025-11-05' \
   "http://127.0.0.1:18080$delete_blob")" = "503"
-storage_put 12100 "$delete_high_water" .harness/reconcile-delete-high-water-a.json application/json
-storage_put 12101 "$delete_high_water" .harness/reconcile-delete-high-water-a.json application/json
 run_reconciler .harness/reconcile-anti-resurrection-report.json
 grep -q '"healthBefore": "TAMPERED"' .harness/reconcile-anti-resurrection-report.json
 grep -q '"action": "QUARANTINED"' .harness/reconcile-anti-resurrection-report.json

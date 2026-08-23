@@ -8,8 +8,8 @@ async fn collects_superseded_live_generation_without_collecting_active_head() {
         Duration::ZERO,
     )
     .await;
-    let old = &fixture.history[0].signed.payload;
-    let active = &fixture.history[1].signed.payload;
+    let old = &fixture.history[0].manifest;
+    let active = &fixture.history[1].manifest;
     let report = fixture.reconcile().await.expect("collection");
     assert_eq!(report.action, ReconciliationAction::GarbageCollected);
     assert!(
@@ -54,8 +54,8 @@ async fn retains_newer_superseded_generation_until_its_successor_ages() {
     )
     .await;
     fixture.reconcile().await.expect("incremental collection");
-    let first = &fixture.history[0].signed.payload;
-    let second = &fixture.history[1].signed.payload;
+    let first = &fixture.history[0].manifest;
+    let second = &fixture.history[1].manifest;
     assert!(
         fixture
             .first
@@ -121,7 +121,7 @@ async fn tombstone_and_delete_recreate_chains_collect_only_superseded_commits() 
     tombstone.reconcile().await.expect("tombstone collection");
     assert!(tombstone.marker(1).is_some());
     assert_eq!(
-        tombstone.history[1].signed.payload.state,
+        tombstone.history[1].manifest.state,
         ManifestState::Tombstoned
     );
 
@@ -136,8 +136,8 @@ async fn tombstone_and_delete_recreate_chains_collect_only_superseded_commits() 
     )
     .await;
     recreated.reconcile().await.expect("recreated collection");
-    let old = &recreated.history[0].signed.payload;
-    let active = &recreated.history[2].signed.payload;
+    let old = &recreated.history[0].manifest;
+    let active = &recreated.history[2].manifest;
     assert!(
         recreated
             .first
@@ -168,8 +168,7 @@ async fn tombstone_and_delete_recreate_chains_collect_only_superseded_commits() 
         ManifestState::Tombstoned
     );
     let tombstone_prefix = recreated.history[1]
-        .signed
-        .payload
+        .manifest
         .version_object_prefix
         .as_deref()
         .expect("tombstone prefix");
@@ -381,15 +380,9 @@ async fn broken_first_successor_link_beyond_checkpoint_fails_closed() {
     fixture
         .second
         .remove_control(&fixture.history[0].object_key);
-    let mut broken = fixture.history[1].signed.clone();
-    broken.payload.previous_logical_etag = Some("\"broken-floor-link\"".to_owned());
-    broken = SignedDocument::create(
-        broken.payload,
-        SignatureDomain::CommitManifest,
-        fixture.signer.as_ref(),
-    )
-    .await
-    .expect("broken successor");
+    let mut broken_manifest = fixture.history[1].manifest.clone();
+    broken_manifest.previous_logical_etag = Some("\"broken-floor-link\"".to_owned());
+    let broken = signed_commit_state(&broken_manifest, fixture.signer.as_ref()).await;
     fixture.replace_history(
         2,
         true,
@@ -439,7 +432,7 @@ async fn partial_delete_and_marker_publication_retries_are_idempotent() {
         Duration::ZERO,
     )
     .await;
-    let old = &fixture.history[0].signed.payload;
+    let old = &fixture.history[0].manifest;
     fixture.second.fail_delete_once(&format!(
         "data:{}/{}",
         old.content_container, old.content_object
@@ -498,7 +491,7 @@ async fn one_sided_divergent_and_malformed_history_fail_before_any_delete() {
     .await;
     let key = high_water_history_key(
         &logical_path_hash(&one_sided.blob),
-        &one_sided.history[0].signed.payload,
+        &one_sided.history[0].manifest,
     );
     one_sided.second.remove_control(&key);
     assert!(one_sided.reconcile().await.is_err());
@@ -567,31 +560,26 @@ async fn invalid_history_invariants_fail_before_any_delete() {
         } else {
             1
         };
-        let mut signed = fixture.history[target - 1].signed.clone();
+        let mut manifest = fixture.history[target - 1].manifest.clone();
         match invalid {
-            InvalidHistory::Signature => signed.signature.push('x'),
-            InvalidHistory::Binding => signed.payload.blob = "/other/container/blob".to_owned(),
-            InvalidHistory::Version => signed.payload.logical_version = 2,
-            InvalidHistory::State => signed.payload.state = ManifestState::Prepared,
+            InvalidHistory::Signature => {}
+            InvalidHistory::Binding => manifest.blob = "/other/container/blob".to_owned(),
+            InvalidHistory::Version => manifest.logical_version = 2,
+            InvalidHistory::State => manifest.state = ManifestState::Prepared,
             InvalidHistory::Lineage => {
-                signed.payload.previous_logical_etag = Some("\"wrong\"".to_owned())
+                manifest.previous_logical_etag = Some("\"wrong\"".to_owned())
             }
-            InvalidHistory::Timestamps => signed.payload.committed_at_unix_ms = 5,
+            InvalidHistory::Timestamps => manifest.committed_at_unix_ms = 5,
             InvalidHistory::ContentNamespace => {
-                signed.payload.content_object = ".overmesh/objects/other/content".to_owned()
+                manifest.content_object = ".overmesh/objects/other/content".to_owned()
             }
             InvalidHistory::MetadataNamespace => {
-                signed.payload.version_object_prefix = Some("objects/other/versions/x".to_owned())
+                manifest.version_object_prefix = Some("objects/other/versions/x".to_owned())
             }
         }
-        if !matches!(invalid, InvalidHistory::Signature) {
-            signed = SignedDocument::create(
-                signed.payload,
-                SignatureDomain::CommitManifest,
-                fixture.signer.as_ref(),
-            )
-            .await
-            .expect("resign invalid history");
+        let mut signed = signed_commit_state(&manifest, fixture.signer.as_ref()).await;
+        if matches!(invalid, InvalidHistory::Signature) {
+            signed.signature.push('x');
         }
         fixture.replace_history(
             target,
@@ -646,7 +634,7 @@ async fn mismatched_current_high_water_and_unknown_candidate_namespace_fail_befo
     .await;
     let prefix = expected_version_prefix(
         &logical_path_hash(&namespace.blob),
-        &namespace.history[0].signed.payload,
+        &namespace.history[0].manifest,
     )
     .expect("prefix");
     namespace
