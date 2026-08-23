@@ -33,3 +33,16 @@ retained_bundles = [
   "live/0.10.1/performance-v010-evidence.json",
   "live/0.10.1/performance-v010-v3-evidence.json",
 ]
+
+[[release]]
+milestone = "0.11.0"
+tag = "v0.11.0"
+close_commit = "5202eccff4b1e277342cf784dde285e891eb865b"
+retained_bundles = [
+  "live/0.11.0/performance-v011-v4-evidence.json",
+  "live/0.11.0/performance-v011-v5-failed-campaign.json",
+  "live/0.11.0/performance-v011-v5.1-fast-evidence.json",
+  "live/0.11.0/performance-v011-v5.1-fast-corrected-evidence.json",
+  "live/0.11.0/performance-v011-v5.1-listing-confirmation-evidence.json",
+  "live/0.11.0/performance-v011-v5.1-listing-confirmation-corrected-evidence.json",
+]
