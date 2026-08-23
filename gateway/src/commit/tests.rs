@@ -2257,7 +2257,7 @@ async fn delimiter_continuation_consumes_a_prefix_group_across_catalog_pages() {
     assert!(first.next_marker.is_some());
     assert_eq!(
         primary.state.control_page_calls.load(Ordering::SeqCst) - first_before,
-        2
+        1
     );
     assert_eq!(
         secondary.state.control_page_calls.load(Ordering::SeqCst),
@@ -2285,6 +2285,10 @@ async fn delimiter_continuation_consumes_a_prefix_group_across_catalog_pages() {
             - secondary_gets_before,
         4
     );
+    assert_eq!(
+        primary.state.max_control_page_limit.load(Ordering::SeqCst),
+        5_000
+    );
     let second = listing
         .list_blobs(
             "container",
@@ -2305,6 +2309,91 @@ async fn delimiter_continuation_consumes_a_prefix_group_across_catalog_pages() {
         [BlobListEntry::Blob(blob)] if blob.name == "z"
     ));
     assert!(second.next_marker.is_none());
+}
+
+#[tokio::test]
+async fn hierarchical_listing_scans_large_catalog_pages_independently_of_client_page_size() {
+    use crate::{
+        backend::PutCondition,
+        catalog::catalog_key,
+        listing::{BlobListEntry, ListRequest},
+    };
+
+    let (service, primary, secondary) = service_fixture_parts();
+    for prefix in 0..50 {
+        let first_path = format!("/container/prefix-{prefix:02}/blob-000");
+        let content = spool_body(Body::from(first_path.clone()), 4)
+            .await
+            .expect("content");
+        service
+            .put_blob(
+                &blob(&first_path),
+                &principal(),
+                &format!("hierarchical-prefix-{prefix:02}"),
+                &content,
+                LogicalCondition::None,
+            )
+            .await
+            .expect("commit");
+        for index in 1..100 {
+            let logical_blob = blob(&format!("/container/prefix-{prefix:02}/blob-{index:03}"));
+            let key = catalog_key(&logical_blob);
+            for backend in [&primary, &secondary] {
+                backend
+                    .put(&key, b"unread descendant".to_vec(), PutCondition::None)
+                    .expect("catalog descendant");
+            }
+        }
+    }
+
+    let listing = service.listing_service("test-account");
+    let page_calls_before = primary.state.control_page_calls.load(Ordering::SeqCst)
+        + secondary.state.control_page_calls.load(Ordering::SeqCst);
+    let mut marker = None;
+    let mut prefixes = Vec::new();
+    loop {
+        let page = listing
+            .list_blobs(
+                "container",
+                &ListRequest::new(String::new(), "/".to_owned(), marker, Some(10), Vec::new())
+                    .expect("request"),
+                &principal(),
+            )
+            .await
+            .expect("page");
+        prefixes.extend(page.entries.into_iter().map(|entry| match entry {
+            BlobListEntry::Prefix(prefix) => prefix,
+            BlobListEntry::Blob(_) => panic!("unexpected blob"),
+        }));
+        marker = page.next_marker;
+        if marker.is_none() {
+            break;
+        }
+    }
+
+    assert_eq!(
+        prefixes,
+        (0..50)
+            .map(|prefix| format!("prefix-{prefix:02}/"))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        primary.state.control_page_calls.load(Ordering::SeqCst)
+            + secondary.state.control_page_calls.load(Ordering::SeqCst)
+            - page_calls_before,
+        10
+    );
+    assert_eq!(
+        primary.state.max_control_page_limit.load(Ordering::SeqCst),
+        5_000
+    );
+    assert_eq!(
+        secondary
+            .state
+            .max_control_page_limit
+            .load(Ordering::SeqCst),
+        5_000
+    );
 }
 
 #[tokio::test]

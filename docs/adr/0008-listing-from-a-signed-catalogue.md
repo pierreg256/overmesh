@@ -151,6 +151,15 @@ a client.
 
 - Property tests for the catalogue encoding — round-trip and order preservation
   over random byte strings — are to be added.
+- Generation-1 grouped listings request bounded 5,000-object backend catalogue
+  pages independently of the client-visible `maxresults`. Binding the backend
+  scan page to a ten-prefix client page had forced 32-object Azure pages and
+  amplified one certified 5,000-entry hierarchical run to 927 catalogue-page
+  requests. The continuation token still retains the page-start cursors and
+  last consumed ordering key, so replay remains exact.
+- Flat catalogue validation uses an ordered bounded pipeline rather than
+  waiting for complete `join_all` waves. It keeps at most the remaining output
+  capacity in flight, preserving validation counts and continuation order.
 
 ## When to revisit
 
@@ -188,6 +197,9 @@ ADR-0005.
   prefixes map to physical key prefixes
 - `gateway/src/commit/tests.rs::logical_listing_hides_stages_and_paginates_with_signed_markers`
   — staged objects remain hidden and continuation markers are signed
+- `gateway/src/commit/tests.rs::hierarchical_listing_scans_large_catalog_pages_independently_of_client_page_size`
+  — 5,000 catalogue keys and five ten-prefix client pages use exactly one
+  backend catalogue page per replica per client page without changing output
 - `harness/scripts/gateway-smoke.sh` — delimiter grouping producing the
   expected `BlobPrefix`, pagination at `maxresults=1` following `NextMarker`,
   and `List Containers`

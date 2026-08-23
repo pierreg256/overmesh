@@ -213,6 +213,12 @@ validated candidate. The hierarchical case considers 5,004 keys, validates 54
 and returns 50 prefixes per repetition. Its remaining cost is 927 catalogue
 page requests plus 15 quarantine listings against 216 validation reads.
 
+Source diagnosis after publication found that the hierarchical client page
+size of ten had also forced 32-object backend catalogue pages. The corrected
+runtime uses bounded 5,000-object backend pages for grouped listings while
+retaining the signed page-start cursors and ordering key. A new live campaign,
+not this immutable evidence, must certify the reduced request count.
+
 The corrected files are retained separately from the first invalid
 confirmation:
 

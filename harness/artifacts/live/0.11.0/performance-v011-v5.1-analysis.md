@@ -229,6 +229,43 @@ this pass, while the direct hierarchical case reaches 2.021. The contract is
 explicitly baseline-ineligible and no release-to-release latency conclusion is
 drawn.
 
+### Post-publication source diagnosis
+
+The per-repetition evidence reports 42 catalogue-page requests for the flat
+case and 927 for the hierarchical case, plus 15 quarantine listings in each.
+The 19-versus-309 comparison proposed during peer review mixed totals divided
+by backend count and is not a valid operation-level comparison. The actual
+catalogue-page ratio is 22.1.
+
+The primary cause is not the required `safe_upper_bound`. Generation 1 derived
+the backend page size from client-visible `maxresults`: the flat contract's
+1,000-entry page requested 1,001 catalogue objects, while the hierarchical
+contract's ten-prefix page was raised only to the 32-object minimum. Both paths
+still considered 5,004 keys, so the 32-object scan forced repeated Azure
+requests before client-side prefix collapse.
+
+The corrected runtime decouples grouped backend scans from client output pages
+and requests the bounded Azure maximum of 5,000 catalogue objects. A local
+5,000-key, 50-prefix regression returns the same five ten-prefix pages and
+continuations with ten total catalogue-page calls across two replicas. The
+corresponding three-backend live count is a prediction until a new signed
+campaign is run; this retained evidence remains immutable.
+
+Flat validation also moved from complete `join_all` waves to an ordered bounded
+pipeline. The pipeline never has more candidate validations in flight than the
+remaining output capacity, so count, order and continuation semantics remain
+unchanged while invalid candidates can refill capacity as soon as their
+ordered result is consumed.
+
+Continuation-token timing does not identify token-specific signing work. Each
+listing case contains only 12 signing samples. The measured duration begins
+immediately before the Azure Key Vault ES256 request, after canonicalization
+and SHA-256, and ends when that remote request completes. Manifest and
+continuation signatures therefore send the same 32-byte digest to the same key
+and algorithm. The observed 61–84 ms token medians versus roughly 40–56 ms for
+larger manifest samples are remote-service variance, not evidence for a
+different application signing path.
+
 ## Recommended order
 
 1. Model lock renewals separately from the structural request budget.
