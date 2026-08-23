@@ -5,6 +5,8 @@ is not itself signed. Reviewers should verify every finding against:
 
 - `performance-v011-v5.1-fast-evidence.json`
 - `performance-v011-v5.1-fast-evidence.sig.json`
+- `performance-v011-v5.1-fast-corrected-evidence.json`
+- `performance-v011-v5.1-fast-corrected-evidence.sig.json`
 - `performance-v011-v5.1-listing-confirmation-evidence.json`
 - `performance-v011-v5.1-listing-confirmation-evidence.sig.json`
 
@@ -108,6 +110,76 @@ The hierarchical shape is therefore the scenario in which encoded-prefix
 range skipping may materially help. A new confirmation run with corrected
 fingerprint stabilization is required before implementing Part B.
 
+## Corrected fast diagnostic
+
+- Run ID: `20260823T090649Z`
+- Runtime and tooling commit:
+  `101a80dec20db7b34e785650f51672c2d0f024ce`
+- Gateway image digest:
+  `sha256:36afe79da65863e961fe8acfe0c819da356a165dcd58e6652076edbb707370c6`
+- Contract SHA-256:
+  `8e5f0f0414902beac5b694aeb3497dff78f72a75e7e0000e67053468b8e64043`
+- Canonical evidence SHA-256:
+  `db71294b206722f5edf17c0e339d5d92a5dcddc73bd26a56f709704608dceb7b`
+- Signed archive SHA-256:
+  `baac7fc38f4af338d8dbd9e0e826039a6a9877119e1b2ae7b2a2201543ed1702`
+- Signature status: `verifiedByKeyVault=true`
+- Client execution: 2,886 measured operations, zero client errors
+- Client wall time excluding fixtures: 2,846.863107 seconds
+- Evidence validity: all 76 target cases valid
+
+The corrected protocol closes every failure mode exposed by the initial fast
+run:
+
+1. Every one of the 14 read cases covers all 24 required paths and all three
+   placement pairs.
+2. Seven known `validate_control_container/system_container` requests are
+   retained once as ambient evidence and excluded from client budgets. No
+   unknown unattributed request remains.
+3. Every block sequence preserves its optimized structural budget: 177
+   requests at 16 MiB and 438 at 100 MiB. One 100 MiB c4 repeat records a
+   `control_renew_lock` request separately without invalidating the structural
+   result.
+4. PUT and overwrite preserve 45 requests per operation, down from 49.
+5. Every listing repeat has an exact client/server returned-entry match and
+   preserves four validation reads per validated entry.
+6. Container Apps telemetry is split between two pseudonymous resources. One
+   averaged 19 replicas; the other averaged 24.28125 and transitioned from 20
+   to 25 replicas. The previous aggregate-only representation would have
+   hidden that regional asymmetry.
+
+The request-count reductions relative to the initial diagnostic are exact:
+
+| Path | Initial | Corrected | Reduction |
+| --- | ---: | ---: | ---: |
+| PUT / overwrite | 49 | 45 | 8.16% |
+| Put Block Sequence 16 MiB | 181 | 177 | 2.21% |
+| Put Block Sequence 100 MiB | 442 | 438 | 0.90% |
+
+Selected Gateway median-per-run p50 signals moved as follows:
+
+| Operation | Shape | Initial | Corrected | Change |
+| --- | --- | ---: | ---: | ---: |
+| PUT Blob | 1 KiB, c1 | 1,202.962 ms | 1,108.475 ms | -7.85% |
+| PUT Blob | 1 MiB, c1 | 1,431.987 ms | 1,308.829 ms | -8.60% |
+| PUT Blob | 16 MiB, c1 | 2,416.796 ms | 2,607.457 ms | +7.89% |
+| GET Blob | 1 MiB, c1 | 379.793 ms | 341.241 ms | -10.15% |
+| GET Blob | 16 MiB, c1 | 979.252 ms | 908.349 ms | -7.24% |
+| Put Block Sequence | 16 MiB, c1 | 10,643.820 ms | 9,535.688 ms | -10.41% |
+| Put Block Sequence | 100 MiB, c1 | 45,652.066 ms | 43,717.441 ms | -4.24% |
+| Flat list | 100 entries, c4 | 990.104 ms | 618.398 ms | -37.54% |
+| Flat list | 1,000 entries, c4 | 3,731.175 ms | 3,678.644 ms | -1.41% |
+
+These latency movements are diagnostic signals, not release gates. Only 16 of
+38 Gateway p50 series and 15 of 38 direct series satisfy the 1.10
+within-campaign spread threshold. The campaign remains explicitly
+`baselineEligible=false`, and the observed autoscale transition makes a
+cross-campaign causal claim inappropriate.
+
+The corrected fast run validates the evidence protocol and the safe runtime
+optimizations. It does not authorize encoded-prefix range skipping. That
+decision still requires a corrected 5,000-entry listing confirmation.
+
 ## Recommended order
 
 1. Model lock renewals separately from the structural request budget.
@@ -117,4 +189,3 @@ fingerprint stabilization is required before implementing Part B.
 5. Bound listing validation concurrency globally or adaptively.
 6. Capture Container Apps metrics per resource and scale transition.
 7. Use warm-up and additional repeats for any baseline-eligible campaign.
-

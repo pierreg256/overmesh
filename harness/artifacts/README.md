@@ -184,3 +184,24 @@ The canonical evidence and signed archive hashes are:
 9866c6b9ba60a0eaf9664c92c1744dab130659137cd4115ff6b1889b751e4f43  performance-v011-v5.1-listing-confirmation-evidence.json
 5eb65d9c16750ae3abc8030e4185abc642da21049526aa3e4d03c7d9927361a2  performance-v5.1-listing-confirmation-signed-bundle.tar.gz
 ```
+
+The corrected 0.11.0 `live-v5.1` fast diagnostic ran against commit
+`101a80dec20db7b34e785650f51672c2d0f024ce` and immutable Gateway image
+`sha256:36afe79da65863e961fe8acfe0c819da356a165dcd58e6652076edbb707370c6`.
+All 76 target cases are valid. The campaign completed 2,886 measured client
+operations without an error, retained exact structural request budgets, and
+finished within its one-hour client budget. Its signed evidence is retained
+separately so the earlier failed diagnostic remains immutable:
+
+```text
+performance-v011-v5.1-fast-corrected-evidence.json
+performance-v011-v5.1-fast-corrected-evidence.sig.json
+performance-v011-v5.1-analysis.md
+```
+
+The canonical evidence and signed archive hashes are:
+
+```text
+db71294b206722f5edf17c0e339d5d92a5dcddc73bd26a56f709704608dceb7b  performance-v011-v5.1-fast-corrected-evidence.json
+baac7fc38f4af338d8dbd9e0e826039a6a9877119e1b2ae7b2a2201543ed1702  performance-v5.1-fast-signed-bundle.tar.gz
+```
