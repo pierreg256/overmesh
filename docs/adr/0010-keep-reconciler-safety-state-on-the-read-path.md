@@ -12,11 +12,12 @@
 > replacement decision. Reading each of them **once per request instead of
 > twice** is not covered by that prohibition and does not require one.
 >
-> The write path currently loads both at the start of a commit and again
-> before publishing the recovery floor. Once the commit lease is canonical —
-> taken on the deterministic primary by every component, as ADR-0012 requires —
-> the Reconciler cannot modify either document inside a commit, so the second
-> read observes state that cannot have changed.
+> Before request-scoped snapshot reuse, the write and delete paths loaded the
+> checkpoint at the start of a commit and again before publishing the recovery
+> floor. Once the commit lease is canonical — taken on the deterministic
+> primary by every component, as ADR-0012 requires — the Reconciler cannot
+> modify the document inside a commit, so the second read observes state that
+> cannot have changed. PUT and DELETE now reuse that validated snapshot.
 >
 > There is no time-to-live, no staleness window and no invalidation: the read
 > is bounded by a lease the Gateway holds for exactly the duration in which the
@@ -123,7 +124,11 @@ Latency alone is not sufficient evidence for changing this decision.
 - `gateway/src/commit/tests.rs::compaction_floor_rejects_replayed_head_and_high_water_below_the_floor`
   — a compacted recovery floor rejects replay
 - `gateway/src/commit/tests.rs::first_put_control_reads_have_a_closed_object_level_budget`
-  — closes all 28 first-PUT control reads by object class
+  — closes the optimized 24-read first-PUT budget by object class
+- `gateway/src/commit/tests.rs::delete_control_reads_have_a_closed_object_level_budget`
+  — closes the optimized 22-read DELETE budget per replica: the checkpoint is
+  loaded once, while current high-water is loaded once and verified once after
+  publication
 - `harness/environments/azure/performance/collect_live_performance_telemetry.py`
   — publishes request counts by object class and status
 - `harness/artifacts/live/0.10.1/performance-v010-v3-evidence.json` — retained

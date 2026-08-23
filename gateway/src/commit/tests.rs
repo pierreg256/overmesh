@@ -1043,6 +1043,52 @@ async fn first_put_control_reads_have_a_closed_object_level_budget() {
 }
 
 #[tokio::test]
+async fn delete_control_reads_have_a_closed_object_level_budget() {
+    let path = "/container/delete-read-budget";
+    let (coordinator, _, primary, secondary) = read_fixture(path);
+    let content = spool_body(Body::from("hello"), 4).await.expect("content");
+
+    commit(
+        &coordinator,
+        path,
+        "write-before-delete-budget",
+        &content,
+        LogicalCondition::None,
+    )
+    .await
+    .expect("commit");
+    for backend in [&primary, &secondary] {
+        backend.reset_control_get_counts();
+    }
+
+    delete(&coordinator, path, "delete-budget", LogicalCondition::None)
+        .await
+        .expect("delete");
+
+    let primary_reads = primary.control_get_snapshot();
+    let secondary_reads = secondary.control_get_snapshot();
+    let expected = BTreeMap::from([
+        ("catalogue", 2),
+        ("compaction_checkpoint", 1),
+        ("head", 2),
+        ("high_water_current", 2),
+        ("prepared_manifest", 2),
+        ("quarantine", 1),
+        ("terminal_manifest", 1),
+    ]);
+    for reads in [&primary_reads, &secondary_reads] {
+        let mut by_object_class = BTreeMap::<&str, u64>::new();
+        for (object_key, count) in reads {
+            *by_object_class
+                .entry(control_object_class(object_key))
+                .or_default() += count;
+        }
+        assert_eq!(reads.values().sum::<u64>(), 11, "{reads:#?}");
+        assert_eq!(by_object_class, expected, "{reads:#?}");
+    }
+}
+
+#[tokio::test]
 async fn stages_commits_and_reports_client_block_ids() {
     use crate::block::{BlockListType, BlockSelection, BlockSelectionKind};
 

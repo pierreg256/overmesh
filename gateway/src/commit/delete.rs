@@ -53,7 +53,7 @@ impl CommitCoordinator {
             return Ok(result);
         }
         let current = strict_current_head(primary_head.as_ref(), secondary_head.as_ref())?;
-        Self::validate_or_repair_high_water(
+        let validated_high_water = Self::validate_or_repair_high_water(
             self.primary.as_ref(),
             self.secondary.as_ref(),
             &path_hash,
@@ -283,16 +283,33 @@ impl CommitCoordinator {
             control_token,
         )
         .await?;
-        Self::publish_high_water(
-            self.primary.as_ref(),
-            self.secondary.as_ref(),
-            &path_hash,
-            &signed_tombstone,
-            &tombstone_bytes,
-            control_token,
-            self.signer.as_ref(),
-        )
-        .await?;
+        match validated_high_water {
+            Some(snapshot) => {
+                Self::publish_high_water_with_snapshot(
+                    self.primary.as_ref(),
+                    self.secondary.as_ref(),
+                    &path_hash,
+                    &signed_tombstone,
+                    &tombstone_bytes,
+                    snapshot,
+                    control_token,
+                    self.signer.as_ref(),
+                )
+                .await?;
+            }
+            None => {
+                Self::publish_high_water(
+                    self.primary.as_ref(),
+                    self.secondary.as_ref(),
+                    &path_hash,
+                    &signed_tombstone,
+                    &tombstone_bytes,
+                    control_token,
+                    self.signer.as_ref(),
+                )
+                .await?;
+            }
+        }
         delete_result(&signed_tombstone.payload, false)
     }
 }

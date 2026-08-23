@@ -53,8 +53,11 @@ ADR-0010 already applied to quarantine.
 reasons of detection latency. See ADR-0013.
 
 **Read each document once per request.** Correct and insufficient on its own.
-It removes the duplicate reads but leaves one round trip per concept per
-replica. It is a prerequisite here rather than an alternative.
+It removes reads of immutable pre-commit state that were genuinely duplicated
+inside the canonical lease. A load before mutation and a verification after
+mutation are not duplicates: ADR-0013 requires the latter to preserve
+read-time divergence detection. Request-scoped reuse is therefore a
+prerequisite here rather than an alternative.
 
 **Merge the gateway-owned commit state into one document.** Chosen.
 
@@ -138,13 +141,16 @@ verifiable under Azurite before any live campaign:
 
 | Stage | Control reads per `PUT` |
 | --- | ---: |
-| Today | 28 |
-| Reading each document once per request | ~16 |
+| Initial certified layout | 28 |
+| Request-scoped reuse without changing verification | 24 |
 | After merging the four gateway-owned classes | ~10 |
 
-With the corresponding reduction in control writes, a first `PUT` should fall
-from 49 backend requests to roughly 25. Approximately half of that comes from
-reading each document once, which requires no format change at all.
+The request-scoped change removes four reads: the second replicated
+compaction-checkpoint load and one duplicated high-water load. The remaining
+multi-touch classes include their writes and mandatory post-write replicated
+verification; removing those reads without the merge would weaken ADR-0013.
+With the corresponding reduction in control writes, the merged layout is still
+expected to take a first `PUT` toward roughly 25 backend requests.
 
 These are estimates. The blocking metric is exact and testable locally, so the
 decision is falsifiable before a campaign is run.
@@ -201,10 +207,17 @@ is implemented: both Gateway and Reconciler route `locks/{path_hash}` to the
 deterministic primary whenever a head identifies a canonical logical blob,
 including anomalous heads that cannot be trusted as committed state.
 
+PUT and DELETE reuse the compaction and high-water snapshot validated under
+that lease. Their closed control-read budgets are now 24 and 22 respectively.
+The other apparent repeated touches are pre-mutation loads, writes and
+post-mutation verification rather than reusable reads.
+
 ## Verified by
 
 - `gateway/src/commit/tests.rs::first_put_control_reads_have_a_closed_object_level_budget`
-  — establishes the 28-read baseline this record reduces
+  — establishes the optimized 24-read budget this record further reduces
+- `gateway/src/commit/tests.rs::delete_control_reads_have_a_closed_object_level_budget`
+  — establishes the optimized 22-read DELETE budget
 - `harness/artifacts/live/0.11.0/performance-v011-v4-evidence.json` — the
   certified baseline recording 49 backend requests per first `PUT` and 43 per
   `DELETE`
