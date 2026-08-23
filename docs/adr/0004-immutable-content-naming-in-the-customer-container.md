@@ -5,6 +5,7 @@
 - **Milestone:** 0.5.0 → 0.8.0
 - **Supersedes:** —
 - **Superseded by:** —
+- **Amended by:** ADR-0014
 
 > **Provenance.** Rationale reconstructed from the implementation. The original
 > intent was not recorded at the time, and the scheme changed three times across

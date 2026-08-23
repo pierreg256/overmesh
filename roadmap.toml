@@ -130,6 +130,22 @@ deliverables = [
 ]
 
 [[milestones]]
+version = "0.12.0"
+generation = "V1"
+name = "Delimiter-safe catalogue keys and native hierarchical listing"
+status = "planned"
+deliverables = [
+  "Implement the ordseq/v1 monotone prefix-free catalogue encoding under catalog/v2 with terminated container and blob components, dot-segment-safe keys, cross-container order, and an unambiguous slash delimiter.",
+  "Add random-byte property tests for round-trip, total and cross-container ordering, prefix preservation, terminator ordering, delimiter isolation, normalization-safe URL round-trip, and physical segment bounds before enabling the format.",
+  "Add the catalogue generation to the hashed and signed Ring v2 payload and use tagged flat/delimited continuation-token state, with fail-closed rejection of unknown generations and stale markers.",
+  "Use native Azure slash-delimiter pages while proving each BlobPrefix through a bounded healthy-descendant probe and the current flat-scan fallback.",
+  "Encode system-container object URL paths safely before ordseq keys containing URL syntax characters can be used.",
+  "Remove replicated catalogue entries after verified tombstone publication and make the Reconciler enforce the same committed-only catalogue rule.",
+  "Require flat-namespace Storage Accounts, preserve empty logical segments, enforce path-segment and derived-key limits, and publish best-case, worst-case, multibyte, and segment-cap compatibility deviations.",
+  "Re-run flat, paginated, hierarchical, skewed-replica, SDK, CLI, AzCopy, and live 5,000-entry listing gates against the new format."
+]
+
+[[milestones]]
 version = "1.0.0"
 generation = "V1"
 name = "Overmesh V1"

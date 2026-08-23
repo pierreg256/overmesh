@@ -205,3 +205,26 @@ The canonical evidence and signed archive hashes are:
 db71294b206722f5edf17c0e339d5d92a5dcddc73bd26a56f709704608dceb7b  performance-v011-v5.1-fast-corrected-evidence.json
 baac7fc38f4af338d8dbd9e0e826039a6a9877119e1b2ae7b2a2201543ed1702  performance-v5.1-fast-signed-bundle.tar.gz
 ```
+
+The corrected 5,000-entry listing confirmation ran against the same commit
+and immutable Gateway image. All eight direct/Gateway cases are valid, with
+exact client/server returned-entry agreement and four validation reads per
+validated candidate. The hierarchical case considers 5,004 keys, validates 54
+and returns 50 prefixes per repetition. Its remaining cost is 927 catalogue
+page requests plus 15 quarantine listings against 216 validation reads.
+
+The corrected files are retained separately from the first invalid
+confirmation:
+
+```text
+performance-v011-v5.1-listing-confirmation-corrected-evidence.json
+performance-v011-v5.1-listing-confirmation-corrected-evidence.sig.json
+performance-v011-v5.1-analysis.md
+```
+
+The canonical evidence and signed archive hashes are:
+
+```text
+03518c8c51bd23a39e537ea2c66f71e402d2783d06567cfe4eb91656fd6daaa1  performance-v011-v5.1-listing-confirmation-corrected-evidence.json
+5885986227476bc59bd056bd56553a37e4425b9e62d924cf27be476552c1069c  performance-v5.1-listing-confirmation-signed-bundle.tar.gz
+```

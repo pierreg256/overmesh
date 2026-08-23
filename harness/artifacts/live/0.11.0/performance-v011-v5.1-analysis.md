@@ -9,6 +9,8 @@ is not itself signed. Reviewers should verify every finding against:
 - `performance-v011-v5.1-fast-corrected-evidence.sig.json`
 - `performance-v011-v5.1-listing-confirmation-evidence.json`
 - `performance-v011-v5.1-listing-confirmation-evidence.sig.json`
+- `performance-v011-v5.1-listing-confirmation-corrected-evidence.json`
+- `performance-v011-v5.1-listing-confirmation-corrected-evidence.sig.json`
 
 ## Fast diagnostic
 
@@ -177,8 +179,55 @@ within-campaign spread threshold. The campaign remains explicitly
 cross-campaign causal claim inappropriate.
 
 The corrected fast run validates the evidence protocol and the safe runtime
-optimizations. It does not authorize encoded-prefix range skipping. That
-decision still requires a corrected 5,000-entry listing confirmation.
+optimizations. It does not authorize encoded-prefix range skipping.
+
+## Corrected 5,000-entry listing confirmation
+
+- Run ID: `20260823T114125Z`
+- Runtime and tooling commit:
+  `101a80dec20db7b34e785650f51672c2d0f024ce`
+- Gateway image digest:
+  `sha256:36afe79da65863e961fe8acfe0c819da356a165dcd58e6652076edbb707370c6`
+- Contract SHA-256:
+  `5c613886f90282efdc9ec0af93b270ba7fb120f2a238d629e1c55fa36a4899d7`
+- Canonical evidence SHA-256:
+  `03518c8c51bd23a39e537ea2c66f71e402d2783d06567cfe4eb91656fd6daaa1`
+- Signed archive SHA-256:
+  `5885986227476bc59bd056bd56553a37e4425b9e62d924cf27be476552c1069c`
+- Signature status: `verifiedByKeyVault=true`
+- Client wall time excluding fixtures: 362.99555 seconds
+- Evidence validity: all eight direct/Gateway target cases valid
+
+The corrected pass removes the telemetry ambiguity from the first
+confirmation. Every Gateway repetition has exact client/server returned-entry
+agreement, zero unattributed requests and exactly four validation reads per
+validated candidate.
+
+| Gateway case | Considered/run | Validated/run | Returned/run | Backend requests/run | Median p50 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Flat 5,000, c1 | 5,004 | 5,004 | 5,000 | 20,088 | 23,367.326 ms |
+| Flat 5,000, c4 | 5,004 | 5,004 | 5,000 | 20,088 | 24,682.883 ms |
+| Hierarchical 5,000, c1 | 5,004 | 54 | 50 | 1,173 | 42,609.960 ms |
+| Paginated flat 5,000, c1 | 5,004 | 5,004 | 5,000 | 20,088 | 25,916.769 ms |
+
+Part A is therefore certified: hierarchical listing validates roughly one
+candidate per returned prefix rather than every descendant. The remaining
+cost is enumeration. Each hierarchical run spends 927 catalogue-page requests
+plus 15 quarantine prefix listings against 216 entry-validation reads.
+Catalogue enumeration alone is therefore 4.29 times the validation cost while
+still walking 5,004 physical keys to return 50 prefixes.
+
+That ratio no longer authorizes Part B. Source review established that Azure
+List Blobs has no `start-after` primitive and exposes only opaque
+service-generated markers. The encoded-range proposal was withdrawn and the
+withdrawal approved. ADR-0014 records the successor decision: a
+delimiter-safe ordered catalogue encoding for a later format generation,
+rather than a synthetic cursor or secondary prefix index.
+
+The latency values remain diagnostic. Gateway p50 spread is at most 1.128 in
+this pass, while the direct hierarchical case reaches 2.021. The contract is
+explicitly baseline-ineligible and no release-to-release latency conclusion is
+drawn.
 
 ## Recommended order
 

@@ -30,6 +30,7 @@ An ADR explains a choice; it does not define behaviour.
 | [0011](0011-use-physical-content-heads-for-read-authorization.md) | Use physical content HEADs for read authorization | accepted | 0.10.1 | yes |
 | [0012](0012-consolidate-gateway-owned-commit-state.md) | Consolidate gateway-owned commit state into one document | accepted | 0.11.0 | no |
 | [0013](0013-metadata-reads-stay-at-two-replicas.md) | Metadata reads stay at two replicas | accepted | 0.11.0 | yes |
+| [0014](0014-use-delimiter-safe-ordered-catalogue-keys.md) | Use delimiter-safe ordered catalogue keys | accepted | 0.12.0 | no |
 
 ## Implementation status
 
@@ -75,16 +76,24 @@ twice — is separable and does not require the merge.
 0013 records a decision not to change anything: metadata continues to be read
 from both replicas. It exists because 0002's admissibility table permits
 `W = 2, R = 1`, and because 0002 itself observes that performance work drifts
-toward that configuration.
+toward that configuration. Its scope includes post-write verification: the
+prepared manifest, catalogue, head and current high-water comparisons account
+for eight of the current 45 first-PUT requests and remain until the merged
+layout can reduce four replicated comparisons to one.
 
-Two items are scheduled rather than pending. Parity with Azure on blob-name
-length is to be reopened **before 1.0**; if the encoding changes, the derived
-bound changes in `LogicalBlobId::parse`, in 0007, and in
-[`COMPATIBILITY.md`](../../COMPATIBILITY.md). Reducing listing below four
-backend reads per validated entry remains an explicit policy question because
-it changes what listing proves. The 0.11 implementation preserves those four
-reads while scheduling validations with bounded ordered concurrency and
-skipping validation for descendants of an already emitted hierarchical prefix.
+0014 selects a delimiter-safe monotone catalogue encoding for 0.12.0 and
+rejects a secondary prefix index. It keeps the current signed-head catalogue
+model while allowing Azure to collapse `/` groups natively. Implementation is
+blocked on the catalogue property tests, Ring and token versioning, flat
+namespace enforcement, safe system-container URL construction, derived length
+and segment bounds in `LogicalBlobId::parse`, compatibility documentation, and
+unchanged validated-prefix semantics.
+
+Reducing listing below four backend reads per validated entry remains an
+explicit policy question because it changes what listing proves. The 0.11
+implementation preserves those four reads while scheduling validations with
+bounded ordered concurrency and skipping validation for descendants of an
+already emitted hierarchical prefix.
 
 ## Conventions
 

@@ -5,6 +5,7 @@
 - **Milestone:** 0.5.0 → 0.8.0
 - **Supersedes:** —
 - **Superseded by:** —
+- **Amended by:** ADR-0014
 
 ## Context
 

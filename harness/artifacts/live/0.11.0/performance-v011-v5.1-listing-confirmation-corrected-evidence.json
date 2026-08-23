@@ -1,0 +1,2791 @@
+{
+  "apiVersion": "performance.overmesh.io/v1",
+  "campaign": {
+    "clientExecution": {
+      "budgetSeconds": 3600,
+      "status": "passed",
+      "wallSecondsExcludingFixtures": 362.99555
+    },
+    "commit": "101a80dec20db7b34e785650f51672c2d0f024ce",
+    "deployment": "sha256:36afe79da65863e961fe8acfe0c819da356a165dcd58e6652076edbb707370c6",
+    "environment": "isolated-validation-vm-francecentral-single-selected-origin-d2as-v5.1",
+    "finishedAt": "2026-08-23T11:49:19.434133Z",
+    "fixtureSetup": {
+      "backendRequests": {
+        "count": 80352
+      },
+      "finishedAt": "2026-08-23T11:43:16.438558Z",
+      "fixtures": [
+        {
+          "blobCount": 5000,
+          "containerCount": 0,
+          "id": "list-flat-5000",
+          "kind": "blobs",
+          "manifestScope": "canonical-target-independent",
+          "manifestSha256": "6108c1c14845dec2f2fc98d4a17d4b86ced124d04f9c0744cd557b0b9ba6fc2d",
+          "namingScheme": "perf/list/{fixture_id}/{index:05d}",
+          "targetNamespaces": {
+            "direct": "perf/list/list-flat-5000/direct",
+            "gateway": "perf/list/list-flat-5000/gateway"
+          }
+        },
+        {
+          "blobCount": 5000,
+          "containerCount": 0,
+          "id": "list-hierarchical-5000",
+          "kind": "blobs",
+          "manifestScope": "canonical-target-independent",
+          "manifestSha256": "b7269e56115a14c5b20c73f5d15bbbeb99d8bb97aea3406ff09417255eb387eb",
+          "namingScheme": "perf/list/{fixture_id}/{prefix:02d}/{index:05d}",
+          "targetNamespaces": {
+            "direct": "perf/list/list-hierarchical-5000/direct",
+            "gateway": "perf/list/list-hierarchical-5000/gateway"
+          }
+        }
+      ],
+      "startedAt": "2026-08-23T11:41:25.866635Z",
+      "wallSeconds": 110.57193
+    },
+    "isolatedEnvironment": true,
+    "projectVersion": "0.11.0",
+    "releaseTag": "v0.11.0",
+    "ringHash": "sha256:d8e2b6aef1a8ea0e32d032c002e4f0f7f1f0493b49bf50172d8d6d2ee65ad425",
+    "ringVersion": "1",
+    "runId": "20260823T114125Z",
+    "startedAt": "2026-08-23T11:43:16.438586Z",
+    "storageApiVersion": "2024-08-04"
+  },
+  "campaignTelemetry": {
+    "containerApp": {
+      "byResource": {
+        "49ff038c42a68177": {
+          "cpuCores": {
+            "average": 0.000675,
+            "maximum": 0.000981,
+            "resources": 1,
+            "samples": 6
+          },
+          "memoryBytes": {
+            "average": 127689605.838597,
+            "maximum": 133050368.0,
+            "resources": 1,
+            "samples": 6
+          },
+          "replicas": {
+            "average": 19.0,
+            "maximum": 19.0,
+            "resources": 1,
+            "samples": 6
+          }
+        },
+        "4aab0dfd3c0cd934": {
+          "cpuCores": {
+            "average": 0.012586,
+            "maximum": 0.0955,
+            "resources": 1,
+            "samples": 6
+          },
+          "memoryBytes": {
+            "average": 169906517.333333,
+            "maximum": 185098240.0,
+            "resources": 1,
+            "samples": 6
+          },
+          "replicas": {
+            "average": 17.0,
+            "maximum": 17.0,
+            "resources": 1,
+            "samples": 6
+          }
+        }
+      },
+      "cpuCores": {
+        "average": 0.013261,
+        "maximum": 0.096289,
+        "resources": 2,
+        "samples": 6
+      },
+      "interval": "1m",
+      "memoryBytes": {
+        "average": 297596123.17193,
+        "maximum": 318140416.0,
+        "resources": 2,
+        "samples": 6
+      },
+      "replicaTransitions": [],
+      "replicas": {
+        "average": 36.0,
+        "maximum": 36.0,
+        "resources": 2,
+        "samples": 6
+      },
+      "resourceCount": 2,
+      "window": {
+        "finishedAt": "2026-08-23T11:49:19.434133Z",
+        "startedAt": "2026-08-23T11:43:16.438586Z"
+      }
+    }
+  },
+  "cases": [
+    {
+      "concurrency": 1,
+      "entriesReturned": 15000,
+      "expectedRequestsPerEntryValidated": 4.0,
+      "finishedAt": "2026-08-23T11:47:20.974682Z",
+      "fixture": "list-flat-5000",
+      "fixtureManifestSha256": "6108c1c14845dec2f2fc98d4a17d4b86ced124d04f9c0744cd557b0b9ba6fc2d",
+      "id": "list_blobs_flat-list-flat-5000-c1",
+      "iterations": 3,
+      "iterationsPerRun": 1,
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 1440.328,
+        "meanMs": 1414.1,
+        "minMs": 1381.984,
+        "operationsPerSecond": 0.707,
+        "p50Ms": 1419.989,
+        "p90Ms": 1440.328,
+        "p95Ms": 1440.328,
+        "successCount": 3,
+        "wallSeconds": 4.243427
+      },
+      "operation": "list_blobs_flat",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "repeatability": {
+        "medianP50Ms": 1419.989,
+        "p50Classification": "blocking",
+        "p50MsPerRun": [
+          1381.984,
+          1419.989,
+          1440.328
+        ],
+        "p50SpreadRatio": 1.042,
+        "runs": 3
+      },
+      "runs": [
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:43:17.821345Z",
+          "iterations": 1,
+          "latenciesMs": [
+            1381.984
+          ],
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 1381.984,
+            "meanMs": 1381.984,
+            "minMs": 1381.984,
+            "operationsPerSecond": 0.723,
+            "p50Ms": 1381.984,
+            "p90Ms": 1381.984,
+            "p95Ms": 1381.984,
+            "successCount": 1,
+            "wallSeconds": 1.382456
+          },
+          "repeat": 1,
+          "startedAt": "2026-08-23T11:43:16.438860Z",
+          "targetOrder": [
+            "direct",
+            "gateway"
+          ],
+          "targetOrderPosition": 1
+        },
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:45:40.547746Z",
+          "iterations": 1,
+          "latenciesMs": [
+            1419.989
+          ],
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 1419.989,
+            "meanMs": 1419.989,
+            "minMs": 1419.989,
+            "operationsPerSecond": 0.704,
+            "p50Ms": 1419.989,
+            "p90Ms": 1419.989,
+            "p95Ms": 1419.989,
+            "successCount": 1,
+            "wallSeconds": 1.420312
+          },
+          "repeat": 2,
+          "startedAt": "2026-08-23T11:45:39.127408Z",
+          "targetOrder": [
+            "gateway",
+            "direct"
+          ],
+          "targetOrderPosition": 2
+        },
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:47:20.974682Z",
+          "iterations": 1,
+          "latenciesMs": [
+            1440.328
+          ],
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 1440.328,
+            "meanMs": 1440.328,
+            "minMs": 1440.328,
+            "operationsPerSecond": 0.694,
+            "p50Ms": 1440.328,
+            "p90Ms": 1440.328,
+            "p95Ms": 1440.328,
+            "successCount": 1,
+            "wallSeconds": 1.440659
+          },
+          "repeat": 3,
+          "startedAt": "2026-08-23T11:47:19.534000Z",
+          "targetOrder": [
+            "direct",
+            "gateway"
+          ],
+          "targetOrderPosition": 1
+        }
+      ],
+      "startedAt": "2026-08-23T11:43:16.438860Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "validity": {
+        "completedRuns": 3,
+        "expectedRuns": 3,
+        "failures": [],
+        "mandatory": true,
+        "status": "valid"
+      },
+      "warmupIterations": 0
+    },
+    {
+      "concurrency": 1,
+      "entriesReturned": 15000,
+      "expectedRequestsPerEntryValidated": 4.0,
+      "finishedAt": "2026-08-23T11:47:44.239643Z",
+      "fixture": "list-flat-5000",
+      "fixtureManifestSha256": "6108c1c14845dec2f2fc98d4a17d4b86ced124d04f9c0744cd557b0b9ba6fc2d",
+      "id": "list_blobs_flat-list-flat-5000-c1",
+      "iterations": 3,
+      "iterationsPerRun": 1,
+      "listingBudget": {
+        "backendRequests": 60048,
+        "entriesConsidered": 15012,
+        "entriesReturned": 15000,
+        "entriesValidated": 15012,
+        "requestsPerEntryValidated": 4.0,
+        "validationConcurrency": 32
+      },
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 24795.703,
+        "meanMs": 23809.101,
+        "minMs": 23264.274,
+        "operationsPerSecond": 0.042,
+        "p50Ms": 23367.326,
+        "p90Ms": 24795.703,
+        "p95Ms": 24795.703,
+        "successCount": 3,
+        "wallSeconds": 71.428353
+      },
+      "operation": "list_blobs_flat",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "repeatability": {
+        "medianP50Ms": 23367.326,
+        "p50Classification": "blocking",
+        "p50MsPerRun": [
+          23367.326,
+          24795.703,
+          23264.274
+        ],
+        "p50SpreadRatio": 1.066,
+        "requestsPerEntryValidatedPerRun": [
+          4.0,
+          4.0,
+          4.0
+        ],
+        "runs": 3
+      },
+      "runs": [
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:43:41.189333Z",
+          "iterations": 1,
+          "latenciesMs": [
+            23367.326
+          ],
+          "listingBudget": {
+            "backendRequests": 20016,
+            "entriesConsidered": 5004,
+            "entriesReturned": 5000,
+            "entriesValidated": 5004,
+            "requestsPerEntryValidated": 4.0,
+            "validationConcurrency": 32
+          },
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 23367.326,
+            "meanMs": 23367.326,
+            "minMs": 23367.326,
+            "operationsPerSecond": 0.043,
+            "p50Ms": 23367.326,
+            "p90Ms": 23367.326,
+            "p95Ms": 23367.326,
+            "successCount": 1,
+            "wallSeconds": 23.367668
+          },
+          "repeat": 1,
+          "serverTelemetry": {
+            "backendRequests": {
+              "byBackend": {
+                "storage-a": 7028,
+                "storage-b": 6578,
+                "storage-c": 6482
+              },
+              "byObjectClass": {
+                "catalogue": 10050,
+                "container": 15,
+                "head": 10008,
+                "quarantine": 15
+              },
+              "byObjectClassAndStatus": {
+                "catalogue": {
+                  "200": 10050
+                },
+                "container": {
+                  "200": 15
+                },
+                "head": {
+                  "200": 10008
+                },
+                "quarantine": {
+                  "200": 15
+                }
+              },
+              "byOperation": {
+                "authorize_container_list": 15,
+                "control_get_object": 20016,
+                "control_list_objects_page": 57
+              },
+              "byOperationAndObjectClass": {
+                "authorize_container_list": {
+                  "container": 15
+                },
+                "control_get_object": {
+                  "catalogue": 10008,
+                  "head": 10008
+                },
+                "control_list_objects_page": {
+                  "catalogue": 42,
+                  "quarantine": 15
+                }
+              },
+              "byStatus": {
+                "200": 20088
+              },
+              "clientRequestCount": 1,
+              "count": 20088,
+              "responseHeadersDuration": {
+                "count": 20088,
+                "maxDurationUs": 867247,
+                "p50DurationUs": 37034,
+                "p95DurationUs": 71477,
+                "p99DurationUs": 91227,
+                "totalDurationUs": 741641414
+              },
+              "transportFailures": 0,
+              "unattributedRequests": 0
+            },
+            "listingScan": {
+              "entriesConsidered": 5004,
+              "entriesReturned": 5000,
+              "entriesValidated": 5004,
+              "pages": 5,
+              "validationConcurrency": 32
+            },
+            "manifestSigning": {
+              "byDomain": {
+                "ContinuationToken": 4
+              },
+              "count": 4,
+              "failures": 0,
+              "maxDurationUs": 298076,
+              "p50DurationUs": 54452,
+              "p95DurationUs": 298076,
+              "p99DurationUs": 298076,
+              "totalDurationUs": 689489
+            }
+          },
+          "startedAt": "2026-08-23T11:43:17.821632Z",
+          "targetOrder": [
+            "direct",
+            "gateway"
+          ],
+          "targetOrderPosition": 2
+        },
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:45:39.127104Z",
+          "iterations": 1,
+          "latenciesMs": [
+            24795.703
+          ],
+          "listingBudget": {
+            "backendRequests": 20016,
+            "entriesConsidered": 5004,
+            "entriesReturned": 5000,
+            "entriesValidated": 5004,
+            "requestsPerEntryValidated": 4.0,
+            "validationConcurrency": 32
+          },
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 24795.703,
+            "meanMs": 24795.703,
+            "minMs": 24795.703,
+            "operationsPerSecond": 0.04,
+            "p50Ms": 24795.703,
+            "p90Ms": 24795.703,
+            "p95Ms": 24795.703,
+            "successCount": 1,
+            "wallSeconds": 24.796068
+          },
+          "repeat": 2,
+          "serverTelemetry": {
+            "backendRequests": {
+              "byBackend": {
+                "storage-a": 7028,
+                "storage-b": 6578,
+                "storage-c": 6482
+              },
+              "byObjectClass": {
+                "catalogue": 10050,
+                "container": 15,
+                "head": 10008,
+                "quarantine": 15
+              },
+              "byObjectClassAndStatus": {
+                "catalogue": {
+                  "200": 10050
+                },
+                "container": {
+                  "200": 15
+                },
+                "head": {
+                  "200": 10008
+                },
+                "quarantine": {
+                  "200": 15
+                }
+              },
+              "byOperation": {
+                "authorize_container_list": 15,
+                "control_get_object": 20016,
+                "control_list_objects_page": 57
+              },
+              "byOperationAndObjectClass": {
+                "authorize_container_list": {
+                  "container": 15
+                },
+                "control_get_object": {
+                  "catalogue": 10008,
+                  "head": 10008
+                },
+                "control_list_objects_page": {
+                  "catalogue": 42,
+                  "quarantine": 15
+                }
+              },
+              "byStatus": {
+                "200": 20088
+              },
+              "clientRequestCount": 1,
+              "count": 20088,
+              "responseHeadersDuration": {
+                "count": 20088,
+                "maxDurationUs": 572496,
+                "p50DurationUs": 38374,
+                "p95DurationUs": 84822,
+                "p99DurationUs": 473872,
+                "totalDurationUs": 902727116
+              },
+              "transportFailures": 0,
+              "unattributedRequests": 0
+            },
+            "listingScan": {
+              "entriesConsidered": 5004,
+              "entriesReturned": 5000,
+              "entriesValidated": 5004,
+              "pages": 5,
+              "validationConcurrency": 32
+            },
+            "manifestSigning": {
+              "byDomain": {
+                "ContinuationToken": 4
+              },
+              "count": 4,
+              "failures": 0,
+              "maxDurationUs": 92807,
+              "p50DurationUs": 72687,
+              "p95DurationUs": 92807,
+              "p99DurationUs": 92807,
+              "totalDurationUs": 291922
+            }
+          },
+          "startedAt": "2026-08-23T11:45:14.331010Z",
+          "targetOrder": [
+            "gateway",
+            "direct"
+          ],
+          "targetOrderPosition": 1
+        },
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:47:44.239643Z",
+          "iterations": 1,
+          "latenciesMs": [
+            23264.274
+          ],
+          "listingBudget": {
+            "backendRequests": 20016,
+            "entriesConsidered": 5004,
+            "entriesReturned": 5000,
+            "entriesValidated": 5004,
+            "requestsPerEntryValidated": 4.0,
+            "validationConcurrency": 32
+          },
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 23264.274,
+            "meanMs": 23264.274,
+            "minMs": 23264.274,
+            "operationsPerSecond": 0.043,
+            "p50Ms": 23264.274,
+            "p90Ms": 23264.274,
+            "p95Ms": 23264.274,
+            "successCount": 1,
+            "wallSeconds": 23.264617
+          },
+          "repeat": 3,
+          "serverTelemetry": {
+            "backendRequests": {
+              "byBackend": {
+                "storage-a": 7028,
+                "storage-b": 6578,
+                "storage-c": 6482
+              },
+              "byObjectClass": {
+                "catalogue": 10050,
+                "container": 15,
+                "head": 10008,
+                "quarantine": 15
+              },
+              "byObjectClassAndStatus": {
+                "catalogue": {
+                  "200": 10050
+                },
+                "container": {
+                  "200": 15
+                },
+                "head": {
+                  "200": 10008
+                },
+                "quarantine": {
+                  "200": 15
+                }
+              },
+              "byOperation": {
+                "authorize_container_list": 15,
+                "control_get_object": 20016,
+                "control_list_objects_page": 57
+              },
+              "byOperationAndObjectClass": {
+                "authorize_container_list": {
+                  "container": 15
+                },
+                "control_get_object": {
+                  "catalogue": 10008,
+                  "head": 10008
+                },
+                "control_list_objects_page": {
+                  "catalogue": 42,
+                  "quarantine": 15
+                }
+              },
+              "byStatus": {
+                "200": 20088
+              },
+              "clientRequestCount": 1,
+              "count": 20088,
+              "responseHeadersDuration": {
+                "count": 20088,
+                "maxDurationUs": 542928,
+                "p50DurationUs": 38050,
+                "p95DurationUs": 82398,
+                "p99DurationUs": 428552,
+                "totalDurationUs": 841030899
+              },
+              "transportFailures": 0,
+              "unattributedRequests": 0
+            },
+            "listingScan": {
+              "entriesConsidered": 5004,
+              "entriesReturned": 5000,
+              "entriesValidated": 5004,
+              "pages": 5,
+              "validationConcurrency": 32
+            },
+            "manifestSigning": {
+              "byDomain": {
+                "ContinuationToken": 4
+              },
+              "count": 4,
+              "failures": 0,
+              "maxDurationUs": 105794,
+              "p50DurationUs": 81229,
+              "p95DurationUs": 105794,
+              "p99DurationUs": 105794,
+              "totalDurationUs": 337182
+            }
+          },
+          "startedAt": "2026-08-23T11:47:20.974999Z",
+          "targetOrder": [
+            "direct",
+            "gateway"
+          ],
+          "targetOrderPosition": 2
+        }
+      ],
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 21084,
+            "storage-b": 19734,
+            "storage-c": 19446
+          },
+          "byObjectClass": {
+            "catalogue": 30150,
+            "container": 45,
+            "head": 30024,
+            "quarantine": 45
+          },
+          "byObjectClassAndStatus": {
+            "catalogue": {
+              "200": 30150
+            },
+            "container": {
+              "200": 45
+            },
+            "head": {
+              "200": 30024
+            },
+            "quarantine": {
+              "200": 45
+            }
+          },
+          "byOperation": {
+            "authorize_container_list": 45,
+            "control_get_object": 60048,
+            "control_list_objects_page": 171
+          },
+          "byOperationAndObjectClass": {
+            "authorize_container_list": {
+              "container": 45
+            },
+            "control_get_object": {
+              "catalogue": 30024,
+              "head": 30024
+            },
+            "control_list_objects_page": {
+              "catalogue": 126,
+              "quarantine": 45
+            }
+          },
+          "byStatus": {
+            "200": 60264
+          },
+          "clientRequestCount": 3,
+          "count": 60264,
+          "responseHeadersDuration": {
+            "count": 60264,
+            "maxDurationUs": 867247,
+            "p50DurationUs": 37823,
+            "p95DurationUs": 80383,
+            "p99DurationUs": 416379,
+            "totalDurationUs": 2485399429
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "listingScan": {
+          "entriesConsidered": 15012,
+          "entriesReturned": 15000,
+          "entriesValidated": 15012,
+          "pages": 15,
+          "validationConcurrency": 32
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "ContinuationToken": 12
+          },
+          "count": 12,
+          "failures": 0,
+          "maxDurationUs": 298076,
+          "p50DurationUs": 81229,
+          "p95DurationUs": 298076,
+          "p99DurationUs": 298076,
+          "totalDurationUs": 1318593
+        }
+      },
+      "startedAt": "2026-08-23T11:43:17.821632Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "validity": {
+        "completedRuns": 3,
+        "expectedRuns": 3,
+        "failures": [],
+        "mandatory": true,
+        "status": "valid"
+      },
+      "warmupIterations": 0
+    },
+    {
+      "concurrency": 4,
+      "entriesReturned": 15000,
+      "expectedRequestsPerEntryValidated": 4.0,
+      "finishedAt": "2026-08-23T11:48:10.343795Z",
+      "fixture": "list-flat-5000",
+      "fixtureManifestSha256": "6108c1c14845dec2f2fc98d4a17d4b86ced124d04f9c0744cd557b0b9ba6fc2d",
+      "id": "list_blobs_flat-list-flat-5000-c4",
+      "iterations": 3,
+      "iterationsPerRun": 1,
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 1441.326,
+        "meanMs": 1428.53,
+        "minMs": 1419.925,
+        "operationsPerSecond": 0.7,
+        "p50Ms": 1424.338,
+        "p90Ms": 1441.326,
+        "p95Ms": 1441.326,
+        "successCount": 3,
+        "wallSeconds": 4.286597
+      },
+      "operation": "list_blobs_flat",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "repeatability": {
+        "medianP50Ms": 1424.338,
+        "p50Classification": "blocking",
+        "p50MsPerRun": [
+          1424.338,
+          1441.326,
+          1419.925
+        ],
+        "p50SpreadRatio": 1.015,
+        "runs": 3
+      },
+      "runs": [
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:44:04.723709Z",
+          "iterations": 1,
+          "latenciesMs": [
+            1424.338
+          ],
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 1424.338,
+            "meanMs": 1424.338,
+            "minMs": 1424.338,
+            "operationsPerSecond": 0.702,
+            "p50Ms": 1424.338,
+            "p90Ms": 1424.338,
+            "p95Ms": 1424.338,
+            "successCount": 1,
+            "wallSeconds": 1.424687
+          },
+          "repeat": 1,
+          "startedAt": "2026-08-23T11:44:03.299001Z",
+          "targetOrder": [
+            "gateway",
+            "direct"
+          ],
+          "targetOrderPosition": 2
+        },
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:45:41.989765Z",
+          "iterations": 1,
+          "latenciesMs": [
+            1441.326
+          ],
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 1441.326,
+            "meanMs": 1441.326,
+            "minMs": 1441.326,
+            "operationsPerSecond": 0.694,
+            "p50Ms": 1441.326,
+            "p90Ms": 1441.326,
+            "p95Ms": 1441.326,
+            "successCount": 1,
+            "wallSeconds": 1.441657
+          },
+          "repeat": 2,
+          "startedAt": "2026-08-23T11:45:40.548077Z",
+          "targetOrder": [
+            "direct",
+            "gateway"
+          ],
+          "targetOrderPosition": 1
+        },
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:48:10.343795Z",
+          "iterations": 1,
+          "latenciesMs": [
+            1419.925
+          ],
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 1419.925,
+            "meanMs": 1419.925,
+            "minMs": 1419.925,
+            "operationsPerSecond": 0.704,
+            "p50Ms": 1419.925,
+            "p90Ms": 1419.925,
+            "p95Ms": 1419.925,
+            "successCount": 1,
+            "wallSeconds": 1.420253
+          },
+          "repeat": 3,
+          "startedAt": "2026-08-23T11:48:08.923516Z",
+          "targetOrder": [
+            "gateway",
+            "direct"
+          ],
+          "targetOrderPosition": 2
+        }
+      ],
+      "startedAt": "2026-08-23T11:44:03.299001Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "validity": {
+        "completedRuns": 3,
+        "expectedRuns": 3,
+        "failures": [],
+        "mandatory": true,
+        "status": "valid"
+      },
+      "warmupIterations": 0
+    },
+    {
+      "concurrency": 4,
+      "entriesReturned": 15000,
+      "expectedRequestsPerEntryValidated": 4.0,
+      "finishedAt": "2026-08-23T11:48:08.923222Z",
+      "fixture": "list-flat-5000",
+      "fixtureManifestSha256": "6108c1c14845dec2f2fc98d4a17d4b86ced124d04f9c0744cd557b0b9ba6fc2d",
+      "id": "list_blobs_flat-list-flat-5000-c4",
+      "iterations": 3,
+      "iterationsPerRun": 1,
+      "listingBudget": {
+        "backendRequests": 60048,
+        "entriesConsidered": 15012,
+        "entriesReturned": 15000,
+        "entriesValidated": 15012,
+        "requestsPerEntryValidated": 4.0,
+        "validationConcurrency": 32
+      },
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 24932.795,
+        "meanMs": 23908.126,
+        "minMs": 22108.701,
+        "operationsPerSecond": 0.042,
+        "p50Ms": 24682.883,
+        "p90Ms": 24932.795,
+        "p95Ms": 24932.795,
+        "successCount": 3,
+        "wallSeconds": 71.725423
+      },
+      "operation": "list_blobs_flat",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "repeatability": {
+        "medianP50Ms": 24682.883,
+        "p50Classification": "signal",
+        "p50MsPerRun": [
+          22108.701,
+          24932.795,
+          24682.883
+        ],
+        "p50SpreadRatio": 1.128,
+        "requestsPerEntryValidatedPerRun": [
+          4.0,
+          4.0,
+          4.0
+        ],
+        "runs": 3
+      },
+      "runs": [
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:44:03.298705Z",
+          "iterations": 1,
+          "latenciesMs": [
+            22108.701
+          ],
+          "listingBudget": {
+            "backendRequests": 20016,
+            "entriesConsidered": 5004,
+            "entriesReturned": 5000,
+            "entriesValidated": 5004,
+            "requestsPerEntryValidated": 4.0,
+            "validationConcurrency": 32
+          },
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 22108.701,
+            "meanMs": 22108.701,
+            "minMs": 22108.701,
+            "operationsPerSecond": 0.045,
+            "p50Ms": 22108.701,
+            "p90Ms": 22108.701,
+            "p95Ms": 22108.701,
+            "successCount": 1,
+            "wallSeconds": 22.109044
+          },
+          "repeat": 1,
+          "serverTelemetry": {
+            "backendRequests": {
+              "byBackend": {
+                "storage-a": 7028,
+                "storage-b": 6578,
+                "storage-c": 6482
+              },
+              "byObjectClass": {
+                "catalogue": 10050,
+                "container": 15,
+                "head": 10008,
+                "quarantine": 15
+              },
+              "byObjectClassAndStatus": {
+                "catalogue": {
+                  "200": 10050
+                },
+                "container": {
+                  "200": 15
+                },
+                "head": {
+                  "200": 10008
+                },
+                "quarantine": {
+                  "200": 15
+                }
+              },
+              "byOperation": {
+                "authorize_container_list": 15,
+                "control_get_object": 20016,
+                "control_list_objects_page": 57
+              },
+              "byOperationAndObjectClass": {
+                "authorize_container_list": {
+                  "container": 15
+                },
+                "control_get_object": {
+                  "catalogue": 10008,
+                  "head": 10008
+                },
+                "control_list_objects_page": {
+                  "catalogue": 42,
+                  "quarantine": 15
+                }
+              },
+              "byStatus": {
+                "200": 20088
+              },
+              "clientRequestCount": 1,
+              "count": 20088,
+              "responseHeadersDuration": {
+                "count": 20088,
+                "maxDurationUs": 342264,
+                "p50DurationUs": 37602,
+                "p95DurationUs": 82910,
+                "p99DurationUs": 93548,
+                "totalDurationUs": 745788620
+              },
+              "transportFailures": 0,
+              "unattributedRequests": 0
+            },
+            "listingScan": {
+              "entriesConsidered": 5004,
+              "entriesReturned": 5000,
+              "entriesValidated": 5004,
+              "pages": 5,
+              "validationConcurrency": 32
+            },
+            "manifestSigning": {
+              "byDomain": {
+                "ContinuationToken": 4
+              },
+              "count": 4,
+              "failures": 0,
+              "maxDurationUs": 76643,
+              "p50DurationUs": 54780,
+              "p95DurationUs": 76643,
+              "p99DurationUs": 76643,
+              "totalDurationUs": 237144
+            }
+          },
+          "startedAt": "2026-08-23T11:43:41.189634Z",
+          "targetOrder": [
+            "gateway",
+            "direct"
+          ],
+          "targetOrderPosition": 1
+        },
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:46:06.923257Z",
+          "iterations": 1,
+          "latenciesMs": [
+            24932.795
+          ],
+          "listingBudget": {
+            "backendRequests": 20016,
+            "entriesConsidered": 5004,
+            "entriesReturned": 5000,
+            "entriesValidated": 5004,
+            "requestsPerEntryValidated": 4.0,
+            "validationConcurrency": 32
+          },
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 24932.795,
+            "meanMs": 24932.795,
+            "minMs": 24932.795,
+            "operationsPerSecond": 0.04,
+            "p50Ms": 24932.795,
+            "p90Ms": 24932.795,
+            "p95Ms": 24932.795,
+            "successCount": 1,
+            "wallSeconds": 24.933121
+          },
+          "repeat": 2,
+          "serverTelemetry": {
+            "backendRequests": {
+              "byBackend": {
+                "storage-a": 7028,
+                "storage-b": 6578,
+                "storage-c": 6482
+              },
+              "byObjectClass": {
+                "catalogue": 10050,
+                "container": 15,
+                "head": 10008,
+                "quarantine": 15
+              },
+              "byObjectClassAndStatus": {
+                "catalogue": {
+                  "200": 10050
+                },
+                "container": {
+                  "200": 15
+                },
+                "head": {
+                  "200": 10008
+                },
+                "quarantine": {
+                  "200": 15
+                }
+              },
+              "byOperation": {
+                "authorize_container_list": 15,
+                "control_get_object": 20016,
+                "control_list_objects_page": 57
+              },
+              "byOperationAndObjectClass": {
+                "authorize_container_list": {
+                  "container": 15
+                },
+                "control_get_object": {
+                  "catalogue": 10008,
+                  "head": 10008
+                },
+                "control_list_objects_page": {
+                  "catalogue": 42,
+                  "quarantine": 15
+                }
+              },
+              "byStatus": {
+                "200": 20088
+              },
+              "clientRequestCount": 1,
+              "count": 20088,
+              "responseHeadersDuration": {
+                "count": 20088,
+                "maxDurationUs": 548460,
+                "p50DurationUs": 37306,
+                "p95DurationUs": 83137,
+                "p99DurationUs": 413424,
+                "totalDurationUs": 867919474
+              },
+              "transportFailures": 0,
+              "unattributedRequests": 0
+            },
+            "listingScan": {
+              "entriesConsidered": 5004,
+              "entriesReturned": 5000,
+              "entriesValidated": 5004,
+              "pages": 5,
+              "validationConcurrency": 32
+            },
+            "manifestSigning": {
+              "byDomain": {
+                "ContinuationToken": 4
+              },
+              "count": 4,
+              "failures": 0,
+              "maxDurationUs": 101490,
+              "p50DurationUs": 72157,
+              "p95DurationUs": 101490,
+              "p99DurationUs": 101490,
+              "totalDurationUs": 317473
+            }
+          },
+          "startedAt": "2026-08-23T11:45:41.990112Z",
+          "targetOrder": [
+            "direct",
+            "gateway"
+          ],
+          "targetOrderPosition": 2
+        },
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:48:08.923222Z",
+          "iterations": 1,
+          "latenciesMs": [
+            24682.883
+          ],
+          "listingBudget": {
+            "backendRequests": 20016,
+            "entriesConsidered": 5004,
+            "entriesReturned": 5000,
+            "entriesValidated": 5004,
+            "requestsPerEntryValidated": 4.0,
+            "validationConcurrency": 32
+          },
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 24682.883,
+            "meanMs": 24682.883,
+            "minMs": 24682.883,
+            "operationsPerSecond": 0.041,
+            "p50Ms": 24682.883,
+            "p90Ms": 24682.883,
+            "p95Ms": 24682.883,
+            "successCount": 1,
+            "wallSeconds": 24.683258
+          },
+          "repeat": 3,
+          "serverTelemetry": {
+            "backendRequests": {
+              "byBackend": {
+                "storage-a": 7028,
+                "storage-b": 6578,
+                "storage-c": 6482
+              },
+              "byObjectClass": {
+                "catalogue": 10050,
+                "container": 15,
+                "head": 10008,
+                "quarantine": 15
+              },
+              "byObjectClassAndStatus": {
+                "catalogue": {
+                  "200": 10050
+                },
+                "container": {
+                  "200": 15
+                },
+                "head": {
+                  "200": 10008
+                },
+                "quarantine": {
+                  "200": 15
+                }
+              },
+              "byOperation": {
+                "authorize_container_list": 15,
+                "control_get_object": 20016,
+                "control_list_objects_page": 57
+              },
+              "byOperationAndObjectClass": {
+                "authorize_container_list": {
+                  "container": 15
+                },
+                "control_get_object": {
+                  "catalogue": 10008,
+                  "head": 10008
+                },
+                "control_list_objects_page": {
+                  "catalogue": 42,
+                  "quarantine": 15
+                }
+              },
+              "byStatus": {
+                "200": 20088
+              },
+              "clientRequestCount": 1,
+              "count": 20088,
+              "responseHeadersDuration": {
+                "count": 20088,
+                "maxDurationUs": 515889,
+                "p50DurationUs": 38237,
+                "p95DurationUs": 87787,
+                "p99DurationUs": 434494,
+                "totalDurationUs": 883198552
+              },
+              "transportFailures": 0,
+              "unattributedRequests": 0
+            },
+            "listingScan": {
+              "entriesConsidered": 5004,
+              "entriesReturned": 5000,
+              "entriesValidated": 5004,
+              "pages": 5,
+              "validationConcurrency": 32
+            },
+            "manifestSigning": {
+              "byDomain": {
+                "ContinuationToken": 4
+              },
+              "count": 4,
+              "failures": 0,
+              "maxDurationUs": 179004,
+              "p50DurationUs": 56095,
+              "p95DurationUs": 179004,
+              "p99DurationUs": 179004,
+              "totalDurationUs": 375169
+            }
+          },
+          "startedAt": "2026-08-23T11:47:44.239935Z",
+          "targetOrder": [
+            "gateway",
+            "direct"
+          ],
+          "targetOrderPosition": 1
+        }
+      ],
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 21084,
+            "storage-b": 19734,
+            "storage-c": 19446
+          },
+          "byObjectClass": {
+            "catalogue": 30150,
+            "container": 45,
+            "head": 30024,
+            "quarantine": 45
+          },
+          "byObjectClassAndStatus": {
+            "catalogue": {
+              "200": 30150
+            },
+            "container": {
+              "200": 45
+            },
+            "head": {
+              "200": 30024
+            },
+            "quarantine": {
+              "200": 45
+            }
+          },
+          "byOperation": {
+            "authorize_container_list": 45,
+            "control_get_object": 60048,
+            "control_list_objects_page": 171
+          },
+          "byOperationAndObjectClass": {
+            "authorize_container_list": {
+              "container": 45
+            },
+            "control_get_object": {
+              "catalogue": 30024,
+              "head": 30024
+            },
+            "control_list_objects_page": {
+              "catalogue": 126,
+              "quarantine": 45
+            }
+          },
+          "byStatus": {
+            "200": 60264
+          },
+          "clientRequestCount": 3,
+          "count": 60264,
+          "responseHeadersDuration": {
+            "count": 60264,
+            "maxDurationUs": 548460,
+            "p50DurationUs": 37636,
+            "p95DurationUs": 84546,
+            "p99DurationUs": 372214,
+            "totalDurationUs": 2496906646
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "listingScan": {
+          "entriesConsidered": 15012,
+          "entriesReturned": 15000,
+          "entriesValidated": 15012,
+          "pages": 15,
+          "validationConcurrency": 32
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "ContinuationToken": 12
+          },
+          "count": 12,
+          "failures": 0,
+          "maxDurationUs": 179004,
+          "p50DurationUs": 60961,
+          "p95DurationUs": 179004,
+          "p99DurationUs": 179004,
+          "totalDurationUs": 929786
+        }
+      },
+      "startedAt": "2026-08-23T11:43:41.189634Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "validity": {
+        "completedRuns": 3,
+        "expectedRuns": 3,
+        "failures": [],
+        "mandatory": true,
+        "status": "valid"
+      },
+      "warmupIterations": 0
+    },
+    {
+      "concurrency": 1,
+      "entriesReturned": 150,
+      "expectedRequestsPerEntryValidated": 4.0,
+      "finishedAt": "2026-08-23T11:48:10.383948Z",
+      "fixture": "list-hierarchical-5000",
+      "fixtureManifestSha256": "b7269e56115a14c5b20c73f5d15bbbeb99d8bb97aea3406ff09417255eb387eb",
+      "id": "list_blobs_hierarchical-list-hierarchical-5000-c1",
+      "iterations": 3,
+      "iterationsPerRun": 1,
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 79.64,
+        "meanMs": 54.027,
+        "minMs": 39.408,
+        "operationsPerSecond": 18.4,
+        "p50Ms": 43.033,
+        "p90Ms": 79.64,
+        "p95Ms": 79.64,
+        "successCount": 3,
+        "wallSeconds": 0.163044
+      },
+      "operation": "list_blobs_hierarchical",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "repeatability": {
+        "medianP50Ms": 43.033,
+        "p50Classification": "signal",
+        "p50MsPerRun": [
+          79.64,
+          43.033,
+          39.408
+        ],
+        "p50SpreadRatio": 2.021,
+        "runs": 3
+      },
+      "runs": [
+        {
+          "entriesReturned": 50,
+          "finishedAt": "2026-08-23T11:44:04.804070Z",
+          "iterations": 1,
+          "latenciesMs": [
+            79.64
+          ],
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 79.64,
+            "meanMs": 79.64,
+            "minMs": 79.64,
+            "operationsPerSecond": 12.508,
+            "p50Ms": 79.64,
+            "p90Ms": 79.64,
+            "p95Ms": 79.64,
+            "successCount": 1,
+            "wallSeconds": 0.079951
+          },
+          "repeat": 1,
+          "startedAt": "2026-08-23T11:44:04.724027Z",
+          "targetOrder": [
+            "direct",
+            "gateway"
+          ],
+          "targetOrderPosition": 1
+        },
+        {
+          "entriesReturned": 50,
+          "finishedAt": "2026-08-23T11:46:52.197138Z",
+          "iterations": 1,
+          "latenciesMs": [
+            43.033
+          ],
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 43.033,
+            "meanMs": 43.033,
+            "minMs": 43.033,
+            "operationsPerSecond": 23.076,
+            "p50Ms": 43.033,
+            "p90Ms": 43.033,
+            "p95Ms": 43.033,
+            "successCount": 1,
+            "wallSeconds": 0.043335
+          },
+          "repeat": 2,
+          "startedAt": "2026-08-23T11:46:52.153786Z",
+          "targetOrder": [
+            "gateway",
+            "direct"
+          ],
+          "targetOrderPosition": 2
+        },
+        {
+          "entriesReturned": 50,
+          "finishedAt": "2026-08-23T11:48:10.383948Z",
+          "iterations": 1,
+          "latenciesMs": [
+            39.408
+          ],
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 39.408,
+            "meanMs": 39.408,
+            "minMs": 39.408,
+            "operationsPerSecond": 25.152,
+            "p50Ms": 39.408,
+            "p90Ms": 39.408,
+            "p95Ms": 39.408,
+            "successCount": 1,
+            "wallSeconds": 0.039758
+          },
+          "repeat": 3,
+          "startedAt": "2026-08-23T11:48:10.344162Z",
+          "targetOrder": [
+            "direct",
+            "gateway"
+          ],
+          "targetOrderPosition": 1
+        }
+      ],
+      "startedAt": "2026-08-23T11:44:04.724027Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "validity": {
+        "completedRuns": 3,
+        "expectedRuns": 3,
+        "failures": [],
+        "mandatory": true,
+        "status": "valid"
+      },
+      "warmupIterations": 0
+    },
+    {
+      "concurrency": 1,
+      "entriesReturned": 150,
+      "expectedRequestsPerEntryValidated": 4.0,
+      "finishedAt": "2026-08-23T11:48:52.994572Z",
+      "fixture": "list-hierarchical-5000",
+      "fixtureManifestSha256": "b7269e56115a14c5b20c73f5d15bbbeb99d8bb97aea3406ff09417255eb387eb",
+      "id": "list_blobs_hierarchical-list-hierarchical-5000-c1",
+      "iterations": 3,
+      "iterationsPerRun": 1,
+      "listingBudget": {
+        "backendRequests": 648,
+        "entriesConsidered": 15012,
+        "entriesReturned": 150,
+        "entriesValidated": 162,
+        "requestsPerEntryValidated": 4.0,
+        "validationConcurrency": 32
+      },
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 45229.628,
+        "meanMs": 43306.328,
+        "minMs": 42079.397,
+        "operationsPerSecond": 0.023,
+        "p50Ms": 42609.96,
+        "p90Ms": 45229.628,
+        "p95Ms": 45229.628,
+        "successCount": 3,
+        "wallSeconds": 129.91991
+      },
+      "operation": "list_blobs_hierarchical",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "repeatability": {
+        "medianP50Ms": 42609.96,
+        "p50Classification": "blocking",
+        "p50MsPerRun": [
+          42079.397,
+          45229.628,
+          42609.96
+        ],
+        "p50SpreadRatio": 1.075,
+        "requestsPerEntryValidatedPerRun": [
+          4.0,
+          4.0,
+          4.0
+        ],
+        "runs": 3
+      },
+      "runs": [
+        {
+          "entriesReturned": 50,
+          "finishedAt": "2026-08-23T11:44:46.884066Z",
+          "iterations": 1,
+          "latenciesMs": [
+            42079.397
+          ],
+          "listingBudget": {
+            "backendRequests": 216,
+            "entriesConsidered": 5004,
+            "entriesReturned": 50,
+            "entriesValidated": 54,
+            "requestsPerEntryValidated": 4.0,
+            "validationConcurrency": 32
+          },
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 42079.397,
+            "meanMs": 42079.397,
+            "minMs": 42079.397,
+            "operationsPerSecond": 0.024,
+            "p50Ms": 42079.397,
+            "p90Ms": 42079.397,
+            "p95Ms": 42079.397,
+            "successCount": 1,
+            "wallSeconds": 42.0797
+          },
+          "repeat": 1,
+          "serverTelemetry": {
+            "backendRequests": {
+              "byBackend": {
+                "storage-a": 377,
+                "storage-b": 405,
+                "storage-c": 391
+              },
+              "byObjectClass": {
+                "catalogue": 1035,
+                "container": 15,
+                "head": 108,
+                "quarantine": 15
+              },
+              "byObjectClassAndStatus": {
+                "catalogue": {
+                  "200": 1035
+                },
+                "container": {
+                  "200": 15
+                },
+                "head": {
+                  "200": 108
+                },
+                "quarantine": {
+                  "200": 15
+                }
+              },
+              "byOperation": {
+                "authorize_container_list": 15,
+                "control_get_object": 216,
+                "control_list_objects_page": 942
+              },
+              "byOperationAndObjectClass": {
+                "authorize_container_list": {
+                  "container": 15
+                },
+                "control_get_object": {
+                  "catalogue": 108,
+                  "head": 108
+                },
+                "control_list_objects_page": {
+                  "catalogue": 927,
+                  "quarantine": 15
+                }
+              },
+              "byStatus": {
+                "200": 1173
+              },
+              "clientRequestCount": 1,
+              "count": 1173,
+              "responseHeadersDuration": {
+                "count": 1173,
+                "maxDurationUs": 145581,
+                "p50DurationUs": 34989,
+                "p95DurationUs": 44414,
+                "p99DurationUs": 52046,
+                "totalDurationUs": 34728352
+              },
+              "transportFailures": 0,
+              "unattributedRequests": 0
+            },
+            "listingScan": {
+              "entriesConsidered": 5004,
+              "entriesReturned": 50,
+              "entriesValidated": 54,
+              "pages": 5,
+              "validationConcurrency": 32
+            },
+            "manifestSigning": {
+              "byDomain": {
+                "ContinuationToken": 4
+              },
+              "count": 4,
+              "failures": 0,
+              "maxDurationUs": 118424,
+              "p50DurationUs": 54163,
+              "p95DurationUs": 118424,
+              "p99DurationUs": 118424,
+              "totalDurationUs": 306048
+            }
+          },
+          "startedAt": "2026-08-23T11:44:04.804337Z",
+          "targetOrder": [
+            "direct",
+            "gateway"
+          ],
+          "targetOrderPosition": 2
+        },
+        {
+          "entriesReturned": 50,
+          "finishedAt": "2026-08-23T11:46:52.153524Z",
+          "iterations": 1,
+          "latenciesMs": [
+            45229.628
+          ],
+          "listingBudget": {
+            "backendRequests": 216,
+            "entriesConsidered": 5004,
+            "entriesReturned": 50,
+            "entriesValidated": 54,
+            "requestsPerEntryValidated": 4.0,
+            "validationConcurrency": 32
+          },
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 45229.628,
+            "meanMs": 45229.628,
+            "minMs": 45229.628,
+            "operationsPerSecond": 0.022,
+            "p50Ms": 45229.628,
+            "p90Ms": 45229.628,
+            "p95Ms": 45229.628,
+            "successCount": 1,
+            "wallSeconds": 45.229936
+          },
+          "repeat": 2,
+          "serverTelemetry": {
+            "backendRequests": {
+              "byBackend": {
+                "storage-a": 377,
+                "storage-b": 405,
+                "storage-c": 391
+              },
+              "byObjectClass": {
+                "catalogue": 1035,
+                "container": 15,
+                "head": 108,
+                "quarantine": 15
+              },
+              "byObjectClassAndStatus": {
+                "catalogue": {
+                  "200": 1035
+                },
+                "container": {
+                  "200": 15
+                },
+                "head": {
+                  "200": 108
+                },
+                "quarantine": {
+                  "200": 15
+                }
+              },
+              "byOperation": {
+                "authorize_container_list": 15,
+                "control_get_object": 216,
+                "control_list_objects_page": 942
+              },
+              "byOperationAndObjectClass": {
+                "authorize_container_list": {
+                  "container": 15
+                },
+                "control_get_object": {
+                  "catalogue": 108,
+                  "head": 108
+                },
+                "control_list_objects_page": {
+                  "catalogue": 927,
+                  "quarantine": 15
+                }
+              },
+              "byStatus": {
+                "200": 1173
+              },
+              "clientRequestCount": 1,
+              "count": 1173,
+              "responseHeadersDuration": {
+                "count": 1173,
+                "maxDurationUs": 271338,
+                "p50DurationUs": 35080,
+                "p95DurationUs": 46275,
+                "p99DurationUs": 141857,
+                "totalDurationUs": 37367951
+              },
+              "transportFailures": 0,
+              "unattributedRequests": 0
+            },
+            "listingScan": {
+              "entriesConsidered": 5004,
+              "entriesReturned": 50,
+              "entriesValidated": 54,
+              "pages": 5,
+              "validationConcurrency": 32
+            },
+            "manifestSigning": {
+              "byDomain": {
+                "ContinuationToken": 4
+              },
+              "count": 4,
+              "failures": 0,
+              "maxDurationUs": 107914,
+              "p50DurationUs": 84238,
+              "p95DurationUs": 107914,
+              "p99DurationUs": 107914,
+              "totalDurationUs": 352233
+            }
+          },
+          "startedAt": "2026-08-23T11:46:06.923561Z",
+          "targetOrder": [
+            "gateway",
+            "direct"
+          ],
+          "targetOrderPosition": 1
+        },
+        {
+          "entriesReturned": 50,
+          "finishedAt": "2026-08-23T11:48:52.994572Z",
+          "iterations": 1,
+          "latenciesMs": [
+            42609.96
+          ],
+          "listingBudget": {
+            "backendRequests": 216,
+            "entriesConsidered": 5004,
+            "entriesReturned": 50,
+            "entriesValidated": 54,
+            "requestsPerEntryValidated": 4.0,
+            "validationConcurrency": 32
+          },
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 42609.96,
+            "meanMs": 42609.96,
+            "minMs": 42609.96,
+            "operationsPerSecond": 0.023,
+            "p50Ms": 42609.96,
+            "p90Ms": 42609.96,
+            "p95Ms": 42609.96,
+            "successCount": 1,
+            "wallSeconds": 42.610274
+          },
+          "repeat": 3,
+          "serverTelemetry": {
+            "backendRequests": {
+              "byBackend": {
+                "storage-a": 377,
+                "storage-b": 405,
+                "storage-c": 391
+              },
+              "byObjectClass": {
+                "catalogue": 1035,
+                "container": 15,
+                "head": 108,
+                "quarantine": 15
+              },
+              "byObjectClassAndStatus": {
+                "catalogue": {
+                  "200": 1035
+                },
+                "container": {
+                  "200": 15
+                },
+                "head": {
+                  "200": 108
+                },
+                "quarantine": {
+                  "200": 15
+                }
+              },
+              "byOperation": {
+                "authorize_container_list": 15,
+                "control_get_object": 216,
+                "control_list_objects_page": 942
+              },
+              "byOperationAndObjectClass": {
+                "authorize_container_list": {
+                  "container": 15
+                },
+                "control_get_object": {
+                  "catalogue": 108,
+                  "head": 108
+                },
+                "control_list_objects_page": {
+                  "catalogue": 927,
+                  "quarantine": 15
+                }
+              },
+              "byStatus": {
+                "200": 1173
+              },
+              "clientRequestCount": 1,
+              "count": 1173,
+              "responseHeadersDuration": {
+                "count": 1173,
+                "maxDurationUs": 149964,
+                "p50DurationUs": 34421,
+                "p95DurationUs": 43847,
+                "p99DurationUs": 64122,
+                "totalDurationUs": 34853113
+              },
+              "transportFailures": 0,
+              "unattributedRequests": 0
+            },
+            "listingScan": {
+              "entriesConsidered": 5004,
+              "entriesReturned": 50,
+              "entriesValidated": 54,
+              "pages": 5,
+              "validationConcurrency": 32
+            },
+            "manifestSigning": {
+              "byDomain": {
+                "ContinuationToken": 4
+              },
+              "count": 4,
+              "failures": 0,
+              "maxDurationUs": 103785,
+              "p50DurationUs": 85747,
+              "p95DurationUs": 103785,
+              "p99DurationUs": 103785,
+              "totalDurationUs": 356686
+            }
+          },
+          "startedAt": "2026-08-23T11:48:10.384271Z",
+          "targetOrder": [
+            "direct",
+            "gateway"
+          ],
+          "targetOrderPosition": 2
+        }
+      ],
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 1131,
+            "storage-b": 1215,
+            "storage-c": 1173
+          },
+          "byObjectClass": {
+            "catalogue": 3105,
+            "container": 45,
+            "head": 324,
+            "quarantine": 45
+          },
+          "byObjectClassAndStatus": {
+            "catalogue": {
+              "200": 3105
+            },
+            "container": {
+              "200": 45
+            },
+            "head": {
+              "200": 324
+            },
+            "quarantine": {
+              "200": 45
+            }
+          },
+          "byOperation": {
+            "authorize_container_list": 45,
+            "control_get_object": 648,
+            "control_list_objects_page": 2826
+          },
+          "byOperationAndObjectClass": {
+            "authorize_container_list": {
+              "container": 45
+            },
+            "control_get_object": {
+              "catalogue": 324,
+              "head": 324
+            },
+            "control_list_objects_page": {
+              "catalogue": 2781,
+              "quarantine": 45
+            }
+          },
+          "byStatus": {
+            "200": 3519
+          },
+          "clientRequestCount": 3,
+          "count": 3519,
+          "responseHeadersDuration": {
+            "count": 3519,
+            "maxDurationUs": 271338,
+            "p50DurationUs": 34822,
+            "p95DurationUs": 44465,
+            "p99DurationUs": 89098,
+            "totalDurationUs": 106949416
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "listingScan": {
+          "entriesConsidered": 15012,
+          "entriesReturned": 150,
+          "entriesValidated": 162,
+          "pages": 15,
+          "validationConcurrency": 32
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "ContinuationToken": 12
+          },
+          "count": 12,
+          "failures": 0,
+          "maxDurationUs": 118424,
+          "p50DurationUs": 84430,
+          "p95DurationUs": 118424,
+          "p99DurationUs": 118424,
+          "totalDurationUs": 1014967
+        }
+      },
+      "startedAt": "2026-08-23T11:44:04.804337Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "validity": {
+        "completedRuns": 3,
+        "expectedRuns": 3,
+        "failures": [],
+        "mandatory": true,
+        "status": "valid"
+      },
+      "warmupIterations": 0
+    },
+    {
+      "concurrency": 1,
+      "entriesReturned": 15000,
+      "expectedRequestsPerEntryValidated": 4.0,
+      "finishedAt": "2026-08-23T11:49:19.434087Z",
+      "fixture": "list-flat-5000",
+      "fixtureManifestSha256": "6108c1c14845dec2f2fc98d4a17d4b86ced124d04f9c0744cd557b0b9ba6fc2d",
+      "id": "list_blobs_paginated-list-flat-5000-c1",
+      "iterations": 3,
+      "iterationsPerRun": 1,
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 1418.691,
+        "meanMs": 1405.891,
+        "minMs": 1391.075,
+        "operationsPerSecond": 0.711,
+        "p50Ms": 1407.906,
+        "p90Ms": 1418.691,
+        "p95Ms": 1418.691,
+        "successCount": 3,
+        "wallSeconds": 4.218548
+      },
+      "operation": "list_blobs_paginated",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "repeatability": {
+        "medianP50Ms": 1407.906,
+        "p50Classification": "blocking",
+        "p50MsPerRun": [
+          1391.075,
+          1418.691,
+          1407.906
+        ],
+        "p50SpreadRatio": 1.02,
+        "runs": 3
+      },
+      "runs": [
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:45:14.330742Z",
+          "iterations": 1,
+          "latenciesMs": [
+            1391.075
+          ],
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 1391.075,
+            "meanMs": 1391.075,
+            "minMs": 1391.075,
+            "operationsPerSecond": 0.719,
+            "p50Ms": 1391.075,
+            "p90Ms": 1391.075,
+            "p95Ms": 1391.075,
+            "successCount": 1,
+            "wallSeconds": 1.391368
+          },
+          "repeat": 1,
+          "startedAt": "2026-08-23T11:45:12.939347Z",
+          "targetOrder": [
+            "gateway",
+            "direct"
+          ],
+          "targetOrderPosition": 2
+        },
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:46:53.616352Z",
+          "iterations": 1,
+          "latenciesMs": [
+            1418.691
+          ],
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 1418.691,
+            "meanMs": 1418.691,
+            "minMs": 1418.691,
+            "operationsPerSecond": 0.705,
+            "p50Ms": 1418.691,
+            "p90Ms": 1418.691,
+            "p95Ms": 1418.691,
+            "successCount": 1,
+            "wallSeconds": 1.418973
+          },
+          "repeat": 2,
+          "startedAt": "2026-08-23T11:46:52.197354Z",
+          "targetOrder": [
+            "direct",
+            "gateway"
+          ],
+          "targetOrderPosition": 1
+        },
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:49:19.434087Z",
+          "iterations": 1,
+          "latenciesMs": [
+            1407.906
+          ],
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 1407.906,
+            "meanMs": 1407.906,
+            "minMs": 1407.906,
+            "operationsPerSecond": 0.71,
+            "p50Ms": 1407.906,
+            "p90Ms": 1407.906,
+            "p95Ms": 1407.906,
+            "successCount": 1,
+            "wallSeconds": 1.408207
+          },
+          "repeat": 3,
+          "startedAt": "2026-08-23T11:49:18.025856Z",
+          "targetOrder": [
+            "gateway",
+            "direct"
+          ],
+          "targetOrderPosition": 2
+        }
+      ],
+      "startedAt": "2026-08-23T11:45:12.939347Z",
+      "target": "direct",
+      "targetFingerprint": "endpoint-832700daafabb96f",
+      "validity": {
+        "completedRuns": 3,
+        "expectedRuns": 3,
+        "failures": [],
+        "mandatory": true,
+        "status": "valid"
+      },
+      "warmupIterations": 0
+    },
+    {
+      "concurrency": 1,
+      "entriesReturned": 15000,
+      "expectedRequestsPerEntryValidated": 4.0,
+      "finishedAt": "2026-08-23T11:49:18.025571Z",
+      "fixture": "list-flat-5000",
+      "fixtureManifestSha256": "6108c1c14845dec2f2fc98d4a17d4b86ced124d04f9c0744cd557b0b9ba6fc2d",
+      "id": "list_blobs_paginated-list-flat-5000-c1",
+      "iterations": 3,
+      "iterationsPerRun": 1,
+      "listingBudget": {
+        "backendRequests": 60048,
+        "entriesConsidered": 15012,
+        "entriesReturned": 15000,
+        "entriesValidated": 15012,
+        "requestsPerEntryValidated": 4.0,
+        "validationConcurrency": 32
+      },
+      "metrics": {
+        "bytesPerSecond": 0.0,
+        "errorCount": 0,
+        "maxMs": 26054.288,
+        "meanMs": 25667.148,
+        "minMs": 25030.388,
+        "operationsPerSecond": 0.039,
+        "p50Ms": 25916.769,
+        "p90Ms": 26054.288,
+        "p95Ms": 26054.288,
+        "successCount": 3,
+        "wallSeconds": 77.002401
+      },
+      "operation": "list_blobs_paginated",
+      "payload": "1kib",
+      "payloadBytes": 1024,
+      "repeatability": {
+        "medianP50Ms": 25916.769,
+        "p50Classification": "blocking",
+        "p50MsPerRun": [
+          26054.288,
+          25916.769,
+          25030.388
+        ],
+        "p50SpreadRatio": 1.041,
+        "requestsPerEntryValidatedPerRun": [
+          4.0,
+          4.0,
+          4.0
+        ],
+        "runs": 3
+      },
+      "runs": [
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:45:12.939015Z",
+          "iterations": 1,
+          "latenciesMs": [
+            26054.288
+          ],
+          "listingBudget": {
+            "backendRequests": 20016,
+            "entriesConsidered": 5004,
+            "entriesReturned": 5000,
+            "entriesValidated": 5004,
+            "requestsPerEntryValidated": 4.0,
+            "validationConcurrency": 32
+          },
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 26054.288,
+            "meanMs": 26054.288,
+            "minMs": 26054.288,
+            "operationsPerSecond": 0.038,
+            "p50Ms": 26054.288,
+            "p90Ms": 26054.288,
+            "p95Ms": 26054.288,
+            "successCount": 1,
+            "wallSeconds": 26.054628
+          },
+          "repeat": 1,
+          "serverTelemetry": {
+            "backendRequests": {
+              "byBackend": {
+                "storage-a": 7028,
+                "storage-b": 6578,
+                "storage-c": 6482
+              },
+              "byObjectClass": {
+                "catalogue": 10050,
+                "container": 15,
+                "head": 10008,
+                "quarantine": 15
+              },
+              "byObjectClassAndStatus": {
+                "catalogue": {
+                  "200": 10050
+                },
+                "container": {
+                  "200": 15
+                },
+                "head": {
+                  "200": 10008
+                },
+                "quarantine": {
+                  "200": 15
+                }
+              },
+              "byOperation": {
+                "authorize_container_list": 15,
+                "control_get_object": 20016,
+                "control_list_objects_page": 57
+              },
+              "byOperationAndObjectClass": {
+                "authorize_container_list": {
+                  "container": 15
+                },
+                "control_get_object": {
+                  "catalogue": 10008,
+                  "head": 10008
+                },
+                "control_list_objects_page": {
+                  "catalogue": 42,
+                  "quarantine": 15
+                }
+              },
+              "byStatus": {
+                "200": 20088
+              },
+              "clientRequestCount": 1,
+              "count": 20088,
+              "responseHeadersDuration": {
+                "count": 20088,
+                "maxDurationUs": 524372,
+                "p50DurationUs": 37571,
+                "p95DurationUs": 85372,
+                "p99DurationUs": 458686,
+                "totalDurationUs": 915620118
+              },
+              "transportFailures": 0,
+              "unattributedRequests": 0
+            },
+            "listingScan": {
+              "entriesConsidered": 5004,
+              "entriesReturned": 5000,
+              "entriesValidated": 5004,
+              "pages": 5,
+              "validationConcurrency": 32
+            },
+            "manifestSigning": {
+              "byDomain": {
+                "ContinuationToken": 4
+              },
+              "count": 4,
+              "failures": 0,
+              "maxDurationUs": 105910,
+              "p50DurationUs": 77010,
+              "p95DurationUs": 105910,
+              "p99DurationUs": 105910,
+              "totalDurationUs": 344640
+            }
+          },
+          "startedAt": "2026-08-23T11:44:46.884359Z",
+          "targetOrder": [
+            "gateway",
+            "direct"
+          ],
+          "targetOrderPosition": 1
+        },
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:47:19.533705Z",
+          "iterations": 1,
+          "latenciesMs": [
+            25916.769
+          ],
+          "listingBudget": {
+            "backendRequests": 20016,
+            "entriesConsidered": 5004,
+            "entriesReturned": 5000,
+            "entriesValidated": 5004,
+            "requestsPerEntryValidated": 4.0,
+            "validationConcurrency": 32
+          },
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 25916.769,
+            "meanMs": 25916.769,
+            "minMs": 25916.769,
+            "operationsPerSecond": 0.039,
+            "p50Ms": 25916.769,
+            "p90Ms": 25916.769,
+            "p95Ms": 25916.769,
+            "successCount": 1,
+            "wallSeconds": 25.917068
+          },
+          "repeat": 2,
+          "serverTelemetry": {
+            "backendRequests": {
+              "byBackend": {
+                "storage-a": 7028,
+                "storage-b": 6578,
+                "storage-c": 6482
+              },
+              "byObjectClass": {
+                "catalogue": 10050,
+                "container": 15,
+                "head": 10008,
+                "quarantine": 15
+              },
+              "byObjectClassAndStatus": {
+                "catalogue": {
+                  "200": 10050
+                },
+                "container": {
+                  "200": 15
+                },
+                "head": {
+                  "200": 10008
+                },
+                "quarantine": {
+                  "200": 15
+                }
+              },
+              "byOperation": {
+                "authorize_container_list": 15,
+                "control_get_object": 20016,
+                "control_list_objects_page": 57
+              },
+              "byOperationAndObjectClass": {
+                "authorize_container_list": {
+                  "container": 15
+                },
+                "control_get_object": {
+                  "catalogue": 10008,
+                  "head": 10008
+                },
+                "control_list_objects_page": {
+                  "catalogue": 42,
+                  "quarantine": 15
+                }
+              },
+              "byStatus": {
+                "200": 20088
+              },
+              "clientRequestCount": 1,
+              "count": 20088,
+              "responseHeadersDuration": {
+                "count": 20088,
+                "maxDurationUs": 513216,
+                "p50DurationUs": 38701,
+                "p95DurationUs": 88053,
+                "p99DurationUs": 448598,
+                "totalDurationUs": 959066714
+              },
+              "transportFailures": 0,
+              "unattributedRequests": 0
+            },
+            "listingScan": {
+              "entriesConsidered": 5004,
+              "entriesReturned": 5000,
+              "entriesValidated": 5004,
+              "pages": 5,
+              "validationConcurrency": 32
+            },
+            "manifestSigning": {
+              "byDomain": {
+                "ContinuationToken": 4
+              },
+              "count": 4,
+              "failures": 0,
+              "maxDurationUs": 86441,
+              "p50DurationUs": 62408,
+              "p95DurationUs": 86441,
+              "p99DurationUs": 86441,
+              "totalDurationUs": 290560
+            }
+          },
+          "startedAt": "2026-08-23T11:46:53.616611Z",
+          "targetOrder": [
+            "direct",
+            "gateway"
+          ],
+          "targetOrderPosition": 2
+        },
+        {
+          "entriesReturned": 5000,
+          "finishedAt": "2026-08-23T11:49:18.025571Z",
+          "iterations": 1,
+          "latenciesMs": [
+            25030.388
+          ],
+          "listingBudget": {
+            "backendRequests": 20016,
+            "entriesConsidered": 5004,
+            "entriesReturned": 5000,
+            "entriesValidated": 5004,
+            "requestsPerEntryValidated": 4.0,
+            "validationConcurrency": 32
+          },
+          "metrics": {
+            "bytesPerSecond": 0.0,
+            "errorCount": 0,
+            "maxMs": 25030.388,
+            "meanMs": 25030.388,
+            "minMs": 25030.388,
+            "operationsPerSecond": 0.04,
+            "p50Ms": 25030.388,
+            "p90Ms": 25030.388,
+            "p95Ms": 25030.388,
+            "successCount": 1,
+            "wallSeconds": 25.030705
+          },
+          "repeat": 3,
+          "serverTelemetry": {
+            "backendRequests": {
+              "byBackend": {
+                "storage-a": 7028,
+                "storage-b": 6578,
+                "storage-c": 6482
+              },
+              "byObjectClass": {
+                "catalogue": 10050,
+                "container": 15,
+                "head": 10008,
+                "quarantine": 15
+              },
+              "byObjectClassAndStatus": {
+                "catalogue": {
+                  "200": 10050
+                },
+                "container": {
+                  "200": 15
+                },
+                "head": {
+                  "200": 10008
+                },
+                "quarantine": {
+                  "200": 15
+                }
+              },
+              "byOperation": {
+                "authorize_container_list": 15,
+                "control_get_object": 20016,
+                "control_list_objects_page": 57
+              },
+              "byOperationAndObjectClass": {
+                "authorize_container_list": {
+                  "container": 15
+                },
+                "control_get_object": {
+                  "catalogue": 10008,
+                  "head": 10008
+                },
+                "control_list_objects_page": {
+                  "catalogue": 42,
+                  "quarantine": 15
+                }
+              },
+              "byStatus": {
+                "200": 20088
+              },
+              "clientRequestCount": 1,
+              "count": 20088,
+              "responseHeadersDuration": {
+                "count": 20088,
+                "maxDurationUs": 567976,
+                "p50DurationUs": 37851,
+                "p95DurationUs": 86080,
+                "p99DurationUs": 439936,
+                "totalDurationUs": 913478944
+              },
+              "transportFailures": 0,
+              "unattributedRequests": 0
+            },
+            "listingScan": {
+              "entriesConsidered": 5004,
+              "entriesReturned": 5000,
+              "entriesValidated": 5004,
+              "pages": 5,
+              "validationConcurrency": 32
+            },
+            "manifestSigning": {
+              "byDomain": {
+                "ContinuationToken": 4
+              },
+              "count": 4,
+              "failures": 0,
+              "maxDurationUs": 87882,
+              "p50DurationUs": 63539,
+              "p95DurationUs": 87882,
+              "p99DurationUs": 87882,
+              "totalDurationUs": 276502
+            }
+          },
+          "startedAt": "2026-08-23T11:48:52.994838Z",
+          "targetOrder": [
+            "gateway",
+            "direct"
+          ],
+          "targetOrderPosition": 1
+        }
+      ],
+      "serverTelemetry": {
+        "backendRequests": {
+          "byBackend": {
+            "storage-a": 21084,
+            "storage-b": 19734,
+            "storage-c": 19446
+          },
+          "byObjectClass": {
+            "catalogue": 30150,
+            "container": 45,
+            "head": 30024,
+            "quarantine": 45
+          },
+          "byObjectClassAndStatus": {
+            "catalogue": {
+              "200": 30150
+            },
+            "container": {
+              "200": 45
+            },
+            "head": {
+              "200": 30024
+            },
+            "quarantine": {
+              "200": 45
+            }
+          },
+          "byOperation": {
+            "authorize_container_list": 45,
+            "control_get_object": 60048,
+            "control_list_objects_page": 171
+          },
+          "byOperationAndObjectClass": {
+            "authorize_container_list": {
+              "container": 45
+            },
+            "control_get_object": {
+              "catalogue": 30024,
+              "head": 30024
+            },
+            "control_list_objects_page": {
+              "catalogue": 126,
+              "quarantine": 45
+            }
+          },
+          "byStatus": {
+            "200": 60264
+          },
+          "clientRequestCount": 3,
+          "count": 60264,
+          "responseHeadersDuration": {
+            "count": 60264,
+            "maxDurationUs": 567976,
+            "p50DurationUs": 38047,
+            "p95DurationUs": 86307,
+            "p99DurationUs": 454716,
+            "totalDurationUs": 2788165776
+          },
+          "transportFailures": 0,
+          "unattributedRequests": 0
+        },
+        "listingScan": {
+          "entriesConsidered": 15012,
+          "entriesReturned": 15000,
+          "entriesValidated": 15012,
+          "pages": 15,
+          "validationConcurrency": 32
+        },
+        "manifestSigning": {
+          "byDomain": {
+            "ContinuationToken": 12
+          },
+          "count": 12,
+          "failures": 0,
+          "maxDurationUs": 105910,
+          "p50DurationUs": 71824,
+          "p95DurationUs": 105910,
+          "p99DurationUs": 105910,
+          "totalDurationUs": 911702
+        }
+      },
+      "startedAt": "2026-08-23T11:44:46.884359Z",
+      "target": "gateway",
+      "targetFingerprint": "endpoint-75c816375b9d8504",
+      "validity": {
+        "completedRuns": 3,
+        "expectedRuns": 3,
+        "failures": [],
+        "mandatory": true,
+        "status": "valid"
+      },
+      "warmupIterations": 0
+    }
+  ],
+  "comparisons": [
+    {
+      "case": "list_blobs_flat-list-flat-5000-c1",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 16.456,
+        "p90Ms": 17.2153,
+        "p95Ms": 17.2153
+      },
+      "gatewayToDirectThroughputRatio": 0.0594
+    },
+    {
+      "case": "list_blobs_flat-list-flat-5000-c4",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 17.3294,
+        "p90Ms": 17.2985,
+        "p95Ms": 17.2985
+      },
+      "gatewayToDirectThroughputRatio": 0.06
+    },
+    {
+      "case": "list_blobs_hierarchical-list-hierarchical-5000-c1",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 990.1694,
+        "p90Ms": 567.926,
+        "p95Ms": 567.926
+      },
+      "gatewayToDirectThroughputRatio": 0.0013
+    },
+    {
+      "case": "list_blobs_paginated-list-flat-5000-c1",
+      "gatewayToDirectLatencyRatio": {
+        "p50Ms": 18.408,
+        "p90Ms": 18.365,
+        "p95Ms": 18.365
+      },
+      "gatewayToDirectThroughputRatio": 0.0549
+    }
+  ],
+  "contract": {
+    "baselineEligible": false,
+    "campaignPurpose": "listing-confirmation",
+    "clientWallTimeBudgetSeconds": 3600,
+    "id": "live-v5.1-listing-confirmation",
+    "latencyEvidence": "individual-samples",
+    "nonRegression": {
+      "backendRequestsPerOperation": "blocking",
+      "p50Latency": "derived",
+      "p50RegressionRatioThreshold": 1.1,
+      "p50StabilitySpreadRatioThreshold": 1.1,
+      "p95Latency": "informational",
+      "requestsPerEntryValidated": "blocking"
+    },
+    "p50ComparisonStatistic": "median-per-run",
+    "p50GatePolicy": "signal-only",
+    "revision": "v5.1",
+    "samplingBasis": {
+      "artifact": "harness/artifacts/live/0.11.0/performance-v011-v5-failed-campaign.json",
+      "method": "operator-approved-single-iteration-listing-confirmation",
+      "sha256": "1b03c28e3d20015ae6558b141e6c6a66025ae4fe33ccc069af7430f92750a012"
+    },
+    "schemaVersion": 5,
+    "sha256": "5c613886f90282efdc9ec0af93b270ba7fb120f2a238d629e1c55fa36a4899d7",
+    "targetOrderPolicy": "counterbalanced"
+  },
+  "generatedAt": "2026-08-23T11:56:46Z",
+  "historicalComparison": {
+    "apiVersion": "performance.overmesh.io/comparison/v1",
+    "contractSha256": "5c613886f90282efdc9ec0af93b270ba7fb120f2a238d629e1c55fa36a4899d7",
+    "current": {
+      "commit": "101a80dec20db7b34e785650f51672c2d0f024ce",
+      "runId": "20260823T114125Z"
+    },
+    "nonRegression": {
+      "blockingRegressions": [],
+      "gateStatus": "diagnostic-only",
+      "p50LatencyGateCoverage": {
+        "eligibleCases": 0,
+        "signalCases": [
+          {
+            "case": "list_blobs_flat-list-flat-5000-c1",
+            "reasons": [
+              "diagnostic-policy"
+            ]
+          },
+          {
+            "case": "list_blobs_flat-list-flat-5000-c4",
+            "reasons": [
+              "diagnostic-policy"
+            ]
+          },
+          {
+            "case": "list_blobs_hierarchical-list-hierarchical-5000-c1",
+            "reasons": [
+              "diagnostic-policy"
+            ]
+          },
+          {
+            "case": "list_blobs_paginated-list-flat-5000-c1",
+            "reasons": [
+              "diagnostic-policy"
+            ]
+          }
+        ],
+        "totalCases": 4
+      },
+      "policy": {
+        "backendRequestsPerOperation": "blocking",
+        "p50Latency": "derived",
+        "p50RegressionRatioThreshold": 1.1,
+        "p50StabilitySpreadRatioThreshold": 1.1,
+        "p95Latency": "informational",
+        "requestsPerEntryValidated": "blocking"
+      }
+    },
+    "status": "diagnostic-not-baseline"
+  },
+  "redaction": {
+    "algorithm": "sha256-truncated-16",
+    "apiVersion": "evidence.overmesh.io/redaction/v1",
+    "canonicalForm": "redacted-before-signing",
+    "rawBundleSha256": "f4ba51da92bbb331691e7a6dee71b0aee3af6c1bdbcdd24c88d61806bb01fbed"
+  },
+  "resolution": {
+    "directP50SpreadRatioMax": 2.021,
+    "directWorstCase": "list_blobs_hierarchical-list-hierarchical-5000-c1",
+    "listingP50SpreadRatioMax": 1.128,
+    "measurementScope": "within-campaign",
+    "worstCase": "list_blobs_flat-list-flat-5000-c4"
+  },
+  "toolVersions": {
+    "azureCli": "2.76.0",
+    "azureIdentity": "1.17.1",
+    "azureStorageBlob": "12.22.0",
+    "logAnalyticsExtension": "1.0.0b1",
+    "python": "3.12.3"
+  }
+}

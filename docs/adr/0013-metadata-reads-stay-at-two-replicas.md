@@ -6,6 +6,22 @@
 - **Supersedes:** —
 - **Superseded by:** —
 
+> **Clarification, 2026-08-23.** This decision covers post-write metadata
+> verification as well as client read paths. A successful conditional write to
+> both replicas proves that both services acknowledged the bytes sent; reading
+> both objects back and comparing them proves that the bytes immediately
+> observable through the metadata path are the signed bytes the Gateway
+> intended to publish.
+>
+> On the current first-PUT path, post-write comparison of the prepared
+> manifest, catalogue, head and current high-water costs eight of the 45
+> backend requests: one read from each replica for each class. The canonical
+> lease excludes another Gateway or Reconciler writer, but it does not turn
+> Storage acknowledgements into an observation of subsequently readable
+> state. The cost is retained so `SUCCESS` closes replicated metadata
+> publication immediately rather than delegating detection to the daily
+> Reconciler cycle.
+
 ## Context
 
 This record exists because ADR-0002 makes a configuration look available that
@@ -53,6 +69,10 @@ depends on.
 Metadata continues to be read from both replicas and compared. `R = 1` remains
 reserved for content bytes, which is what ADR-0002 already describes.
 
+The comparison applies both when serving existing metadata and when finalizing
+new metadata. A pre-write load and a post-write verification are observations
+of different states and are not request-scoped duplicate reads.
+
 Two things decide it, and both are arithmetic rather than principle.
 
 **Detection latency.** The Reconciler runs one cycle per day, a figure set by
@@ -72,6 +92,11 @@ system is built to make.** That is not a close call.
 The control-read budget keeps its `R = 2` component. Performance work on the
 metadata path must come from layout and from request-scoped reads, which is
 where ADR-0012 puts it.
+
+For a first `PUT`, four post-write metadata comparisons currently account for
+eight of 45 backend requests. This price is explicit: removing those reads
+would change when replicated publication is verified, not merely how the same
+state is loaded.
 
 Read-time divergence detection remains a property of the system rather than a
 scheduling artefact. This matters more than the request count: the guarantee
@@ -97,6 +122,11 @@ this record becomes redundant rather than wrong.
 twice is a material cost rather than one extra request, the trade is worth
 recomputing — but the answer would more likely be to shrink the document than
 to stop comparing it.
+
+**After ADR-0012 is implemented and measured**, recompute the price before
+reopening post-write verification. The merged layout should collapse the four
+current comparisons into one replicated comparison, changing the trade from
+eight requests to two without weakening the decision.
 
 ## Implementation status
 

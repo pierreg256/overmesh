@@ -114,6 +114,12 @@ section = "decisions"
 title = "Metadata reads stay at two replicas"
 weight = 130
 
+[[document]]
+path = "docs/adr/0014-use-delimiter-safe-ordered-catalogue-keys.md"
+section = "decisions"
+title = "Use delimiter-safe ordered catalogue keys"
+weight = 140
+
 # ---------------------------------------------------------------------------
 # Authored documents deliberately not published.
 # ---------------------------------------------------------------------------
