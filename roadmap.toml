@@ -1,5 +1,5 @@
 schema_version = 1
-project_version = "0.11.0"
+project_version = "0.11.1"
 active_generation = "V1"
 
 [[milestones]]
@@ -119,7 +119,7 @@ deliverables = [
 version = "0.11.0"
 generation = "V1"
 name = "Performance optimization and regression hardening"
-status = "active"
+status = "completed"
 deliverables = [
   "Profile bottlenecks demonstrated by the repeated, placement-rotated 0.11.0 baseline.",
   "Reduce avoidable round trips, serialization, signing, buffering, and scheduling overhead without weakening invariants.",
@@ -127,6 +127,21 @@ deliverables = [
   "Add performance regression budgets to release validation where measurements are stable.",
   "Resolve ADR-0004 catalogue name-length rejection and conditional-publication defects together with ADR-0008 catalogue-encoding property tests.",
   "Evaluate lease-first locking only against an explicit first-write versus established-write workload policy."
+]
+
+[[milestones]]
+version = "0.11.1"
+generation = "V1"
+name = "Performance evidence and release closure"
+status = "active"
+deliverables = [
+  "Complete or explicitly defer every accepted 0.11 runtime decision without weakening W=2, R=2, signed-state, or Entra-only invariants.",
+  "Correct catalogue name-length rejection and conditional catalogue publication, then add randomized catalogue encoding properties.",
+  "Decide the lease-first policy from measured first-write and established-overwrite behavior.",
+  "Run a baseline-eligible current benchmark matrix before and after the final runtime on the same Standard_D2as_v5 validation host.",
+  "Retain signed fast, flat-listing, paginated-listing, and dual-page-size hierarchical-listing evidence with request budgets by object class.",
+  "Commit reviewed exchange provenance under the same redaction gate as retained release evidence.",
+  "Publish the final performance posture, release record, documented closure pull request, and annotated tag on the Close commit."
 ]
 
 [[milestones]]

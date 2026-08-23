@@ -139,21 +139,20 @@ limit of 1,024 characters, the usable name length becomes:
 (assuming a ten-byte container name; a maximum-length 63-byte container name
 costs a further 53 characters of budget)
 
-**This is currently a defect, not only a limitation.** `LogicalBlobId::parse`
-validates the blob name at 1,024 *characters* and nothing validates the derived
-catalogue key at all, so the overrun is not caught up front. Worse, the
-catalogue is published *after* the committed head and the high-water record: a
-write with an over-long name streams content to both replicas, publishes the
-head, publishes the high-water record, and only then fails on the catalogue
-write. The object is left readable by `GET` and `HEAD` but permanently absent
-from listings, and the caller sees a `503`.
+This was initially a correctness defect, not only a limitation:
+`LogicalBlobId::parse` accepted names whose derived catalogue key exceeded the
+backend limit, and catalogue publication followed the committed head and
+high-water publication. A failed catalogue write could therefore leave a blob
+readable by `GET` and `HEAD` but absent from listings.
 
-Two corrections are needed and neither is architectural: reject the name at
-`LogicalBlobId::parse` against the real derived limit, and publish the
-catalogue entry inside the same conditional sequence as the head rather than
-after it. Whether the encoding itself should change — hex costs 2× where a
-sortable escaping scheme could cost close to 1× for ASCII — is a separate
-question worth asking before 1.0.
+Both defects are closed. Parsing now rejects the decoded UTF-8 byte length
+against the exact generation-1 catalogue-key formula before any backend write,
+and rejects the reserved `.overmesh` namespace at the same boundary.
+Catalogue publication now occurs before the conditional head transition;
+listing still compares catalogue and head bytes, so a catalogue that runs
+ahead of a failed compare-and-swap remains invisible. Whether the encoding
+itself should change — hex costs 2× where a sortable escaping scheme could
+cost close to 1× for ASCII — is the separate ADR-0014 generation-2 decision.
 
 ### What it costs — path-based ABAC becomes unsupportable
 
@@ -191,13 +190,11 @@ path. Container-scope assignments are unaffected, and because logical
 containers map one-to-one onto backend containers, separation by container
 works with full fidelity.
 
-### Residual gap
+### Closed reserved-prefix gap
 
-The reserved prefix is filtered at *listing* time but is not refused at *write*
-time. A caller can still create a logical blob named `.overmesh/anything`: it is
-accepted, catalogued, and then invisible in Overmesh listings — a hidden blob.
-Rejecting the prefix in `LogicalBlobId::parse` would make the reserved region
-genuinely reserved, and is a small change.
+The reserved prefix was initially filtered only at listing time. It is now
+rejected by `LogicalBlobId::parse`, including percent-encoded slash variants,
+so a caller cannot create a hidden logical blob under `.overmesh`.
 
 ## When to revisit
 
@@ -235,6 +232,11 @@ simplified.
 
 - `gateway/src/resource.rs::rejects_the_reserved_internal_namespace` — client
   blob names cannot enter the reserved top-level namespace
+- `gateway/src/resource.rs::rejects_names_that_exceed_the_derived_catalog_key_limit`
+  — generation-1 catalogue overruns fail before any backend request
+- `gateway/src/commit/tests.rs::listing_hides_a_catalog_generation_until_both_heads_publish`
+  — catalogue-first publication cannot expose a generation whose two heads did
+  not commit
 - `gateway/src/commit/tests.rs::verifies_an_existing_immutable_object_only_after_a_create_conflict`
   — immutable content is verified rather than overwritten after a collision
 - `reconciler/src/engine.rs` — collection rejects historical objects outside

@@ -219,7 +219,11 @@ fn validate_tombstone(head: &CommitManifest) -> Result<(), CatalogError> {
 }
 
 fn ordered_component(value: &str) -> String {
-    hex::encode(value.as_bytes())
+    ordered_bytes(value.as_bytes())
+}
+
+fn ordered_bytes(value: &[u8]) -> String {
+    hex::encode(value)
 }
 
 fn decode_ordered_component(value: &str) -> Result<String, CatalogError> {
@@ -249,6 +253,11 @@ fn valid_hex_digest(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
+
+    use rand::{RngCore, SeedableRng};
+    use rand_chacha::ChaCha20Rng;
+
     use super::*;
 
     #[test]
@@ -280,5 +289,45 @@ mod tests {
     fn listing_prefix_is_a_physical_key_prefix() {
         let blob = LogicalBlobId::parse("account", "/photos/dir/leaf").expect("blob");
         assert!(catalog_key(&blob).starts_with(&catalog_listing_prefix("photos", "dir/")));
+    }
+
+    #[test]
+    fn ordered_encoding_round_trips_random_byte_strings() {
+        let mut random = ChaCha20Rng::from_seed([0x5a; 32]);
+        for _ in 0..10_000 {
+            let mut bytes = vec![0; random.next_u32() as usize % 513];
+            random.fill_bytes(&mut bytes);
+            assert_eq!(
+                hex::decode(ordered_bytes(&bytes)).expect("valid ordered encoding"),
+                bytes
+            );
+        }
+    }
+
+    #[test]
+    fn ordered_encoding_preserves_random_byte_order() {
+        let mut random = ChaCha20Rng::from_seed([0xa5; 32]);
+        for _ in 0..10_000 {
+            let mut left = vec![0; random.next_u32() as usize % 257];
+            let mut right = vec![0; random.next_u32() as usize % 257];
+            random.fill_bytes(&mut left);
+            random.fill_bytes(&mut right);
+            assert_eq!(
+                left.cmp(&right),
+                ordered_bytes(&left).cmp(&ordered_bytes(&right))
+            );
+
+            let mut extension = left.clone();
+            extension.extend_from_slice(&right);
+            assert_eq!(
+                left.cmp(&extension),
+                if right.is_empty() {
+                    Ordering::Equal
+                } else {
+                    Ordering::Less
+                }
+            );
+            assert!(ordered_bytes(&extension).starts_with(&ordered_bytes(&left)));
+        }
     }
 }
