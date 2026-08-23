@@ -161,6 +161,27 @@ deliverables = [
 ]
 
 [[milestones]]
+version = "0.13.0"
+generation = "V1"
+name = "User tutorials and operational runbooks"
+status = "planned"
+deliverables = [
+  "Add only the missing tutorial and how-to documentation quadrants; link to normative specifications, compatibility reference, and decision records instead of restating them.",
+  "Provide a truthful empty-subscription deployment path for the production three-Storage-Account, two-region Container Apps, Front Door, private-networking, Key Vault, runtime-identity, and caller-identity topology before publishing the administrator tutorial.",
+  "Publish an administrator getting-started tutorial that states expected cost and elapsed time before the first command and reaches a readiness-verified deployment using the supported Bicep and immutable-image workflow.",
+  "Document every deployment prerequisite as prerequisite, exact fail-closed symptom, remediation, and governing record, including signed Ring lineage and key validity, topology-region matching, ES256 signing, scoped RBAC, Front Door behavior, recovery controls, and flat namespaces.",
+  "Publish operator runbooks for Ring rollout, Ring-key rotation, capacity planning without live Ring migration, quarantine and administrator recovery, retention and garbage collection, posture failures, reconciliation cadence, and regional unavailability.",
+  "Publish a separate developer getting-started path using DefaultAzureCredential and the Azure Storage audience, while stating the required Entra identity and container-scoped RBAC and linking all compatibility differences to COMPATIBILITY.md.",
+  "Publish symptom-to-cause-to-fix troubleshooting generated from the same prerequisite and fail-closed source map as the administrator tutorial.",
+  "Publish an honest suitability guide whose request amplification, client-observed latency, and non-SLA context are sourced through traceability assertions from certified signed evidence rather than copied into prose.",
+  "Extend doc-check with typed references for repository files, Bicep parameters and modules, script options, and stable error-message substrings, and fail when any referenced target moves or disappears.",
+  "Keep pinned versions, SKUs, API versions, image digests, costs, durations, and performance figures behind typed traceability assertions with repository or certified-evidence sources.",
+  "Add a dedicated user-documentation site section with separate administrator and developer navigation, registering every page in docs/traceability.toml.",
+  "Retain one manually executed clean-subscription acceptance record proving that an administrator can complete the tutorial using only the published instructions; review narrative prose in pull requests without provisioning three regions in CI.",
+  "Start only after 0.12.0 fixes the catalogue compatibility surface and after certified client-observed evidence exists."
+]
+
+[[milestones]]
 version = "1.0.0"
 generation = "V1"
 name = "Overmesh V1"
