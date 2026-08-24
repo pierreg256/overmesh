@@ -21,7 +21,7 @@ use uuid::Uuid;
 use crate::app::SUPPORTED_STORAGE_VERSION;
 use crate::{
     identity::{CallerToken, ControlToken},
-    request_context::current_client_request_fingerprint,
+    request_context::{current_client_request_fingerprint, current_request_event_id},
     resource::{LogicalBlobId, encode_blob_path, encode_path_component},
 };
 
@@ -367,9 +367,11 @@ impl HttpBlobBackend {
         let response = request.send().await;
         let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let client_request_fingerprint = current_client_request_fingerprint();
+        let request_event_id = current_request_event_id();
         match &response {
             Ok(response) => info!(
                 event = "overmesh_backend_request",
+                request_event_id = %request_event_id,
                 client_request_fingerprint = %client_request_fingerprint,
                 backend_id = %self.id,
                 operation,
@@ -381,6 +383,7 @@ impl HttpBlobBackend {
             ),
             Err(_) => info!(
                 event = "overmesh_backend_request",
+                request_event_id = %request_event_id,
                 client_request_fingerprint = %client_request_fingerprint,
                 backend_id = %self.id,
                 operation,
@@ -1446,6 +1449,7 @@ mod tests {
 
         let result = crate::request_context::scope(
             "performance-request".to_owned(),
+            "request-event-1".to_owned(),
             backend
                 .control_get_object(
                     "heads/path.json",
@@ -1464,5 +1468,6 @@ mod tests {
         assert_eq!(telemetry.matches("overmesh_backend_request").count(), 1);
         assert!(telemetry.contains("object_class=\"head\""));
         assert!(telemetry.contains("client_request_fingerprint=performance-request"));
+        assert!(telemetry.contains("request_event_id=request-event-1"));
     }
 }

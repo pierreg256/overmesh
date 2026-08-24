@@ -27,7 +27,10 @@ use crate::{
     error::StorageError,
     listing::{ListRequest, ListingError},
     read::{BlobMetadata, ReadError, ReadService},
-    request_context::{client_request_fingerprint, current_client_request_fingerprint, scope},
+    request_context::{
+        client_request_fingerprint, current_client_request_fingerprint, request_target_fingerprint,
+        scope,
+    },
     resource::LogicalBlobId,
     ring::SignedRing,
     upload::{DEFAULT_BLOCK_SIZE, SpoolBodyError, spool_body, spool_body_limited},
@@ -76,7 +79,28 @@ async fn blob_request(State(state): State<AppState>, request: Request<Body>) -> 
         .and_then(|value| value.to_str().ok())
         .map(client_request_fingerprint)
         .unwrap_or_else(|| "missing".to_owned());
-    scope(fingerprint, blob_request_scoped(state, request)).await
+    let request_event_id = Uuid::new_v4().simple().to_string();
+    let method = request.method().as_str();
+    let target_fingerprint = request_target_fingerprint(
+        request
+            .uri()
+            .path_and_query()
+            .map_or(request.uri().path(), |target| target.as_str()),
+    );
+    info!(
+        event = "overmesh_client_request",
+        request_event_id = %request_event_id,
+        client_request_fingerprint = %fingerprint,
+        request_target_fingerprint = %target_fingerprint,
+        method,
+        "Overmesh client request received"
+    );
+    scope(
+        fingerprint,
+        request_event_id,
+        blob_request_scoped(state, request),
+    )
+    .await
 }
 
 async fn blob_request_scoped(state: AppState, request: Request<Body>) -> Response {

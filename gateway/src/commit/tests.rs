@@ -3817,6 +3817,7 @@ async fn reads_validated_heads_and_ranges_across_block_boundaries() {
 
     let read = crate::request_context::scope(
         "stream-request".to_owned(),
+        "stream-event".to_owned(),
         read_service.get_blob(&blob(path), &principal(), Some("bytes=3-8")),
     )
     .await

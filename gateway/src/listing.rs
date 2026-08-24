@@ -4,10 +4,7 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-use futures_util::{
-    future::{BoxFuture, join_all},
-    stream::{FuturesOrdered, StreamExt},
-};
+use futures_util::future::join_all;
 use thiserror::Error;
 use tokio::sync::Semaphore;
 
@@ -254,59 +251,35 @@ impl ListingService {
             let mut key_index = 0;
             while key_index < keys.len() {
                 if request.delimiter.is_empty() {
-                    type OrderedValidation<'a> = BoxFuture<
-                        'a,
-                        (
-                            String,
-                            bool,
-                            Result<Option<(String, BlobMetadata)>, ListingError>,
-                        ),
-                    >;
-
-                    let mut validations: FuturesOrdered<OrderedValidation<'_>> =
-                        FuturesOrdered::new();
-                    let mut active_validations = 0_usize;
-                    loop {
-                        let target = if entries.len() == limit {
-                            1
-                        } else {
-                            self.validation_concurrency
-                                .min(limit.saturating_sub(entries.len()))
-                        };
-                        while key_index < keys.len() && active_validations < target {
-                            let key = keys[key_index].clone();
-                            key_index += 1;
-                            if after.as_ref().is_some_and(|cursor| key <= *cursor) {
-                                continue;
-                            }
-                            entries_considered = entries_considered.saturating_add(1);
-                            let should_validate =
-                                logical_blob_from_catalog_key(&self.logical_account, &key)
-                                    .is_ok_and(|logical_blob| {
-                                        !is_internal_blob_name(logical_blob.blob())
-                                    });
-                            if should_validate {
-                                active_validations = active_validations.saturating_add(1);
-                                let quarantined = &quarantined;
-                                let control_token = &control_token;
-                                validations.push_back(Box::pin(async move {
-                                    let result = self
-                                        .validated_catalog_blob(&key, quarantined, control_token)
-                                        .await;
-                                    (key, true, result)
-                                }));
-                            } else {
-                                validations
-                                    .push_back(Box::pin(async move { (key, false, Ok(None)) }));
-                            }
+                    let remaining = limit.saturating_sub(entries.len());
+                    let fanout = self.validation_concurrency.min(remaining.max(1));
+                    let mut candidates = Vec::with_capacity(fanout);
+                    while key_index < keys.len() && candidates.len() < fanout {
+                        let key = keys[key_index].clone();
+                        key_index += 1;
+                        if after.as_ref().is_some_and(|cursor| key <= *cursor) {
+                            continue;
                         }
-                        let Some((key, attempted, validation)) = validations.next().await else {
-                            break;
+                        entries_considered = entries_considered.saturating_add(1);
+                        let Ok(logical_blob) =
+                            logical_blob_from_catalog_key(&self.logical_account, &key)
+                        else {
+                            after = Some(key);
+                            continue;
                         };
-                        if attempted {
-                            active_validations = active_validations.saturating_sub(1);
-                            entries_validated = entries_validated.saturating_add(1);
+                        if is_internal_blob_name(logical_blob.blob()) {
+                            after = Some(key);
+                            continue;
                         }
+                        candidates.push(key);
+                    }
+                    let validations =
+                        join_all(candidates.iter().map(|key| {
+                            self.validated_catalog_blob(key, &quarantined, &control_token)
+                        }))
+                        .await;
+                    for (key, validation) in candidates.into_iter().zip(validations) {
+                        entries_validated = entries_validated.saturating_add(1);
                         let Some((name, metadata)) = validation? else {
                             after = Some(key);
                             continue;

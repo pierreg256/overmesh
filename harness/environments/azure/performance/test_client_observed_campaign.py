@@ -83,6 +83,28 @@ def case_windows_for(contract) -> dict[str, dict[str, str]]:
     }
 
 
+def invocation_windows_for(contract) -> dict[str, list[dict[str, str]]]:
+    windows: dict[str, list[dict[str, str] | None]] = {
+        measurement_key(operation.id, target): [None] * contract.runs
+        for operation in contract.operations
+        for target in contract.target_order
+    }
+    cursor = protocol.parse_timestamp("2026-08-23T12:02:00Z")
+    for step in execution_order(contract):
+        key = measurement_key(str(step["operation"]), str(step["target"]))
+        started = cursor
+        finished = started + timedelta(seconds=1)
+        windows[key][int(step["runIndex"])] = {
+            "startedAt": started.isoformat().replace("+00:00", "Z"),
+            "finishedAt": finished.isoformat().replace("+00:00", "Z"),
+        }
+        cursor = finished + timedelta(seconds=1)
+    return {
+        key: [window for window in values if window is not None]
+        for key, values in windows.items()
+    }
+
+
 def campaign_for(contract, **overrides):
     campaign = {
         "runId": RUN_ID,
@@ -96,6 +118,7 @@ def campaign_for(contract, **overrides):
         "cleanupWindow": dict(CLEANUP_WINDOW),
         "cleanupPrefixes": protocol.cleanup_prefixes(contract, RUN_ID),
         "caseWindows": case_windows_for(contract),
+        "invocationWindows": invocation_windows_for(contract),
         "endpointFingerprints": {
             "direct": "endpoint-1111222233334444",
             "gateway": "endpoint-5555666677778888",
@@ -149,6 +172,15 @@ def wall_seconds_for(contract) -> dict[str, list[float]]:
         measurement_key(operation.id, target): list(WALL_SECONDS)
         for operation in contract.operations
         for target in contract.target_order
+    }
+
+
+def raw_client_evidence_for(contract, **campaign_overrides):
+    return {
+        "campaign": campaign_for(contract, **campaign_overrides),
+        "clientContext": copy.deepcopy(CLIENT_CONTEXT),
+        "toolVersions": dict(TOOL_VERSIONS),
+        "wallSeconds": wall_seconds_for(contract),
     }
 
 
@@ -620,6 +652,736 @@ class RequestAttributionTests(unittest.TestCase):
                 measurement["requestAccounting"]["backendRequests"]["total"],
                 4321,
             )
+
+
+class TelemetryCollectorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        with scratch_directory() as directory:
+            root = Path(directory)
+            path = root / "small-client-observed.toml"
+            path.write_text(SMALL_CONTRACT, encoding="utf-8")
+            self.contract = load_contract(path)
+        self.client = raw_client_evidence_for(self.contract)
+        self.direct_endpoint = "https://direct.example.invalid"
+        self.gateway_endpoint = "https://gateway.example.invalid"
+        self.container = "client-observed"
+        self.upload = self.contract.operations[0]
+        self.download = self.contract.operations[1]
+        invocation_windows: dict[str, list[dict[str, str]]] = {}
+        for target, offset in (("direct", 2), ("gateway", 20)):
+            upload_key = measurement_key(self.upload.id, target)
+            invocation_windows[upload_key] = [
+                {
+                    "startedAt": f"2026-08-23T12:{offset + run_index:02d}:09Z",
+                    "finishedAt": f"2026-08-23T12:{offset + run_index:02d}:11Z",
+                }
+                for run_index in range(self.contract.runs)
+            ]
+            download_key = measurement_key(self.download.id, target)
+            invocation_windows[download_key] = [
+                {
+                    "startedAt": (
+                        f"2026-08-23T12:{offset + 10 + run_index:02d}:09Z"
+                    ),
+                    "finishedAt": (
+                        f"2026-08-23T12:{offset + 10 + run_index:02d}:11Z"
+                    ),
+                }
+                for run_index in range(self.contract.runs)
+            ]
+        self.client["campaign"]["invocationWindows"] = invocation_windows
+
+    def afd_row(
+        self,
+        when: str,
+        path: str,
+        *,
+        host: str,
+        duration: float = 0.4,
+    ) -> dict[str, object]:
+        return {
+            "TimeGenerated": when,
+            "hostName_s": host,
+            "requestUri_s": f"/{self.container}/{path}",
+            "httpMethod_s": "GET",
+            "httpStatusCode_s": 200,
+            "timeTaken_s": duration,
+            "timeToFirstByte_s": duration / 2,
+        }
+
+    def backend_row(
+        self,
+        when: str,
+        fingerprint: str,
+        operation: str = "control_get_object",
+        request_event_id: str | None = None,
+    ) -> tuple[datetime, str]:
+        event_id = fingerprint if request_event_id is None else request_event_id
+        return (
+            protocol.parse_timestamp(when),
+            (
+                'event="overmesh_backend_request" '
+                f'request_event_id="{event_id}" '
+                f'client_request_fingerprint="{fingerprint}" '
+                f'operation="{operation}" '
+                'backend_id="storage-a" object_class="payload" '
+                "status=200 response_headers_duration_us=10 "
+                "transport_success=true"
+            ),
+        )
+
+    def gateway_request_row(
+        self,
+        when: str,
+        fingerprint: str,
+        path: str,
+        method: str = "GET",
+        request_event_id: str | None = None,
+    ) -> tuple[datetime, str]:
+        target = f"/{self.container}/{path}"
+        event_id = fingerprint if request_event_id is None else request_event_id
+        return (
+            protocol.parse_timestamp(when),
+            (
+                'event="overmesh_client_request" '
+                f'request_event_id="{event_id}" '
+                f'client_request_fingerprint="{fingerprint}" '
+                "request_target_fingerprint="
+                f'"{protocol.fingerprint_request_target(target)}" '
+                f'method="{method}"'
+            ),
+        )
+
+    def successful_observations(self):
+        afd_rows: list[dict[str, object]] = []
+        backend_rows: list[tuple[datetime, str]] = []
+        for target, host, offset in (
+            ("direct", "direct.example.invalid", 2),
+            ("gateway", "gateway.example.invalid", 20),
+        ):
+            for run_index, path in enumerate(
+                protocol.measured_paths(
+                    self.upload, RUN_ID, target, self.contract.runs
+                )
+            ):
+                minute = offset + run_index
+                afd_row = self.afd_row(
+                    f"2026-08-23T12:{minute:02d}:10Z",
+                    path,
+                    host=host,
+                )
+                afd_rows.append(afd_row)
+                if target == "gateway":
+                    backend_rows.append(
+                        self.gateway_request_row(
+                            f"2026-08-23T12:{minute:02d}:10.050000Z",
+                            f"upload-{run_index}",
+                            path,
+                        )
+                    )
+                    backend_rows.append(
+                        self.backend_row(
+                            f"2026-08-23T12:{minute:02d}:10.100000Z",
+                            f"upload-{run_index}",
+                            "put_blob",
+                        )
+                    )
+            download_path = protocol.measured_paths(
+                self.download, RUN_ID, target, self.contract.runs
+            )[0]
+            for run_index in range(self.contract.runs):
+                minute = offset + 10 + run_index
+                afd_row = self.afd_row(
+                    f"2026-08-23T12:{minute:02d}:10Z",
+                    download_path,
+                    host=host,
+                )
+                afd_rows.append(afd_row)
+                if target == "gateway":
+                    backend_rows.append(
+                        self.gateway_request_row(
+                            f"2026-08-23T12:{minute:02d}:10.050000Z",
+                            f"download-{run_index}",
+                            download_path,
+                        )
+                    )
+                    backend_rows.append(
+                        self.backend_row(
+                            f"2026-08-23T12:{minute:02d}:10.100000Z",
+                            f"download-{run_index}",
+                        )
+                    )
+        return afd_rows, backend_rows
+
+    def test_afd_timegenerated_is_request_start_and_timetaken_sets_finish(
+        self,
+    ) -> None:
+        path = protocol.measured_paths(
+            self.upload, RUN_ID, "gateway", self.contract.runs
+        )[0]
+        record = protocol.parse_afd_access_logs(
+            [
+                self.afd_row(
+                    "2026-08-23T12:20:10Z",
+                    path,
+                    host="gateway.example.invalid",
+                    duration=2.5,
+                )
+            ],
+            self.container,
+            RUN_ID,
+        )[0]
+        self.assertEqual(
+            record.started_at,
+            protocol.parse_timestamp("2026-08-23T12:20:10Z"),
+        )
+        self.assertEqual(
+            record.finished_at,
+            protocol.parse_timestamp("2026-08-23T12:20:12.500000Z"),
+        )
+        self.assertEqual(record.generated_at, record.started_at)
+
+    def test_afd_absolute_request_uri_is_normalized_to_container_path(
+        self,
+    ) -> None:
+        path = protocol.measured_paths(
+            self.upload, RUN_ID, "gateway", self.contract.runs
+        )[0]
+        record = protocol.parse_afd_access_logs(
+            [
+                {
+                    "TimeGenerated": "2026-08-23T12:20:10Z",
+                    "hostName_s": "gateway.example.invalid",
+                    "requestUri_s": (
+                        "https://gateway.example.invalid:443/"
+                        f"{self.container}/{path}"
+                        "?sv=2026-08-04&se=2026-08-23T12%3A30%3A00Z"
+                    ),
+                    "httpMethod_s": "GET",
+                    "httpStatusCode_s": 200,
+                    "timeTaken_s": 0.4,
+                    "timeToFirstByte_s": 0.2,
+                }
+            ],
+            self.container,
+            RUN_ID,
+        )[0]
+        self.assertEqual(record.relative_path, path)
+
+    def test_afd_query_extracts_the_path_from_absolute_request_uris(
+        self,
+    ) -> None:
+        queries: list[str] = []
+        original = protocol.query_rows
+
+        def capture(
+            workspace: str,
+            query: str,
+            started_at: str,
+            finished_at: str,
+        ) -> list[dict[str, object]]:
+            queries.append(query)
+            return []
+
+        protocol.query_rows = capture
+        try:
+            protocol.query_afd_access_logs(
+                "workspace",
+                "gateway.example.invalid",
+                self.container,
+                RUN_ID,
+                "2026-08-23T12:00:00Z",
+                "2026-08-23T13:00:00Z",
+            )
+        finally:
+            protocol.query_rows = original
+
+        self.assertEqual(len(queries), 1)
+        self.assertIn(
+            "RequestPath = tostring(parse_url(requestUri_s).Path)",
+            queries[0],
+        )
+        self.assertIn(
+            f"RequestPath startswith '/{self.container}/perf/client-observed/{RUN_ID}/'",
+            queries[0],
+        )
+        self.assertIn(
+            f"RequestPath == '/{self.container}'",
+            queries[0],
+        )
+        self.assertNotIn("requestUri_s startswith", queries[0])
+
+    def test_container_listing_uses_its_campaign_prefix_for_attribution(
+        self,
+    ) -> None:
+        directory = next(
+            operation
+            for operation in load_contract(CONTRACT_PATH).operations
+            if operation.shape == "directory"
+        )
+        measured = protocol.measured_paths(
+            directory,
+            RUN_ID,
+            "gateway",
+            5,
+        )[0]
+        encoded_prefix = measured.replace("/", "%2F")
+        records = protocol.parse_afd_access_logs(
+            [
+                {
+                    "TimeGenerated": "2026-08-23T12:20:10Z",
+                    "hostName_s": "gateway.example.invalid",
+                    "requestUri_s": (
+                        "https://gateway.example.invalid:443/"
+                        f"{self.container}?restype=container&comp=list"
+                        f"&prefix={encoded_prefix}%2F"
+                    ),
+                    "httpMethod_s": "GET",
+                    "httpStatusCode_s": 200,
+                    "timeTaken_s": 0.4,
+                    "timeToFirstByte_s": 0.2,
+                }
+            ],
+            self.container,
+            RUN_ID,
+        )
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].relative_path, f"{measured}/")
+        self.assertTrue(
+            protocol.request_matches_measured_path(
+                records[0],
+                measured,
+                prefix=True,
+            )
+        )
+
+    def test_container_attribution_requires_the_exact_list_request_shape(
+        self,
+    ) -> None:
+        prefix = f"{protocol.CAMPAIGN_PREFIX}/{RUN_ID}/directory"
+        base = {
+            "TimeGenerated": "2026-08-23T12:20:10Z",
+            "hostName_s": "gateway.example.invalid",
+            "httpMethod_s": "GET",
+            "httpStatusCode_s": 200,
+            "timeTaken_s": 0.4,
+            "timeToFirstByte_s": 0.2,
+        }
+        invalid = (
+            f"/{self.container}?restype=container&comp=metadata&prefix={prefix}",
+            f"/{self.container}?comp=list&prefix={prefix}",
+            (
+                f"/{self.container}?restype=container&comp=list"
+                f"&prefix={prefix}&prefix=other"
+            ),
+        )
+        for request_uri in invalid:
+            with self.subTest(request_uri=request_uri):
+                row = dict(base, requestUri_s=request_uri)
+                self.assertEqual(
+                    protocol.parse_afd_access_logs(
+                        [row],
+                        self.container,
+                        RUN_ID,
+                    ),
+                    [],
+                )
+        post = dict(
+            base,
+            requestUri_s=(
+                f"/{self.container}?restype=container&comp=list&prefix={prefix}"
+            ),
+            httpMethod_s="POST",
+        )
+        self.assertEqual(
+            protocol.parse_afd_access_logs(
+                [post],
+                self.container,
+                RUN_ID,
+            ),
+            [],
+        )
+
+    def test_cluster_grouping_keeps_nested_overlaps_in_one_cluster(
+        self,
+    ) -> None:
+        path = protocol.measured_paths(
+            self.upload, RUN_ID, "gateway", self.contract.runs
+        )[0]
+        records = protocol.parse_afd_access_logs(
+            [
+                self.afd_row(
+                    "2026-08-23T12:20:10Z",
+                    path,
+                    host="gateway.example.invalid",
+                    duration=10.0,
+                ),
+                self.afd_row(
+                    "2026-08-23T12:20:12Z",
+                    path,
+                    host="gateway.example.invalid",
+                    duration=1.0,
+                ),
+                self.afd_row(
+                    "2026-08-23T12:20:19Z",
+                    path,
+                    host="gateway.example.invalid",
+                    duration=1.0,
+                ),
+                self.afd_row(
+                    "2026-08-23T12:20:25Z",
+                    path,
+                    host="gateway.example.invalid",
+                    duration=1.0,
+                ),
+            ],
+            self.container,
+            RUN_ID,
+        )
+        groups = protocol.cluster_records(records)
+        self.assertEqual([len(group) for group in groups], [3, 1])
+
+    def test_unique_run_paths_allow_request_gaps_inside_one_invocation(
+        self,
+    ) -> None:
+        rows: list[dict[str, object]] = []
+        for run_index, path in enumerate(
+            protocol.measured_paths(
+                self.upload,
+                RUN_ID,
+                "gateway",
+                self.contract.runs,
+            )
+        ):
+            minute = 2 * run_index
+            rows.extend(
+                (
+                    self.afd_row(
+                        f"2026-08-23T12:{minute:02d}:10Z",
+                        path,
+                        host="gateway.example.invalid",
+                    ),
+                    self.afd_row(
+                        f"2026-08-23T12:{minute:02d}:12Z",
+                        path,
+                        host="gateway.example.invalid",
+                    ),
+                )
+            )
+        records = protocol.parse_afd_access_logs(
+            rows,
+            self.container,
+            RUN_ID,
+        )
+
+        clusters = protocol.reconstruct_invocation_clusters(
+            measurement_key(self.upload.id, "gateway"),
+            self.upload,
+            RUN_ID,
+            "gateway",
+            self.contract.runs,
+            records,
+            [
+                {
+                    "startedAt": f"2026-08-23T12:{2 * run_index:02d}:09Z",
+                    "finishedAt": f"2026-08-23T12:{2 * run_index:02d}:13Z",
+                }
+                for run_index in range(self.contract.runs)
+            ],
+        )
+
+        self.assertEqual(len(clusters), self.contract.runs)
+        self.assertTrue(all(len(cluster.requests) == 2 for cluster in clusters))
+
+    def test_successful_direct_and_gateway_attribution_reconstructs_five_clusters(
+        self,
+    ) -> None:
+        afd_rows, backend_rows = self.successful_observations()
+        telemetry = protocol.build_telemetry_from_observations(
+            self.contract,
+            self.client,
+            afd_rows,
+            backend_rows,
+            self.direct_endpoint,
+            self.gateway_endpoint,
+            self.container,
+        )
+        direct = telemetry["cases"][measurement_key(self.upload.id, "direct")]
+        self.assertEqual(direct["toolRequests"]["total"], 5)
+        self.assertEqual(direct["backendRequests"]["total"], 0)
+        self.assertEqual(direct["attributedClientOperations"], 5)
+        upload = telemetry["cases"][measurement_key(self.upload.id, "gateway")]
+        self.assertEqual(upload["toolRequests"]["total"], 5)
+        self.assertEqual(upload["backendRequests"]["total"], 5)
+        self.assertEqual(upload["attributedClientOperations"], 5)
+
+    def test_missing_gateway_cluster_fails_closed(self) -> None:
+        afd_rows, backend_rows = self.successful_observations()
+        afd_rows = [
+            row
+            for row in afd_rows
+            if not (
+                row["hostName_s"] == "gateway.example.invalid"
+                and "/source/tiny.bin" in str(row["requestUri_s"])
+                and "12:34:10Z" in str(row["TimeGenerated"])
+            )
+        ]
+        with self.assertRaisesRegex(
+            ClientObservedError,
+            "exactly 5 unambiguous invocation clusters",
+        ):
+            protocol.build_telemetry_from_observations(
+                self.contract,
+                self.client,
+                afd_rows,
+                backend_rows,
+                self.direct_endpoint,
+                self.gateway_endpoint,
+                self.container,
+            )
+
+    def test_overlapping_clusters_are_refused(self) -> None:
+        afd_rows, backend_rows = self.successful_observations()
+        download_path = protocol.measured_paths(
+            self.download, RUN_ID, "gateway", self.contract.runs
+        )[0]
+        for index, row in enumerate(afd_rows):
+            if (
+                row["hostName_s"] == "gateway.example.invalid"
+                and "/source/tiny.bin" in str(row["requestUri_s"])
+                and "12:30:10Z" in str(row["TimeGenerated"])
+            ):
+                afd_rows[index] = self.afd_row(
+                    "2026-08-23T12:24:10Z",
+                    download_path,
+                    host="gateway.example.invalid",
+                )
+                break
+        download_key = measurement_key(self.download.id, "gateway")
+        self.client["campaign"]["invocationWindows"][download_key][0] = {
+            "startedAt": "2026-08-23T12:24:09Z",
+            "finishedAt": "2026-08-23T12:24:11Z",
+        }
+        with self.assertRaisesRegex(
+            ClientObservedError,
+            "client invocation windows overlap across measured runs",
+        ):
+            protocol.build_telemetry_from_observations(
+                self.contract,
+                self.client,
+                afd_rows,
+                backend_rows,
+                self.direct_endpoint,
+                self.gateway_endpoint,
+                self.container,
+            )
+
+    def test_unattributed_backend_requests_are_refused(self) -> None:
+        afd_rows, backend_rows = self.successful_observations()
+        backend_rows.append(
+            self.backend_row(
+                "2026-08-23T12:30:00Z",
+                "outside-any-cluster",
+            )
+        )
+        with self.assertRaisesRegex(
+            ClientObservedError,
+            "unattributed requests",
+        ):
+            protocol.build_telemetry_from_observations(
+                self.contract,
+                self.client,
+                afd_rows,
+                backend_rows,
+                self.direct_endpoint,
+                self.gateway_endpoint,
+                self.container,
+            )
+
+    def test_unrelated_backend_traffic_cannot_replace_a_measured_request(
+        self,
+    ) -> None:
+        afd_rows, backend_rows = self.successful_observations()
+        for index, (_, message) in enumerate(backend_rows):
+            if (
+                'event="overmesh_backend_request"' in message
+                and 'client_request_fingerprint="upload-0"' in message
+            ):
+                occurred_at = backend_rows[index][0]
+                backend_rows[index] = self.backend_row(
+                    occurred_at.isoformat().replace("+00:00", "Z"),
+                    "unrelated-concurrent-request",
+                    "put_blob",
+                )
+                break
+        with self.assertRaisesRegex(
+            ClientObservedError,
+            "unattributed requests",
+        ):
+            protocol.build_telemetry_from_observations(
+                self.contract,
+                self.client,
+                afd_rows,
+                backend_rows,
+                self.direct_endpoint,
+                self.gateway_endpoint,
+                self.container,
+            )
+
+    def test_retry_reusing_a_client_fingerprint_needs_backend_coverage(
+        self,
+    ) -> None:
+        afd_rows, backend_rows = self.successful_observations()
+        path = protocol.measured_paths(
+            self.upload,
+            RUN_ID,
+            "gateway",
+            self.contract.runs,
+        )[0]
+        afd_rows.append(
+            self.afd_row(
+                "2026-08-23T12:20:10.200000Z",
+                path,
+                host="gateway.example.invalid",
+                duration=0.1,
+            )
+        )
+        backend_rows.append(
+            self.gateway_request_row(
+                "2026-08-23T12:20:10.250000Z",
+                "upload-0",
+                path,
+                request_event_id="upload-0-retry",
+            )
+        )
+
+        with self.assertRaisesRegex(
+            ClientObservedError,
+            "does not cover every received request",
+        ):
+            protocol.build_telemetry_from_observations(
+                self.contract,
+                self.client,
+                afd_rows,
+                backend_rows,
+                self.direct_endpoint,
+                self.gateway_endpoint,
+                self.container,
+            )
+
+    def test_missing_direct_cluster_fails_closed(self) -> None:
+        afd_rows, backend_rows = self.successful_observations()
+        afd_rows = [
+            row
+            for row in afd_rows
+            if not (
+                row["hostName_s"] == "direct.example.invalid"
+                and "/run/04/" in str(row["requestUri_s"])
+            )
+        ]
+        with self.assertRaisesRegex(
+            ClientObservedError,
+            "exactly 5 unambiguous invocation clusters",
+        ):
+            protocol.build_telemetry_from_observations(
+                self.contract,
+                self.client,
+                afd_rows,
+                backend_rows,
+                self.direct_endpoint,
+                self.gateway_endpoint,
+                self.container,
+            )
+
+    def test_unexpected_direct_afd_request_is_refused(self) -> None:
+        afd_rows, backend_rows = self.successful_observations()
+        afd_rows.append(
+            self.afd_row(
+                "2026-08-23T12:40:10Z",
+                f"{protocol.CAMPAIGN_PREFIX}/{RUN_ID}/unexpected/direct/run/00/tiny.bin",
+                host="direct.example.invalid",
+            )
+        )
+        with self.assertRaisesRegex(
+            ClientObservedError,
+            "AFD access logs for direct.example.invalid contain unexpected campaign requests",
+        ):
+            protocol.build_telemetry_from_observations(
+                self.contract,
+                self.client,
+                afd_rows,
+                backend_rows,
+                self.direct_endpoint,
+                self.gateway_endpoint,
+                self.container,
+            )
+
+    def test_collection_uses_the_full_ingestion_window_before_returning(
+        self,
+    ) -> None:
+        with scratch_directory() as directory:
+            client_evidence = Path(directory) / "client.json"
+            client_evidence.write_text(
+                json.dumps(self.client),
+                encoding="utf-8",
+            )
+            values = {
+                protocol.WORKSPACE_VARIABLE: "workspace",
+                protocol.GATEWAY_APP_NAME_VARIABLE: "gateway-fr,gateway-se",
+                protocol.REQUIRED_TARGET_ENVIRONMENT[
+                    "direct"
+                ]: self.direct_endpoint,
+                protocol.REQUIRED_TARGET_ENVIRONMENT[
+                    "gateway"
+                ]: self.gateway_endpoint,
+                protocol.CONTAINER_VARIABLE: self.container,
+                protocol.LOG_WAIT_SECONDS_VARIABLE: "30",
+                protocol.LOG_POLL_SECONDS_VARIABLE: "10",
+                protocol.LOG_STABLE_POLLS_VARIABLE: "2",
+            }
+            elapsed = 0.0
+            query_count = 0
+            original_afd = protocol.query_afd_access_logs
+            original_backend = protocol.query_gateway_backend_logs
+            original_build = protocol.build_telemetry_from_observations
+
+            def clock() -> float:
+                return elapsed
+
+            def sleep(seconds: float) -> None:
+                nonlocal elapsed
+                elapsed += seconds
+
+            def query_afd(*args, **kwargs) -> list[dict[str, object]]:
+                nonlocal query_count
+                query_count += 1
+                return []
+
+            protocol.query_afd_access_logs = query_afd
+            protocol.query_gateway_backend_logs = lambda *args, **kwargs: []
+            protocol.build_telemetry_from_observations = (
+                lambda *args, **kwargs: {
+                    "apiVersion": TELEMETRY_API_VERSION,
+                    "cases": {},
+                }
+            )
+            try:
+                telemetry = protocol.collect_telemetry_from_client_evidence(
+                    self.contract,
+                    client_evidence,
+                    values,
+                    clock=clock,
+                    sleep=sleep,
+                )
+            finally:
+                protocol.query_afd_access_logs = original_afd
+                protocol.query_gateway_backend_logs = original_backend
+                protocol.build_telemetry_from_observations = original_build
+
+        self.assertEqual(telemetry["apiVersion"], TELEMETRY_API_VERSION)
+        self.assertEqual(elapsed, 30.0)
+        self.assertGreaterEqual(query_count, 8)
 
 
 class MeasuredPathTests(unittest.TestCase):
@@ -1568,6 +2330,36 @@ class CampaignRunTests(unittest.TestCase):
         self.assertEqual(resolved["AZCOPY_AUTO_LOGIN_TYPE"], "WORKLOAD")
         self.assertNotIn("AZCOPY_SPA_CLIENT_SECRET", resolved)
 
+    def test_azcopy_trusts_custom_afd_endpoints_without_broadening_storage(
+        self,
+    ) -> None:
+        afd = protocol.azcopy_command(
+            "upload",
+            endpoint="https://example.azurefd.net",
+            container="client-observed",
+            prefix="run/blob.bin",
+            local=Path("/tmp/blob.bin"),
+            recursive=False,
+        )
+        afd_remove = protocol.azcopy_remove_command(
+            endpoint="https://example.azurefd.net",
+            container="client-observed",
+            prefix="run",
+        )
+        storage = protocol.azcopy_command(
+            "upload",
+            endpoint="https://example.blob.core.windows.net",
+            container="client-observed",
+            prefix="run/blob.bin",
+            local=Path("/tmp/blob.bin"),
+            recursive=False,
+        )
+
+        trusted = "--trusted-microsoft-suffixes=*.azurefd.net"
+        self.assertIn(trusted, afd)
+        self.assertIn(trusted, afd_remove)
+        self.assertNotIn(trusted, storage)
+
     def test_the_credential_mode_is_published_and_validated(self) -> None:
         contract = load_contract(CONTRACT_PATH)
         for mode in protocol.CREDENTIAL_MODES:
@@ -1780,6 +2572,15 @@ class DriverScriptTests(unittest.TestCase):
         self.assertIn("OVERMESH_CLIENT_OBSERVED_TELEMETRY", self.script)
         self.assertIn('--work-root "$work_root"', self.script)
 
+    def test_the_driver_collects_gateway_telemetry_before_publication(
+        self,
+    ) -> None:
+        self.assertIn("OVERMESH_CLIENT_OBSERVED_WORKSPACE_ID", self.script)
+        self.assertIn("OVERMESH_CLIENT_OBSERVED_GATEWAY_APP_NAME", self.script)
+        self.assertIn("--collect-telemetry", self.script)
+        self.assertIn("--client-evidence \"$client_evidence\"", self.script)
+        self.assertNotIn("az extension add", self.script)
+
 
 class RedactionTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -1792,6 +2593,19 @@ class RedactionTests(unittest.TestCase):
         self.assertNotIn("blob.core.windows.net", text)
         for value in document["campaign"]["endpointFingerprints"].values():
             self.assertTrue(value.startswith("endpoint-"))
+
+    def test_public_evidence_refuses_raw_invocation_windows(self) -> None:
+        contract = load_contract(CONTRACT_PATH)
+        document = valid_document(contract)
+        document["campaign"]["invocationWindows"] = invocation_windows_for(
+            contract
+        )
+
+        with self.assertRaisesRegex(
+            ClientObservedError,
+            "must not publish raw invocation windows",
+        ):
+            validate_document(document, contract)
 
     def test_forbidden_material_is_refused(self) -> None:
         for leak in (

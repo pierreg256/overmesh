@@ -33,11 +33,12 @@ import subprocess
 import sys
 import time
 import tomllib
+from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 API_VERSION = "performance.overmesh.io/client-observed/v1"
 TELEMETRY_API_VERSION = (
@@ -272,11 +273,19 @@ CAMPAIGN_PREFIX = "perf/client-observed"
 
 # Remote cleanup must be attributable to itself and never to the last
 # measured case, so the cleanup window opens strictly after the measurement
-# window closes. Timestamps have second resolution, so the runner polls the
-# clock until the second has actually turned over.
+# window closes. The runner polls until the clock has advanced strictly beyond
+# the recorded boundary.
 CLEANUP_EXCLUSION = "campaign-cleanup-window"
 CLOCK_POLL_SECONDS = 0.05
 CLOCK_WAIT_LIMIT_SECONDS = 5.0
+LOG_WAIT_SECONDS_VARIABLE = "OVERMESH_CLIENT_OBSERVED_LOG_WAIT_SECONDS"
+LOG_POLL_SECONDS_VARIABLE = "OVERMESH_CLIENT_OBSERVED_LOG_POLL_SECONDS"
+LOG_STABLE_POLLS_VARIABLE = "OVERMESH_CLIENT_OBSERVED_LOG_STABLE_POLLS"
+WORKSPACE_VARIABLE = "OVERMESH_CLIENT_OBSERVED_WORKSPACE_ID"
+GATEWAY_APP_NAME_VARIABLE = "OVERMESH_CLIENT_OBSERVED_GATEWAY_APP_NAME"
+DEFAULT_LOG_WAIT_SECONDS = 600
+DEFAULT_LOG_POLL_SECONDS = 15
+DEFAULT_LOG_STABLE_POLLS = 3
 
 ALLOWED_TOOLS = frozenset({"azure-cli", "azcopy"})
 ALLOWED_ACTIONS = frozenset({"upload", "download"})
@@ -284,6 +293,11 @@ ALLOWED_SHAPES = frozenset({"single-blob", "single-file", "directory"})
 SINGLE_SHAPES = frozenset({"single-blob", "single-file"})
 MEBIBYTE = 1024 * 1024
 VERSION_PATTERN = re.compile(r"\d+\.\d+(?:\.\d+)?")
+FIELD = re.compile(r"\b([a-z_]+)=(\"[^\"]*\"|\S+)")
+ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+LOG_TIMESTAMP = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\b"
+)
 
 
 class ClientObservedError(RuntimeError):
@@ -342,7 +356,13 @@ def endpoint_fingerprint(endpoint: str) -> str:
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace(
+        "+00:00", "Z"
+    )
+
+
+def parse_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def normalize_prose(value: str) -> str:
@@ -361,6 +381,37 @@ def contains_disclaimer(text: str) -> bool:
 
     haystack = normalize_prose(BLOCKQUOTE_MARKER.sub("", text))
     return normalize_prose(MANDATORY_DISCLAIMER) in haystack
+
+
+def run_json(command: Sequence[str]) -> Any:
+    completed = subprocess.run(
+        list(command),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return json.loads(completed.stdout)
+
+
+def comma_separated_values(value: str | list[str]) -> list[str]:
+    values = value if isinstance(value, list) else value.split(",")
+    normalized = [item.strip() for item in values if item.strip()]
+    if not normalized:
+        raise ClientObservedError("at least one value is required")
+    return normalized
+
+
+def event_timestamp(generated_at: datetime, message: str) -> datetime:
+    match = LOG_TIMESTAMP.match(ANSI.sub("", message))
+    return parse_timestamp(match.group(1)) if match else generated_at
+
+
+def parse_fields(message: str) -> dict[str, str]:
+    message = ANSI.sub("", message)
+    return {
+        name: value[1:-1] if value.startswith('"') and value.endswith('"') else value
+        for name, value in FIELD.findall(message)
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1092,16 +1143,75 @@ def validate_window(value: object, label: str) -> dict[str, str]:
     finished = value.get("finishedAt")
     if not isinstance(started, str) or not isinstance(finished, str):
         raise ClientObservedError(f"{label} must carry UTC timestamps")
-    if finished < started:
+    if parse_timestamp(finished) < parse_timestamp(started):
         raise ClientObservedError(f"{label} finishes before it starts")
     return {"startedAt": started, "finishedAt": finished}
 
 
 def window_contains(outer: dict[str, str], inner: dict[str, str]) -> bool:
     return (
-        outer["startedAt"] <= inner["startedAt"]
-        and inner["finishedAt"] <= outer["finishedAt"]
+        parse_timestamp(outer["startedAt"])
+        <= parse_timestamp(inner["startedAt"])
+        and parse_timestamp(inner["finishedAt"])
+        <= parse_timestamp(outer["finishedAt"])
     )
+
+
+def validate_invocation_windows(
+    value: object,
+    contract: Contract,
+    case_windows: dict[str, Any],
+) -> dict[str, list[dict[str, str]]]:
+    if not isinstance(value, dict):
+        raise ClientObservedError(
+            "client evidence needs a window per measured invocation"
+        )
+    expected = {
+        measurement_key(operation.id, target)
+        for operation in contract.operations
+        for target in contract.target_order
+    }
+    if set(value) != expected:
+        raise ClientObservedError(
+            "client invocation windows do not match the contract cases"
+        )
+    validated: dict[str, list[dict[str, str]]] = {}
+    all_windows: list[tuple[datetime, datetime, str, int]] = []
+    for key in sorted(expected):
+        raw_windows = value.get(key)
+        if not isinstance(raw_windows, list) or len(raw_windows) != contract.runs:
+            raise ClientObservedError(
+                f"case {key} needs exactly {contract.runs} invocation windows"
+            )
+        case_window = validate_window(
+            case_windows.get(key),
+            f"case {key} measurement window",
+        )
+        windows = [
+            validate_window(window, f"case {key} invocation {index + 1}")
+            for index, window in enumerate(raw_windows)
+        ]
+        for index, window in enumerate(windows):
+            if not window_contains(case_window, window):
+                raise ClientObservedError(
+                    f"case {key} invocation {index + 1} falls outside its case window"
+                )
+            all_windows.append(
+                (
+                    parse_timestamp(window["startedAt"]),
+                    parse_timestamp(window["finishedAt"]),
+                    key,
+                    index,
+                )
+            )
+        validated[key] = windows
+    ordered = sorted(all_windows)
+    for previous, current in zip(ordered, ordered[1:]):
+        if current[0] <= previous[1]:
+            raise ClientObservedError(
+                "client invocation windows overlap across measured runs"
+            )
+    return validated
 
 
 def advance_past(
@@ -1111,16 +1221,14 @@ def advance_past(
 ) -> str:
     """Return the first observed instant strictly after ``boundary``.
 
-    Timestamps carry second resolution, so an operation started in the same
-    second as the previous window closes cannot be told apart from it. The
-    runner therefore waits for the second to turn over before it opens the
-    cleanup window. ``clock`` and ``sleep`` are injectable so unit tests can
-    exercise the boundary without waiting for a real second.
+    The runner waits before it opens the cleanup window so cleanup traffic can
+    never share the measurement boundary. ``clock`` and ``sleep`` are
+    injectable so unit tests can exercise the boundary without waiting.
     """
 
     waited = 0.0
     current = clock()
-    while current <= boundary:
+    while parse_timestamp(current) <= parse_timestamp(boundary):
         if waited >= CLOCK_WAIT_LIMIT_SECONDS:
             raise ClientObservedError(
                 "the campaign clock did not advance past "
@@ -1131,6 +1239,900 @@ def advance_past(
         waited += CLOCK_POLL_SECONDS
         current = clock()
     return current
+
+
+@dataclass(frozen=True)
+class AfdAccessLog:
+    generated_at: datetime
+    started_at: datetime
+    finished_at: datetime
+    host: str
+    relative_path: str
+    request_target_fingerprint: str
+    method: str
+    status_code: int
+
+
+@dataclass(frozen=True)
+class GatewayRequestEvent:
+    occurred_at: datetime
+    request_event_id: str
+    fingerprint: str
+    request_target_fingerprint: str
+    method: str
+
+
+@dataclass(frozen=True)
+class BackendRequestEvent:
+    occurred_at: datetime
+    request_event_id: str
+    fingerprint: str
+    operation: str
+
+
+@dataclass(frozen=True)
+class InvocationCluster:
+    case_key: str
+    run_index: int
+    measured_path: str
+    started_at: datetime
+    finished_at: datetime
+    requests: tuple[AfdAccessLog, ...]
+
+
+@dataclass(frozen=True)
+class BoundGatewayRequest:
+    cluster: InvocationCluster
+    client_fingerprint: str
+
+
+def require_environment(
+    values: dict[str, str],
+    name: str,
+) -> str:
+    value = values.get(name, "").strip()
+    if not value:
+        raise ClientObservedError(
+            f"missing required client-observed environment: {name}"
+        )
+    return value
+
+
+def query_rows(
+    workspace: str,
+    query: str,
+    started_at: str,
+    finished_at: str,
+) -> Any:
+    try:
+        return run_json(
+            [
+                "az",
+                "monitor",
+                "log-analytics",
+                "query",
+                "--workspace",
+                workspace,
+                "--analytics-query",
+                query,
+                "--timespan",
+                f"{started_at}/{finished_at}",
+                "--output",
+                "json",
+            ]
+        )
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as error:
+        raise ClientObservedError(
+            "failed to query Azure Monitor for client-observed telemetry"
+        ) from error
+
+
+def response_rows(
+    response: Any,
+    columns: Sequence[str],
+) -> list[dict[str, Any]]:
+    if isinstance(response, list):
+        rows: list[dict[str, Any]] = []
+        for entry in response:
+            if not isinstance(entry, dict):
+                raise ClientObservedError(
+                    "Log Analytics returned an unexpected JSON shape"
+                )
+            row: dict[str, Any] = {}
+            for column in columns:
+                if column not in entry:
+                    raise ClientObservedError(
+                        "Log Analytics returned an unexpected JSON shape"
+                    )
+                row[column] = entry[column]
+            rows.append(row)
+        return rows
+    if not isinstance(response, dict):
+        raise ClientObservedError(
+            "Log Analytics returned an unexpected JSON shape"
+        )
+    tables = response.get("tables", [])
+    if not tables:
+        return []
+    table = tables[0]
+    available = [column["name"] for column in table.get("columns", [])]
+    try:
+        indexes = {column: available.index(column) for column in columns}
+    except ValueError as error:
+        raise ClientObservedError(
+            "Log Analytics returned an unexpected JSON shape"
+        ) from error
+    rows = []
+    for values in table.get("rows", []):
+        rows.append(
+            {
+                column: values[index]
+                for column, index in indexes.items()
+            }
+        )
+    return rows
+
+
+def query_afd_access_logs(
+    workspace: str,
+    host: str,
+    container: str,
+    run_id: str,
+    started_at: str,
+    finished_at: str,
+) -> list[dict[str, Any]]:
+    prefix = f"/{container}/{CAMPAIGN_PREFIX}/{run_id}/"
+    query = f"""
+AzureDiagnostics
+| where TimeGenerated between (datetime({started_at}) .. datetime({finished_at}))
+| where hostName_s == '{host.replace(chr(39), chr(39) * 2)}'
+| extend RequestPath = tostring(parse_url(requestUri_s).Path)
+| where RequestPath startswith '{prefix.replace(chr(39), chr(39) * 2)}'
+    or RequestPath == '/{container.replace(chr(39), chr(39) * 2)}'
+| project TimeGenerated, hostName_s, requestUri_s, httpMethod_s, httpStatusCode_s, timeTaken_s, timeToFirstByte_s
+| order by TimeGenerated asc
+"""
+    return response_rows(
+        query_rows(workspace, query, started_at, finished_at),
+        (
+            "TimeGenerated",
+            "hostName_s",
+            "requestUri_s",
+            "httpMethod_s",
+            "httpStatusCode_s",
+            "timeTaken_s",
+            "timeToFirstByte_s",
+        ),
+    )
+
+
+def query_gateway_backend_logs(
+    workspace: str,
+    app_names: str | list[str],
+    started_at: str,
+    finished_at: str,
+) -> list[tuple[datetime, str]]:
+    escaped_names = ", ".join(
+        f"'{name.replace(chr(39), chr(39) * 2)}'"
+        for name in comma_separated_values(app_names)
+    )
+    query = f"""
+union isfuzzy=true ContainerAppConsoleLogs, ContainerAppConsoleLogs_CL
+| extend AppName = tostring(column_ifexists("ContainerAppName", column_ifexists("ContainerAppName_s", "")))
+| extend Message = tostring(column_ifexists("Log", column_ifexists("Log_s", "")))
+| where AppName in ({escaped_names})
+| where TimeGenerated between (datetime({started_at}) .. datetime({finished_at}))
+| where Message has "overmesh_backend_request" or Message has "overmesh_client_request"
+| project TimeGenerated, Message
+| order by TimeGenerated asc
+"""
+    rows = response_rows(
+        query_rows(workspace, query, started_at, finished_at),
+        ("TimeGenerated", "Message"),
+    )
+    return [
+        (
+            event_timestamp(parse_timestamp(str(row["TimeGenerated"])), str(row["Message"])),
+            str(row["Message"]),
+        )
+        for row in rows
+    ]
+
+
+def endpoint_host(endpoint: str) -> str:
+    host = urlsplit(endpoint).netloc.lower()
+    if not host:
+        raise ClientObservedError("the endpoint has no hostname")
+    return host
+
+
+def parse_optional_positive_seconds(value: object) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")) or number <= 0:
+        return None
+    return number
+
+
+def normalize_request_uri(uri: str) -> str:
+    parts = urlsplit(uri)
+    path = parts.path if parts.scheme or parts.netloc else uri.split("?", 1)[0]
+    return path.lstrip("/")
+
+
+def fingerprint_request_target(uri: str) -> str:
+    parts = urlsplit(uri)
+    path = parts.path
+    if not path.startswith("/"):
+        path = f"/{path}"
+    target = f"{path}?{parts.query}" if parts.query else path
+    return hashlib.sha256(target.encode("utf-8")).hexdigest()[:16]
+
+
+def parse_afd_access_logs(
+    rows: Sequence[dict[str, Any]],
+    container: str,
+    run_id: str,
+) -> list[AfdAccessLog]:
+    expected_prefix = f"{container}/{CAMPAIGN_PREFIX}/{run_id}/"
+    parsed: list[AfdAccessLog] = []
+    for row in rows:
+        host = str(row.get("hostName_s", "")).strip().lower()
+        raw_request_uri = str(row.get("requestUri_s", ""))
+        parts = urlsplit(raw_request_uri)
+        request_uri = normalize_request_uri(raw_request_uri)
+        method = str(row.get("httpMethod_s", "")).strip().upper()
+        if not method:
+            raise ClientObservedError(
+                "AFD access logs are missing httpMethod_s"
+            )
+        if request_uri.startswith(expected_prefix):
+            relative_path = request_uri[len(f"{container}/") :]
+        elif request_uri == container:
+            query = parse_qs(parts.query, keep_blank_values=True)
+            prefixes = query.get("prefix", [])
+            if (
+                method != "GET"
+                or query.get("restype") != ["container"]
+                or query.get("comp") != ["list"]
+                or len(prefixes) != 1
+                or not prefixes[0].lstrip("/").startswith(
+                    f"{CAMPAIGN_PREFIX}/{run_id}/"
+                )
+            ):
+                continue
+            relative_path = prefixes[0].lstrip("/")
+        else:
+            continue
+        duration = parse_optional_positive_seconds(row.get("timeTaken_s"))
+        if duration is None:
+            raise ClientObservedError(
+                "AFD access logs need a positive total request duration"
+            )
+        started_at = parse_timestamp(str(row.get("TimeGenerated")))
+        finished_at = started_at + timedelta(seconds=duration)
+        try:
+            status_code = int(row.get("httpStatusCode_s"))
+        except (TypeError, ValueError) as error:
+            raise ClientObservedError(
+                "AFD access logs are missing httpStatusCode_s"
+            ) from error
+        parsed.append(
+            AfdAccessLog(
+                generated_at=started_at,
+                started_at=started_at,
+                finished_at=finished_at,
+                host=host,
+                relative_path=relative_path,
+                request_target_fingerprint=fingerprint_request_target(
+                    raw_request_uri
+                ),
+                method=method,
+                status_code=status_code,
+            )
+        )
+    parsed.sort(key=lambda record: (record.started_at, record.finished_at))
+    return parsed
+
+
+def parse_gateway_events(
+    rows: Sequence[tuple[datetime, str]],
+) -> tuple[list[GatewayRequestEvent], list[BackendRequestEvent]]:
+    requests: list[GatewayRequestEvent] = []
+    backend: list[BackendRequestEvent] = []
+    for occurred_at, message in rows:
+        fields = parse_fields(message)
+        event = fields.get("event")
+        if event == "overmesh_client_request":
+            requests.append(
+                GatewayRequestEvent(
+                    occurred_at=occurred_at,
+                    request_event_id=fields.get("request_event_id", ""),
+                    fingerprint=fields.get(
+                        "client_request_fingerprint", ""
+                    ),
+                    request_target_fingerprint=fields.get(
+                        "request_target_fingerprint", ""
+                    ),
+                    method=fields.get("method", "").upper(),
+                )
+            )
+        elif event == "overmesh_backend_request":
+            backend.append(
+                BackendRequestEvent(
+                    occurred_at=occurred_at,
+                    request_event_id=fields.get("request_event_id", ""),
+                    fingerprint=fields.get(
+                        "client_request_fingerprint", ""
+                    ),
+                    operation=fields.get("operation", ""),
+                )
+            )
+    requests.sort(key=lambda event: event.occurred_at)
+    backend.sort(key=lambda event: event.occurred_at)
+    return requests, backend
+
+
+def request_matches_measured_path(
+    record: AfdAccessLog,
+    measured_path: str,
+    *,
+    prefix: bool,
+) -> bool:
+    if prefix:
+        return record.relative_path == measured_path or record.relative_path.startswith(
+            f"{measured_path}/"
+        )
+    return record.relative_path == measured_path
+
+
+def case_records(
+    records: Sequence[AfdAccessLog],
+    operation: Operation,
+    run_id: str,
+    target: str,
+    runs: int,
+) -> dict[str, list[AfdAccessLog]]:
+    matched: dict[str, list[AfdAccessLog]] = {
+        path: [] for path in measured_paths(operation, run_id, target, runs)
+    }
+    prefix = operation.shape == "directory"
+    for record in records:
+        for path in matched:
+            if request_matches_measured_path(record, path, prefix=prefix):
+                matched[path].append(record)
+                break
+    return matched
+
+
+def cluster_records(records: Sequence[AfdAccessLog]) -> list[tuple[AfdAccessLog, ...]]:
+    ordered = sorted(records, key=lambda record: (record.started_at, record.finished_at))
+    groups: list[list[AfdAccessLog]] = []
+    group_finished_at: list[datetime] = []
+    for record in ordered:
+        if not groups:
+            groups.append([record])
+            group_finished_at.append(record.finished_at)
+            continue
+        if record.started_at <= group_finished_at[-1]:
+            groups[-1].append(record)
+            if record.finished_at > group_finished_at[-1]:
+                group_finished_at[-1] = record.finished_at
+            continue
+        groups.append([record])
+        group_finished_at.append(record.finished_at)
+    return [tuple(group) for group in groups]
+
+
+def build_cluster(
+    case_key: str,
+    run_index: int,
+    measured_path: str,
+    records: Sequence[AfdAccessLog],
+) -> InvocationCluster:
+    if not records:
+        raise ClientObservedError(
+            f"case {case_key} is missing an invocation cluster"
+        )
+    return InvocationCluster(
+        case_key=case_key,
+        run_index=run_index,
+        measured_path=measured_path,
+        started_at=min(record.started_at for record in records),
+        finished_at=max(record.finished_at for record in records),
+        requests=tuple(records),
+    )
+
+
+def reconstruct_invocation_clusters(
+    case_key: str,
+    operation: Operation,
+    run_id: str,
+    target: str,
+    runs: int,
+    records: Sequence[AfdAccessLog],
+    run_windows: Sequence[dict[str, str]],
+) -> list[InvocationCluster]:
+    matched = case_records(records, operation, run_id, target, runs)
+    paths = measured_paths(operation, run_id, target, runs)
+    clusters: list[InvocationCluster] = []
+    for run_index, window in enumerate(run_windows):
+        path = paths[run_index] if len(paths) == runs else paths[0]
+        started_at = parse_timestamp(window["startedAt"])
+        finished_at = parse_timestamp(window["finishedAt"])
+        records_for_run = [
+            record
+            for record in matched[path]
+            if record.started_at >= started_at
+            and record.finished_at <= finished_at
+        ]
+        if not records_for_run:
+            raise ClientObservedError(
+                f"case {case_key} must reconstruct exactly {runs} "
+                "unambiguous invocation clusters"
+            )
+        clusters.append(
+            build_cluster(case_key, run_index, path, records_for_run)
+        )
+    ordered = sorted(clusters, key=lambda cluster: cluster.started_at)
+    previous: InvocationCluster | None = None
+    for cluster in ordered:
+        if previous is not None and cluster.started_at <= previous.finished_at:
+            raise ClientObservedError(
+                f"case {case_key} has overlapping invocation clusters"
+            )
+        previous = cluster
+    return ordered
+
+
+def assert_non_overlapping_clusters(
+    clusters: Sequence[InvocationCluster],
+) -> None:
+    ordered = sorted(
+        clusters,
+        key=lambda cluster: (cluster.started_at, cluster.finished_at, cluster.case_key),
+    )
+    previous: InvocationCluster | None = None
+    for cluster in ordered:
+        if previous is not None and cluster.started_at <= previous.finished_at:
+            raise ClientObservedError(
+                "AFD invocation clusters overlap across operation families"
+            )
+        previous = cluster
+
+
+def summarize_tool_requests(
+    clusters: Sequence[InvocationCluster],
+) -> dict[str, Any]:
+    methods: Counter[str] = Counter()
+    total = 0
+    for cluster in clusters:
+        for request in cluster.requests:
+            methods[request.method.lower()] += 1
+            total += 1
+    return {"total": total, "byOperation": dict(sorted(methods.items()))}
+
+
+def bind_gateway_requests(
+    clusters: Sequence[InvocationCluster],
+    events: Sequence[GatewayRequestEvent],
+) -> dict[str, BoundGatewayRequest]:
+    expected: dict[tuple[str, str], list[tuple[AfdAccessLog, InvocationCluster]]] = {}
+    for cluster in clusters:
+        for request in cluster.requests:
+            key = (request.request_target_fingerprint, request.method)
+            expected.setdefault(key, []).append((request, cluster))
+    observed: dict[tuple[str, str], list[GatewayRequestEvent]] = {}
+    for event in events:
+        key = (event.request_target_fingerprint, event.method)
+        observed.setdefault(key, []).append(event)
+    if set(observed) != set(expected):
+        raise ClientObservedError(
+            "Gateway request telemetry does not match the AFD campaign targets"
+        )
+
+    requests_by_event_id: dict[str, BoundGatewayRequest] = {}
+    for key, requests in expected.items():
+        matching = observed[key]
+        if len(matching) != len(requests):
+            raise ClientObservedError(
+                "Gateway request telemetry does not cover every AFD request"
+            )
+        ordered_requests = sorted(
+            requests,
+            key=lambda item: (
+                item[0].started_at,
+                item[0].finished_at,
+                item[1].case_key,
+                item[1].run_index,
+            ),
+        )
+        ordered_events = sorted(matching, key=lambda event: event.occurred_at)
+        for (request, cluster), event in zip(
+            ordered_requests,
+            ordered_events,
+            strict=True,
+        ):
+            if (
+                event.occurred_at < request.started_at
+                or event.occurred_at > request.finished_at
+            ):
+                raise ClientObservedError(
+                    "Gateway request telemetry falls outside its AFD request"
+                )
+            if not event.fingerprint or event.fingerprint == "missing":
+                raise ClientObservedError(
+                    "Gateway request telemetry is missing its client fingerprint"
+                )
+            if (
+                not event.request_event_id
+                or event.request_event_id == "missing"
+                or event.request_event_id in requests_by_event_id
+            ):
+                raise ClientObservedError(
+                    "Gateway request telemetry needs a unique reception identifier"
+                )
+            requests_by_event_id[event.request_event_id] = BoundGatewayRequest(
+                cluster=cluster,
+                client_fingerprint=event.fingerprint,
+            )
+    return requests_by_event_id
+
+
+def attribute_backend_events(
+    requests_by_event_id: dict[str, BoundGatewayRequest],
+    events: Sequence[BackendRequestEvent],
+) -> tuple[
+    dict[str, dict[str, Any]],
+    int,
+    dict[str, set[str]],
+    dict[tuple[str, int], set[str]],
+]:
+    case_operations: dict[str, Counter[str]] = {}
+    case_totals: Counter[str] = Counter()
+    case_request_events: dict[str, set[str]] = {}
+    cluster_request_events: dict[tuple[str, int], set[str]] = {}
+    unattributed = 0
+    for event in events:
+        matched = requests_by_event_id.get(event.request_event_id)
+        if matched is None:
+            unattributed += 1
+            continue
+        if event.fingerprint != matched.client_fingerprint:
+            raise ClientObservedError(
+                "backend request fingerprint disagrees with its Gateway request"
+            )
+        if not event.operation:
+            raise ClientObservedError(
+                f"backend request {event.request_event_id!r} is missing its operation"
+            )
+        case_key = matched.cluster.case_key
+        cluster_key = (
+            matched.cluster.case_key,
+            matched.cluster.run_index,
+        )
+        case_totals[case_key] += 1
+        case_operations.setdefault(case_key, Counter())[event.operation] += 1
+        case_request_events.setdefault(case_key, set()).add(
+            event.request_event_id
+        )
+        cluster_request_events.setdefault(cluster_key, set()).add(
+            event.request_event_id
+        )
+    cases: dict[str, dict[str, Any]] = {}
+    for case_key in {
+        request.cluster.case_key for request in requests_by_event_id.values()
+    }:
+        operations = case_operations.get(case_key, Counter())
+        cases[case_key] = {
+            "total": case_totals[case_key],
+            "byOperation": dict(sorted(operations.items())),
+        }
+    return cases, unattributed, case_request_events, cluster_request_events
+
+
+def build_case_telemetry(
+    key: str,
+    operation: Operation,
+    run_id: str,
+    target: str,
+    runs: int,
+    case_window: dict[str, str],
+    clusters: Sequence[InvocationCluster],
+    backend: dict[str, Any],
+    unattributed: int,
+) -> dict[str, Any]:
+    if unattributed != 0:
+        raise ClientObservedError(
+            f"case {key} has unattributed backend requests"
+        )
+    return {
+        "toolRequests": summarize_tool_requests(clusters),
+        "backendRequests": backend,
+        "attributedClientOperations": len(clusters),
+        "unattributedRequests": 0,
+        "measuredPaths": measured_paths(operation, run_id, target, runs),
+        "window": case_window,
+        "setupWritesExcluded": bool(setup_paths(operation, run_id, target)),
+    }
+
+
+def build_telemetry_from_observations(
+    contract: Contract,
+    client: dict[str, Any],
+    afd_rows: Sequence[dict[str, Any]],
+    backend_rows: Sequence[tuple[datetime, str]],
+    direct_endpoint: str,
+    gateway_endpoint: str,
+    container: str,
+) -> dict[str, Any]:
+    campaign = client.get("campaign")
+    if not isinstance(campaign, dict):
+        raise ClientObservedError("client evidence needs a campaign")
+    run_id = str(campaign.get("runId"))
+    case_windows = campaign.get("caseWindows")
+    if not isinstance(case_windows, dict):
+        raise ClientObservedError(
+            "client evidence needs a window per measured case"
+        )
+    invocation_windows = validate_invocation_windows(
+        campaign.get("invocationWindows"),
+        contract,
+        case_windows,
+    )
+    hosts_by_target = {
+        "direct": endpoint_host(direct_endpoint),
+        "gateway": endpoint_host(gateway_endpoint),
+    }
+    parsed_afd = parse_afd_access_logs(afd_rows, container, run_id)
+    parsed_gateway_requests, parsed_backend = parse_gateway_events(backend_rows)
+    records_by_host: dict[str, list[AfdAccessLog]] = {}
+    for record in parsed_afd:
+        records_by_host.setdefault(record.host, []).append(record)
+    host_clusters: dict[str, list[InvocationCluster]] = {
+        host: [] for host in set(hosts_by_target.values())
+    }
+    clusters_by_case: dict[str, list[InvocationCluster]] = {}
+    for target in contract.target_order:
+        host = hosts_by_target[target]
+        host_records = records_by_host.get(host, [])
+        for operation in contract.operations:
+            key = measurement_key(operation.id, target)
+            case_window = validate_window(
+                case_windows.get(key), f"case {key} measurement window"
+            )
+            clusters = reconstruct_invocation_clusters(
+                key,
+                operation,
+                run_id,
+                target,
+                contract.runs,
+                host_records,
+                invocation_windows[key],
+            )
+            started_at = parse_timestamp(case_window["startedAt"])
+            finished_at = parse_timestamp(case_window["finishedAt"])
+            for cluster in clusters:
+                if (
+                    cluster.started_at < started_at
+                    or cluster.finished_at > finished_at
+                ):
+                    raise ClientObservedError(
+                        f"case {key} invocation clusters fall outside its measurement window"
+                    )
+            host_clusters[host].extend(clusters)
+            clusters_by_case[key] = clusters
+    for host, clusters in host_clusters.items():
+        assert_non_overlapping_clusters(clusters)
+        assigned_requests = {
+            request for cluster in clusters for request in cluster.requests
+        }
+        if len(assigned_requests) != len(records_by_host.get(host, [])):
+            raise ClientObservedError(
+                f"AFD access logs for {host} contain unexpected campaign requests"
+            )
+    gateway_clusters = [
+        cluster
+        for cluster in host_clusters[hosts_by_target["gateway"]]
+        if cluster.case_key.endswith("::gateway")
+    ]
+    gateway_requests_by_event_id = bind_gateway_requests(
+        gateway_clusters,
+        parsed_gateway_requests,
+    )
+    (
+        backend_by_case,
+        unattributed,
+        case_request_events,
+        cluster_request_events,
+    ) = attribute_backend_events(
+        gateway_requests_by_event_id,
+        parsed_backend,
+    )
+    if unattributed != 0:
+        raise ClientObservedError(
+            "Gateway backend telemetry contains unattributed requests"
+        )
+    for case_key, clusters in clusters_by_case.items():
+        if not case_key.endswith("::gateway"):
+            continue
+        expected_request_events = {
+            request_event_id
+            for request_event_id, request in gateway_requests_by_event_id.items()
+            if request.cluster.case_key == case_key
+        }
+        if (
+            case_request_events.get(case_key, set())
+            != expected_request_events
+        ):
+            raise ClientObservedError(
+                f"case {case_key} Gateway backend telemetry does not cover "
+                "every received request"
+            )
+        for cluster in clusters:
+            cluster_key = (cluster.case_key, cluster.run_index)
+            expected_cluster_request_events = {
+                request_event_id
+                for request_event_id, request in gateway_requests_by_event_id.items()
+                if request.cluster == cluster
+            }
+            if (
+                cluster_request_events.get(cluster_key, set())
+                != expected_cluster_request_events
+            ):
+                raise ClientObservedError(
+                    f"case {case_key} run {cluster.run_index + 1} Gateway "
+                    "backend telemetry does not cover every received request"
+                )
+    cases: dict[str, Any] = {}
+    for target in contract.target_order:
+        for operation in contract.operations:
+            key = measurement_key(operation.id, target)
+            case_window = validate_window(
+                case_windows.get(key),
+                f"case {key} measurement window",
+            )
+            cases[key] = build_case_telemetry(
+                key,
+                operation,
+                run_id,
+                target,
+                contract.runs,
+                case_window,
+                clusters_by_case[key],
+                (
+                    backend_by_case.get(key, {"total": 0, "byOperation": {}})
+                    if target == "gateway"
+                    else {"total": 0, "byOperation": {}}
+                ),
+                0,
+            )
+    return {"apiVersion": TELEMETRY_API_VERSION, "cases": cases}
+
+
+def collect_telemetry_from_client_evidence(
+    contract: Contract,
+    client_evidence: Path,
+    environment: dict[str, str] | None = None,
+    *,
+    clock: Callable[[], float] | None = None,
+    sleep: Callable[[float], None] | None = None,
+) -> dict[str, Any]:
+    values = dict(os.environ if environment is None else environment)
+    workspace = require_environment(values, WORKSPACE_VARIABLE)
+    app_names = require_environment(values, GATEWAY_APP_NAME_VARIABLE)
+    direct_endpoint = require_environment(
+        values,
+        REQUIRED_TARGET_ENVIRONMENT["direct"],
+    )
+    gateway_endpoint = require_environment(
+        values,
+        REQUIRED_TARGET_ENVIRONMENT["gateway"],
+    )
+    container = require_environment(values, CONTAINER_VARIABLE)
+    wait_seconds = int(
+        values.get(LOG_WAIT_SECONDS_VARIABLE, str(DEFAULT_LOG_WAIT_SECONDS))
+    )
+    poll_seconds = int(
+        values.get(LOG_POLL_SECONDS_VARIABLE, str(DEFAULT_LOG_POLL_SECONDS))
+    )
+    stable_polls_required = int(
+        values.get(
+            LOG_STABLE_POLLS_VARIABLE,
+            str(DEFAULT_LOG_STABLE_POLLS),
+        )
+    )
+    if wait_seconds <= 0 or poll_seconds <= 0:
+        raise ClientObservedError(
+            f"{LOG_WAIT_SECONDS_VARIABLE} and {LOG_POLL_SECONDS_VARIABLE} "
+            "must be positive"
+        )
+    if stable_polls_required < 2:
+        raise ClientObservedError(
+            f"{LOG_STABLE_POLLS_VARIABLE} must be at least 2"
+        )
+    if wait_seconds < poll_seconds * (stable_polls_required - 1):
+        raise ClientObservedError(
+            f"{LOG_WAIT_SECONDS_VARIABLE} is too short for "
+            f"{LOG_STABLE_POLLS_VARIABLE} stable polls"
+        )
+    now = time.monotonic if clock is None else clock
+    pause = time.sleep if sleep is None else sleep
+    client = json.loads(client_evidence.read_text(encoding="utf-8"))
+    campaign = client.get("campaign")
+    if not isinstance(campaign, dict):
+        raise ClientObservedError("client evidence needs a campaign")
+    measurement_window = validate_window(
+        campaign.get("measurementWindow"),
+        "the campaign measurement window",
+    )
+    run_id = str(campaign.get("runId"))
+    deadline = now() + wait_seconds
+    previous = ""
+    stable_polls = 0
+    last_error: Exception | None = None
+    hosts = sorted(
+        {
+            endpoint_host(direct_endpoint),
+            endpoint_host(gateway_endpoint),
+        }
+    )
+    while True:
+        afd_rows = [
+            row
+            for host in hosts
+            for row in query_afd_access_logs(
+                workspace,
+                host,
+                container,
+                run_id,
+                measurement_window["startedAt"],
+                measurement_window["finishedAt"],
+            )
+        ]
+        backend_rows = query_gateway_backend_logs(
+            workspace,
+            app_names,
+            measurement_window["startedAt"],
+            measurement_window["finishedAt"],
+        )
+        try:
+            telemetry = build_telemetry_from_observations(
+                contract,
+                client,
+                afd_rows,
+                backend_rows,
+                direct_endpoint,
+                gateway_endpoint,
+                container,
+            )
+        except ClientObservedError as error:
+            last_error = error
+            previous = ""
+            stable_polls = 0
+        else:
+            last_error = None
+            rendered = canonical_json(telemetry)
+            if rendered == previous:
+                stable_polls += 1
+            else:
+                previous = rendered
+                stable_polls = 1
+        if now() >= deadline:
+            if last_error is None and stable_polls >= stable_polls_required:
+                return telemetry
+            if last_error is not None:
+                raise ClientObservedError(
+                    "Azure Monitor did not return stable client-observed "
+                    f"telemetry within {wait_seconds} seconds: {last_error}"
+                ) from last_error
+            raise ClientObservedError(
+                "Azure Monitor did not return stable client-observed telemetry "
+                f"within {wait_seconds} seconds"
+            )
+        pause(poll_seconds)
 
 
 def request_accounting(
@@ -1325,14 +2327,18 @@ def build_document(
     measurement_window = validate_window(
         campaign.get("measurementWindow"), "the campaign measurement window"
     )
-    if setup_window["finishedAt"] > measurement_window["startedAt"]:
+    if parse_timestamp(setup_window["finishedAt"]) > parse_timestamp(
+        measurement_window["startedAt"]
+    ):
         raise ClientObservedError(
             "seed writes must finish before the measurement window opens"
         )
     cleanup_window = validate_window(
         campaign.get("cleanupWindow"), "the campaign cleanup window"
     )
-    if cleanup_window["startedAt"] <= measurement_window["finishedAt"]:
+    if parse_timestamp(cleanup_window["startedAt"]) <= parse_timestamp(
+        measurement_window["finishedAt"]
+    ):
         raise ClientObservedError(
             "remote cleanup must start after the measurement window closes"
         )
@@ -1344,6 +2350,11 @@ def build_document(
         raise ClientObservedError(
             "client-observed evidence needs a window per measured case"
         )
+    validate_invocation_windows(
+        campaign.get("invocationWindows"),
+        contract,
+        case_windows,
+    )
     measurements = []
     for operation in contract.operations:
         for target in contract.target_order:
@@ -1355,11 +2366,15 @@ def build_document(
             case_window = validate_window(
                 case_windows.get(key), f"case {key} measurement window"
             )
-            if case_window["startedAt"] < setup_window["finishedAt"]:
+            if parse_timestamp(case_window["startedAt"]) < parse_timestamp(
+                setup_window["finishedAt"]
+            ):
                 raise ClientObservedError(
                     f"case {key} overlaps the campaign seed writes"
                 )
-            if case_window["finishedAt"] >= cleanup_window["startedAt"]:
+            if parse_timestamp(case_window["finishedAt"]) >= parse_timestamp(
+                cleanup_window["startedAt"]
+            ):
                 raise ClientObservedError(
                     f"case {key} overlaps the campaign remote cleanup"
                 )
@@ -1465,13 +2480,19 @@ def validate_document(
     campaign_measurement = validate_window(
         campaign.get("measurementWindow"), "the campaign measurement window"
     )
-    if campaign_setup["finishedAt"] > campaign_measurement["startedAt"]:
+    if parse_timestamp(campaign_setup["finishedAt"]) > parse_timestamp(
+        campaign_measurement["startedAt"]
+    ):
         raise ClientObservedError(
             "seed writes must finish before the measurement window opens"
         )
     if "caseWindows" in campaign:
         raise ClientObservedError(
             "client-observed evidence publishes a window per measurement"
+        )
+    if "invocationWindows" in campaign:
+        raise ClientObservedError(
+            "client-observed evidence must not publish raw invocation windows"
         )
     if "cleanupPrefixes" in campaign:
         raise ClientObservedError(
@@ -1482,7 +2503,9 @@ def validate_document(
     campaign_cleanup = validate_window(
         campaign.get("cleanupWindow"), "the campaign cleanup window"
     )
-    if campaign_cleanup["startedAt"] <= campaign_measurement["finishedAt"]:
+    if parse_timestamp(campaign_cleanup["startedAt"]) <= parse_timestamp(
+        campaign_measurement["finishedAt"]
+    ):
         raise ClientObservedError(
             "remote cleanup must start after the measurement window closes"
         )
@@ -1555,11 +2578,15 @@ def validate_document(
             measurement.get("measurementWindow"),
             f"case {key} measurement window",
         )
-        if case_window["startedAt"] < campaign_setup["finishedAt"]:
+        if parse_timestamp(case_window["startedAt"]) < parse_timestamp(
+            campaign_setup["finishedAt"]
+        ):
             raise ClientObservedError(
                 f"case {key} overlaps the campaign seed writes"
             )
-        if case_window["finishedAt"] >= campaign_cleanup["startedAt"]:
+        if parse_timestamp(case_window["finishedAt"]) >= parse_timestamp(
+            campaign_cleanup["startedAt"]
+        ):
             raise ClientObservedError(
                 f"case {key} overlaps the campaign remote cleanup"
             )
@@ -1803,7 +2830,15 @@ def azcopy_command(
     ]
     if recursive:
         command.append("--recursive=true")
+    command.extend(azcopy_trusted_suffix_arguments(endpoint))
     return command
+
+
+def azcopy_trusted_suffix_arguments(endpoint: str) -> list[str]:
+    hostname = urlsplit(endpoint).hostname
+    if hostname is not None and hostname.lower().endswith(".azurefd.net"):
+        return ["--trusted-microsoft-suffixes=*.azurefd.net"]
+    return []
 
 
 def azcopy_remove_command(
@@ -1814,7 +2849,7 @@ def azcopy_remove_command(
 ) -> list[str]:
     """Remove a campaign prefix with the same Entra login. Never a SAS."""
 
-    return [
+    command = [
         "azcopy",
         "remove",
         f"{endpoint.rstrip('/')}/{container}/{prefix}",
@@ -1823,6 +2858,8 @@ def azcopy_remove_command(
         "--log-level=ERROR",
         "--output-type=text",
     ]
+    command.extend(azcopy_trusted_suffix_arguments(endpoint))
+    return command
 
 
 def command_remote_path(command: Sequence[str], container: str) -> str:
@@ -2207,6 +3244,10 @@ def run_campaign(
     }
     case_started: dict[str, str] = {}
     case_finished: dict[str, str] = {}
+    invocation_windows: dict[str, list[dict[str, str] | None]] = {
+        key: [None] * contract.runs for key in wall_seconds
+    }
+    last_invocation_finished = ""
     written: dict[str, set[str]] = {
         target: set() for target in contract.target_order
     }
@@ -2246,7 +3287,14 @@ def run_campaign(
             written[target].add(
                 attribution_prefix(run_id, operation.id, target)
             )
-            case_started.setdefault(key, now())
+            invocation_started = now()
+            if last_invocation_finished:
+                invocation_started = advance_past(
+                    last_invocation_finished,
+                    now,
+                    pause,
+                )
+            case_started.setdefault(key, invocation_started)
             elapsed = _measure(
                 operation,
                 target,
@@ -2259,7 +3307,17 @@ def run_campaign(
                 tools,
                 contract.request_timeout_seconds,
             )
-            case_finished[key] = now()
+            invocation_finished = advance_past(
+                invocation_started,
+                now,
+                pause,
+            )
+            last_invocation_finished = invocation_finished
+            case_finished[key] = invocation_finished
+            invocation_windows[key][int(step["runIndex"])] = make_window(
+                invocation_started,
+                invocation_finished,
+            )
             wall_seconds[key].append(elapsed)
         finished_at = now()
         measurement_finished_at = finished_at
@@ -2314,6 +3372,10 @@ def run_campaign(
             "caseWindows": {
                 key: make_window(case_started[key], case_finished[key])
                 for key in sorted(case_started)
+            },
+            "invocationWindows": {
+                key: [window for window in invocation_windows[key] if window is not None]
+                for key in sorted(invocation_windows)
             },
             "endpointFingerprints": {
                 target: endpoint_fingerprint(endpoint)
@@ -2440,6 +3502,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--plan", action="store_true")
     parser.add_argument("--check-publication", action="store_true")
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--collect-telemetry", action="store_true")
     parser.add_argument("--work-root", type=Path)
     parser.add_argument("--client-evidence", type=Path)
     parser.add_argument("--telemetry", type=Path)
@@ -2482,6 +3545,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                 file=sys.stderr,
             )
             return 0
+        if arguments.collect_telemetry:
+            if arguments.client_evidence is None or arguments.output is None:
+                parser.error(
+                    "--collect-telemetry requires --client-evidence and --output"
+                )
+            telemetry = collect_telemetry_from_client_evidence(
+                contract,
+                arguments.client_evidence,
+            )
+            arguments.output.parent.mkdir(parents=True, exist_ok=True)
+            arguments.output.write_text(
+                canonical_json(telemetry),
+                encoding="utf-8",
+            )
+            print(f"collected client-observed telemetry: {arguments.output}")
+            return 0
         if arguments.client_evidence is not None:
             if arguments.telemetry is None or arguments.output is None:
                 parser.error(
@@ -2496,7 +3575,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if arguments.check_publication:
             print("the mandatory disclaimer is published")
             return 0
-        parser.error("select --plan, --run, --client-evidence or --validate")
+        parser.error(
+            "select --plan, --run, --collect-telemetry, "
+            "--client-evidence or --validate"
+        )
     except ClientObservedError as error:
         print(f"client-observed campaign refused: {error}", file=sys.stderr)
         return 2

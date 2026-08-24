@@ -12,6 +12,8 @@ required=(
   OVERMESH_CLIENT_OBSERVED_DIRECT_ENDPOINT
   OVERMESH_CLIENT_OBSERVED_GATEWAY_ENDPOINT
   OVERMESH_CLIENT_OBSERVED_CONTAINER
+  OVERMESH_CLIENT_OBSERVED_WORKSPACE_ID
+  OVERMESH_CLIENT_OBSERVED_GATEWAY_APP_NAME
   OVERMESH_CLIENT_OBSERVED_ISOLATED_ENVIRONMENT
   OVERMESH_CLIENT_OBSERVED_COUNTRY
   OVERMESH_CLIENT_OBSERVED_CONNECTION
@@ -165,11 +167,11 @@ python3 "$runner" \
   --work-root "$work_root" \
   --output "$client_evidence"
 
-if [[ ! -f "$telemetry" ]]; then
-  echo "Server telemetry is required at $telemetry before publication." >&2
-  echo "Client measurements remain at $client_evidence." >&2
-  exit 3
-fi
+python3 "$runner" \
+  --contract "$contract" \
+  --collect-telemetry \
+  --client-evidence "$client_evidence" \
+  --output "$telemetry"
 
 python3 "$runner" \
   --contract "$contract" \
