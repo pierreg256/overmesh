@@ -365,6 +365,12 @@ def parse_timestamp(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def format_timestamp(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat(
+        timespec="microseconds"
+    ).replace("+00:00", "Z")
+
+
 def normalize_prose(value: str) -> str:
     return " ".join(value.split())
 
@@ -1388,7 +1394,6 @@ AzureDiagnostics
 | where hostName_s == '{host.replace(chr(39), chr(39) * 2)}'
 | extend RequestPath = tostring(parse_url(requestUri_s).Path)
 | where RequestPath startswith '{prefix.replace(chr(39), chr(39) * 2)}'
-    or RequestPath == '/{container.replace(chr(39), chr(39) * 2)}'
 | project TimeGenerated, hostName_s, requestUri_s, httpMethod_s, httpStatusCode_s, timeTaken_s, timeToFirstByte_s
 | order by TimeGenerated asc
 """
@@ -1658,24 +1663,60 @@ def reconstruct_invocation_clusters(
     matched = case_records(records, operation, run_id, target, runs)
     paths = measured_paths(operation, run_id, target, runs)
     clusters: list[InvocationCluster] = []
-    for run_index, window in enumerate(run_windows):
-        path = paths[run_index] if len(paths) == runs else paths[0]
-        started_at = parse_timestamp(window["startedAt"])
-        finished_at = parse_timestamp(window["finishedAt"])
-        records_for_run = [
-            record
-            for record in matched[path]
-            if record.started_at >= started_at
-            and record.finished_at <= finished_at
-        ]
-        if not records_for_run:
+    if len(paths) == runs:
+        for run_index, (path, window) in enumerate(
+            zip(paths, run_windows, strict=True)
+        ):
+            records_for_run = matched[path]
+            if not records_for_run:
+                raise ClientObservedError(
+                    f"case {case_key} must reconstruct exactly {runs} "
+                    "unambiguous invocation clusters"
+                )
+            cluster = build_cluster(
+                case_key,
+                run_index,
+                path,
+                records_for_run,
+            )
+            if not window_contains(
+                window,
+                make_window(
+                    format_timestamp(cluster.started_at),
+                    format_timestamp(cluster.finished_at),
+                ),
+            ):
+                raise ClientObservedError(
+                    f"case {case_key} run {run_index + 1} falls outside its invocation window"
+                )
+            clusters.append(cluster)
+    else:
+        grouped = cluster_records(matched[paths[0]])
+        if len(grouped) != runs:
             raise ClientObservedError(
                 f"case {case_key} must reconstruct exactly {runs} "
                 "unambiguous invocation clusters"
             )
-        clusters.append(
-            build_cluster(case_key, run_index, path, records_for_run)
-        )
+        for run_index, (window, records_for_run) in enumerate(
+            zip(run_windows, grouped, strict=True)
+        ):
+            cluster = build_cluster(
+                case_key,
+                run_index,
+                paths[0],
+                records_for_run,
+            )
+            if not window_contains(
+                window,
+                make_window(
+                    format_timestamp(cluster.started_at),
+                    format_timestamp(cluster.finished_at),
+                ),
+            ):
+                raise ClientObservedError(
+                    f"case {case_key} run {run_index + 1} falls outside its invocation window"
+                )
+            clusters.append(cluster)
     ordered = sorted(clusters, key=lambda cluster: cluster.started_at)
     previous: InvocationCluster | None = None
     for cluster in ordered:

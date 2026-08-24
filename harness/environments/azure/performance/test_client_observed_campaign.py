@@ -905,11 +905,9 @@ class TelemetryCollectorTests(unittest.TestCase):
             f"RequestPath startswith '/{self.container}/perf/client-observed/{RUN_ID}/'",
             queries[0],
         )
-        self.assertIn(
-            f"RequestPath == '/{self.container}'",
-            queries[0],
-        )
         self.assertNotIn("requestUri_s startswith", queries[0])
+        self.assertNotIn("RequestPath == ", queries[0])
+        self.assertNotIn(" or ", queries[0])
 
     def test_container_listing_uses_its_campaign_prefix_for_attribution(
         self,
@@ -1093,6 +1091,67 @@ class TelemetryCollectorTests(unittest.TestCase):
 
         self.assertEqual(len(clusters), self.contract.runs)
         self.assertTrue(all(len(cluster.requests) == 2 for cluster in clusters))
+
+    def test_unique_directory_run_path_keeps_disjoint_batches_in_one_cluster(
+        self,
+    ) -> None:
+        contract = load_contract(CONTRACT_PATH)
+        directory_upload = next(
+            operation
+            for operation in contract.operations
+            if operation.shape == "directory"
+            and operation.action == "upload"
+        )
+        rows: list[dict[str, object]] = []
+        for run_index, path in enumerate(
+            protocol.measured_paths(
+                directory_upload,
+                RUN_ID,
+                "gateway",
+                contract.runs,
+            )
+        ):
+            minute = 20 + (2 * run_index)
+            rows.append(
+                self.afd_row(
+                    f"2026-08-23T12:{minute:02d}:10Z",
+                    f"{path}/chunk-000.bin",
+                    host="gateway.example.invalid",
+                )
+            )
+            if run_index == 0:
+                rows.append(
+                    self.afd_row(
+                        f"2026-08-23T12:{minute:02d}:40Z",
+                        f"{path}/chunk-499.bin",
+                        host="gateway.example.invalid",
+                    )
+                )
+        records = protocol.parse_afd_access_logs(
+            rows,
+            self.container,
+            RUN_ID,
+        )
+
+        clusters = protocol.reconstruct_invocation_clusters(
+            measurement_key(directory_upload.id, "gateway"),
+            directory_upload,
+            RUN_ID,
+            "gateway",
+            contract.runs,
+            records,
+            [
+                {
+                    "startedAt": f"2026-08-23T12:{20 + (2 * run_index):02d}:09Z",
+                    "finishedAt": f"2026-08-23T12:{20 + (2 * run_index):02d}:45Z",
+                }
+                for run_index in range(contract.runs)
+            ],
+        )
+
+        self.assertEqual(len(clusters), contract.runs)
+        self.assertEqual(len(clusters[0].requests), 2)
+        self.assertTrue(all(len(cluster.requests) == 1 for cluster in clusters[1:]))
 
     def test_successful_direct_and_gateway_attribution_reconstructs_five_clusters(
         self,
