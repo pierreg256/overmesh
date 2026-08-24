@@ -494,44 +494,50 @@ class PerformanceContractTests(unittest.TestCase):
         self.assertEqual(delete.backend_requests_per_operation, 31)
         self.assertEqual(delete.baseline_backend_requests_per_operation, 43)
         read_budgets = {
-            case.id: case.backend_requests_per_operation
+            case.id: (
+                case.baseline_backend_requests_per_operation,
+                case.backend_requests_per_operation,
+            )
             for case in contract.cases
             if case.operation
             in {"get_blob", "get_range", "head_blob", "get_block_list"}
         }
         self.assertEqual(
             {
-                budget
-                for case_id, budget in read_budgets.items()
+                budgets
+                for case_id, budgets in read_budgets.items()
                 if case_id.startswith("get_blob-1kib")
             },
-            {13},
+            {(15, 13)},
         )
         self.assertEqual(
             {
-                budget
-                for case_id, budget in read_budgets.items()
+                budgets
+                for case_id, budgets in read_budgets.items()
                 if case_id.startswith("get_blob-16mib")
             },
-            {16},
+            {(18, 16)},
         )
         self.assertEqual(
             {
-                budget
-                for case_id, budget in read_budgets.items()
+                budgets
+                for case_id, budgets in read_budgets.items()
                 if case_id.startswith("get_range-")
             },
-            {13},
+            {(15, 13)},
         )
         self.assertEqual(
             {
-                budget
-                for case_id, budget in read_budgets.items()
+                budgets
+                for case_id, budgets in read_budgets.items()
                 if case_id.startswith("head_blob-")
             },
-            {8},
+            {(10, 8)},
         )
-        self.assertEqual(read_budgets["get_block_list-16mib-c1"], 14)
+        self.assertEqual(
+            read_budgets["get_block_list-16mib-c1"],
+            (18, 14),
+        )
         blocks = {
             case.payload.id: (
                 case.baseline_backend_requests_per_operation,

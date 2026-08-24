@@ -1577,11 +1577,19 @@ def load_contract(path: Path) -> Contract:
                 "put_blob": 49,
                 "overwrite_blob": 49,
                 "delete_blob": 43,
+                "get_blob": (
+                    18
+                    if case.payload.size_bytes == 16 * 1024 * 1024
+                    else 15
+                ),
+                "get_range": 15,
+                "head_blob": 10,
                 "put_block_sequence": (
                     442
                     if case.payload.size_bytes == 100 * 1024 * 1024
                     else 181
                 ),
+                "get_block_list": 18,
             }.get(case.operation)
             if case.baseline_backend_requests_per_operation != expected_baseline:
                 raise ValueError(

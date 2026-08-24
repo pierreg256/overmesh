@@ -1,7 +1,8 @@
 # The paired budgets are frozen from the retained 5202ecc baseline and the
 # closed ADR-0012 object-level request budgets.
-# Read-path budgets include ADR-0012's removal of the separate high-water
-# object, as measured by the complete 20260823T221815Z telemetry vectors.
+# Final read-path budgets include ADR-0012's removal of the separate high-water
+# object, as measured by the complete 20260823T221815Z telemetry vectors. The
+# paired baseline budgets preserve the separate high-water reads in 5202ecc.
 schema_version = 5
 contract_revision = "v6"
 campaign_purpose = "certified-current-matrix"
@@ -123,6 +124,7 @@ payloads = ["1kib", "1mib"]
 concurrency = [1, 4, 16]
 measured_iterations = 20
 backend_requests_per_operation = 13
+baseline_backend_requests_per_operation = 15
 
 [[workload]]
 operation = "get_blob"
@@ -130,6 +132,7 @@ payloads = ["16mib"]
 concurrency = [1, 4, 16]
 measured_iterations = 20
 backend_requests_per_operation = 16
+baseline_backend_requests_per_operation = 18
 
 [[workload]]
 operation = "get_range"
@@ -138,6 +141,7 @@ concurrency = [1, 4, 16]
 range_bytes = 1048576
 measured_iterations = 20
 backend_requests_per_operation = 13
+baseline_backend_requests_per_operation = 15
 
 [[workload]]
 operation = "head_blob"
@@ -145,6 +149,7 @@ payloads = ["1mib"]
 concurrency = [1, 16]
 measured_iterations = 20
 backend_requests_per_operation = 8
+baseline_backend_requests_per_operation = 10
 
 [[workload]]
 operation = "delete_blob"
@@ -245,6 +250,7 @@ payloads = ["16mib"]
 concurrency = [1]
 measured_iterations = 10
 backend_requests_per_operation = 14
+baseline_backend_requests_per_operation = 18
 
 [[exclusion]]
 operation = "put_blob"
