@@ -7,6 +7,7 @@ from pathlib import Path
 from overmesh_live_performance import (
     fixture_hash_matches,
     fixture_blob_names,
+    fixture_container_names,
     fixture_manifest_sha256,
     latency_metrics,
     load_contract,
@@ -733,6 +734,30 @@ class PerformanceContractTests(unittest.TestCase):
         self.assertEqual(
             contract.certification.final_commit,
             "da89d88f0c917f9fc41c04c59a98df14f4e4c76b",
+        )
+
+    def test_v7_container_fixtures_are_isolated_by_runtime_role(self) -> None:
+        contract = load_contract(
+            Path(
+                "harness/performance/"
+                "live-v7-certified-current-matrix.toml"
+            )
+        )
+        fixture = next(
+            fixture
+            for fixture in contract.fixtures
+            if fixture.kind == "containers"
+        )
+
+        baseline = fixture_container_names(fixture, "pre-optimization")
+        final = fixture_container_names(fixture, "final")
+
+        self.assertEqual(baseline[0], "omv7fixture-pre-optimization-00")
+        self.assertEqual(final[0], "omv7fixture-final-00")
+        self.assertTrue(set(baseline).isdisjoint(final))
+        self.assertEqual(
+            fixture.manifest_sha256,
+            fixture_manifest_sha256(fixture),
         )
 
     def test_v51_rejects_weakened_diagnostic_safeguards(self) -> None:

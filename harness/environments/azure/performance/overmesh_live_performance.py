@@ -1988,11 +1988,24 @@ def fixture_blob_names(
     ]
 
 
-def fixture_container_names(fixture: Fixture) -> list[str]:
+def fixture_container_prefix(
+    fixture: Fixture,
+    runtime_role: str | None = None,
+) -> str:
+    if runtime_role is None:
+        return fixture.prefix
+    return f"{fixture.prefix}-{runtime_role}"
+
+
+def fixture_container_names(
+    fixture: Fixture,
+    runtime_role: str | None = None,
+) -> list[str]:
     if fixture.kind != "containers":
         return []
+    prefix = fixture_container_prefix(fixture, runtime_role)
     return [
-        f"{fixture.prefix}-{index:02d}"
+        f"{prefix}-{index:02d}"
         for index in range(fixture.container_count)
     ]
 
@@ -2184,6 +2197,9 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                 os.environ["OVERMESH_LIVE_PERFORMANCE_HOST_ID"]
             ),
         }
+    container_fixture_runtime_role = (
+        runtime_role if contract.revision == V7_REVISION else None
+    )
 
     container = os.environ["OVERMESH_LIVE_CUSTOMER_CONTAINER"]
     credential = ManagedIdentityCredential(
@@ -2378,13 +2394,20 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                     f"entry {item.name} failed identity checks"
                                 )
                 else:
-                    expected_containers = fixture_container_names(fixture)
+                    expected_containers = fixture_container_names(
+                        fixture,
+                        container_fixture_runtime_role,
+                    )
+                    container_prefix = fixture_container_prefix(
+                        fixture,
+                        container_fixture_runtime_role,
+                    )
                     for target in contract.target_order:
                         service = services[target]
                         available_items = retry_fixture_read(
                             lambda: list(
                                 service.list_containers(
-                                    name_starts_with=fixture.prefix
+                                    name_starts_with=container_prefix
                                 )
                             ),
                             f"fixture {fixture.id} target {target} initial list",
@@ -2517,7 +2540,7 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                         verified_container_items = retry_fixture_read(
                             lambda: list(
                                 service.list_containers(
-                                    name_starts_with=fixture.prefix
+                                    name_starts_with=container_prefix
                                 )
                             ),
                             f"fixture {fixture.id} target {target} verification",
@@ -2888,8 +2911,12 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                 raise RuntimeError(
                                     "listing case has no fixture"
                                 )
+                            container_prefix = fixture_container_prefix(
+                                benchmark_case.fixture,
+                                container_fixture_runtime_role,
+                            )
                             pages = active_service.list_containers(
-                                name_starts_with=benchmark_case.fixture.prefix,
+                                name_starts_with=container_prefix,
                                 results_per_page=benchmark_case.max_results,
                                 **sdk_request_options(current_request_id),
                             ).by_page()
@@ -2897,7 +2924,8 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                 item.name for page in pages for item in page
                             ]
                             expected = fixture_container_names(
-                                benchmark_case.fixture
+                                benchmark_case.fixture,
+                                container_fixture_runtime_role,
                             )
                             if names != expected:
                                 raise RuntimeError(
