@@ -32,7 +32,7 @@ reqwest = { version = "0.12.28", default-features = false, features = ["http2", 
 rsa = "0.9.9"
 semver = { version = "1.0.27", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
-serde_jcs = "0.1.0"
+serde_jcs = "0.2.0"
 serde_json = "1.0.145"
 serde_yaml = "0.9.34"
 sha2 = "0.11.0"
