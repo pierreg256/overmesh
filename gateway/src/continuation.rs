@@ -10,6 +10,7 @@ use thiserror::Error;
 use crate::manifest::{ManifestError, ManifestSigner, SignatureDomain, SignedDocument};
 
 const TOKEN_API_VERSION: &str = "overmesh.io/continuation-token/v2";
+const MAX_CLOCK_SKEW_MS: u64 = 5_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -154,10 +155,10 @@ pub fn verify_at(
     {
         return Err(ContinuationError::Document);
     }
-    if now_unix_ms < payload.issued_at_unix_ms {
+    if payload.issued_at_unix_ms > now_unix_ms.saturating_add(MAX_CLOCK_SKEW_MS) {
         return Err(ContinuationError::NotYetValid);
     }
-    if now_unix_ms > payload.expires_at_unix_ms {
+    if now_unix_ms > payload.expires_at_unix_ms.saturating_add(MAX_CLOCK_SKEW_MS) {
         return Err(ContinuationError::Expired);
     }
     if payload.account != binding.account
@@ -257,8 +258,9 @@ mod tests {
             verified.backend_cursors["storage-a"].as_deref(),
             Some("opaque-a")
         );
+        verify_at(&token, &binding(), 6_100, &signer).expect("valid within clock skew");
         assert!(matches!(
-            verify_at(&token, &binding(), 1_101, &signer),
+            verify_at(&token, &binding(), 6_101, &signer),
             Err(ContinuationError::Expired)
         ));
         let mut reused = binding();
@@ -350,7 +352,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_future_tokens_and_invalid_cursor_state() {
+    async fn tolerates_bounded_clock_skew_and_rejects_invalid_cursor_state() {
         let signer =
             LocalTestManifestSigner::new("key", true, KeyValidity::new(0, u64::MAX).expect("key"))
                 .expect("signer");
@@ -361,13 +363,14 @@ mod tests {
                 backend_cursors: BTreeMap::from([("storage-a".to_owned(), None)]),
             },
             Duration::from_millis(100),
-            1_000,
+            10_000,
             &signer,
         )
         .await
         .expect("token");
+        verify_at(&token, &binding(), 5_000, &signer).expect("valid within clock skew");
         assert!(matches!(
-            verify_at(&token, &binding(), 999, &signer),
+            verify_at(&token, &binding(), 4_999, &signer),
             Err(ContinuationError::NotYetValid)
         ));
         assert!(matches!(
