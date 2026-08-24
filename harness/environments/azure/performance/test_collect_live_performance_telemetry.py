@@ -489,7 +489,7 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         )
 
     @patch("collect_live_performance_telemetry.run_json")
-    def test_repeated_query_deduplicates_dual_table_ingestion(
+    def test_repeated_query_scopes_events_by_request_fingerprint(
         self,
         run_json,
     ) -> None:
@@ -500,22 +500,34 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
             [
                 {
                     "id": "put-1kib-c1",
+                    "warmupIterations": 1,
+                    "repeatability": {"runs": 1},
                     "runs": [
                         {
                             "repeat": 1,
+                            "iterations": 1,
                             "startedAt": "2026-01-01T00:00:00Z",
                             "finishedAt": "2026-01-01T00:01:00Z",
                         }
                     ],
                 }
             ],
+            "run-1",
         )
         command = run_json.call_args.args[0]
         query = command[command.index("--analytics-query") + 1]
+        expected_fingerprint = request_fingerprint(
+            request_id("run-1", "gateway", "put-1kib-c1", 1)
+        )
         self.assertIn(
             "summarize TimeGenerated=min(TimeGenerated) by AppName, Message",
             query,
         )
+        self.assertIn(
+            f"Fingerprint in ('{expected_fingerprint}')",
+            query,
+        )
+        self.assertIn("Scope=TemporalCaseId", query)
         self.assertIn("RowType='fingerprint-operation'", query)
         self.assertIn("RowType='ambient-operation-object-class'", query)
         self.assertIn(
@@ -547,6 +559,7 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
             "workspace",
             "gateway",
             [{"id": "case-a"}, {"id": "case-b"}],
+            "run-1",
         )
         self.assertEqual(
             rows,
@@ -561,6 +574,10 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
                 (("id", "case-a"),),
                 (("id", "case-b"),),
             },
+        )
+        self.assertEqual(
+            {call.args[3] for call in query_repeated_aggregates.call_args_list},
+            {"run-1"},
         )
 
     @patch("collect_live_performance_telemetry.time.sleep")
@@ -580,6 +597,7 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
             "workspace",
             "gateway",
             [{"id": "case-a"}],
+            "run-1",
         )
         self.assertEqual(rows, [{"Scope": "case-a"}])
         sleep.assert_called_once_with(5)

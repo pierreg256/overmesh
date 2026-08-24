@@ -274,6 +274,46 @@ def kusto_case_expression(
     return "case(" + ", ".join([*clauses, "''"]) + ")"
 
 
+def repeated_fingerprint_scopes(
+    run_id: str,
+    gateway_cases: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "key": f"{benchmark_case['id']}::repeat-{run['repeat']}",
+            "case": benchmark_case["id"],
+            "fingerprints": sorted(
+                measured_request_fingerprints_for_run(
+                    run_id,
+                    benchmark_case,
+                    run,
+                )
+            ),
+        }
+        for benchmark_case in gateway_cases
+        for run in benchmark_case.get("runs", [])
+    ]
+
+
+def kusto_fingerprint_case_expression(
+    scopes: list[dict[str, Any]],
+    value_key: str,
+) -> str:
+    clauses = []
+    for scope in scopes:
+        fingerprints = ", ".join(
+            f"'{fingerprint}'" for fingerprint in scope["fingerprints"]
+        )
+        value = str(scope[value_key]).replace("'", "''")
+        clauses.extend(
+            [
+                f"Fingerprint in ({fingerprints})",
+                f"'{value}'",
+            ]
+        )
+    return "case(" + ", ".join([*clauses, "''"]) + ")"
+
+
 def kusto_ingestion_window_expression(
     scopes: list[dict[str, Any]],
 ) -> tuple[str, str, str]:
@@ -306,16 +346,28 @@ def query_repeated_aggregates(
     workspace: str,
     app_names: str | list[str],
     gateway_cases: list[dict[str, Any]],
+    run_id: str,
 ) -> list[dict[str, Any]]:
     scopes = repeated_scopes(gateway_cases)
     if not scopes:
         return []
+    fingerprint_scopes = repeated_fingerprint_scopes(
+        run_id,
+        gateway_cases,
+    )
     escaped_names = ", ".join(
         f"'{name.replace(chr(39), chr(39) * 2)}'"
         for name in comma_separated_values(app_names)
     )
-    run_expression = kusto_case_expression(scopes, "key")
-    case_expression = kusto_case_expression(scopes, "case")
+    run_expression = kusto_fingerprint_case_expression(
+        fingerprint_scopes,
+        "key",
+    )
+    case_expression = kusto_fingerprint_case_expression(
+        fingerprint_scopes,
+        "case",
+    )
+    temporal_case_expression = kusto_case_expression(scopes, "case")
     ingestion_windows, started_at, finished_at = (
         kusto_ingestion_window_expression(scopes)
     )
@@ -331,11 +383,11 @@ let Base = materialize(
   | extend CleanMessage = replace_regex(Message, @'\\x1B\\[[0-?]*[ -/]*[@-~]', '')
   | extend ParsedTime = todatetime(extract(@'^(\\d{{4}}-\\d{{2}}-\\d{{2}}T\\d{{2}}:\\d{{2}}:\\d{{2}}(?:\\.\\d+)?Z)', 1, CleanMessage))
   | extend EventTime = coalesce(ParsedTime, TimeGenerated)
-  | extend RunKey = {run_expression}
-  | extend CaseId = {case_expression}
-  | where isnotempty(RunKey)
   | extend Event = extract(@'event=\"?([^\" ]+)', 1, CleanMessage)
   | extend Fingerprint = extract(@'client_request_fingerprint=\"?([^\" ]+)', 1, CleanMessage)
+  | extend RunKey = {run_expression}
+  | extend CaseId = {case_expression}
+  | extend TemporalCaseId = {temporal_case_expression}
   | extend BackendId = extract(@'backend_id=\"?([^\" ]+)', 1, CleanMessage)
   | extend Operation = extract(@'operation=\"?([^\" ]+)', 1, CleanMessage)
   | extend ObjectClass = extract(@'object_class=\"?([^\" ]+)', 1, CleanMessage)
@@ -352,10 +404,10 @@ let Base = materialize(
 );
 let Scoped = materialize(
   union
-    (Base | project ScopeType='run', Scope=RunKey, Event, Fingerprint, BackendId, Operation, ObjectClass, Status, TransportSuccess, HeaderDurationUs, SignDurationUs, SignSuccess, SignDomain, EntriesReturned, EntriesConsidered, EntriesValidated, ValidationConcurrency),
-    (Base | project ScopeType='case', Scope=CaseId, Event, Fingerprint, BackendId, Operation, ObjectClass, Status, TransportSuccess, HeaderDurationUs, SignDurationUs, SignSuccess, SignDomain, EntriesReturned, EntriesConsidered, EntriesValidated, ValidationConcurrency)
+    (Base | where isnotempty(RunKey) | project ScopeType='run', Scope=RunKey, Event, Fingerprint, BackendId, Operation, ObjectClass, Status, TransportSuccess, HeaderDurationUs, SignDurationUs, SignSuccess, SignDomain, EntriesReturned, EntriesConsidered, EntriesValidated, ValidationConcurrency),
+    (Base | where isnotempty(CaseId) | project ScopeType='case', Scope=CaseId, Event, Fingerprint, BackendId, Operation, ObjectClass, Status, TransportSuccess, HeaderDurationUs, SignDurationUs, SignSuccess, SignDomain, EntriesReturned, EntriesConsidered, EntriesValidated, ValidationConcurrency)
 );
-let Ambient = materialize(Scoped | where Event == 'overmesh_backend_request' and (isempty(Fingerprint) or Fingerprint == 'missing') and Operation == 'validate_control_container' and ObjectClass == 'system_container');
+let Ambient = materialize(Base | where isnotempty(TemporalCaseId) and Event == 'overmesh_backend_request' and (isempty(Fingerprint) or Fingerprint == 'missing') and Operation == 'validate_control_container' and ObjectClass == 'system_container' | project ScopeType='case', Scope=TemporalCaseId, Event, Fingerprint, BackendId, Operation, ObjectClass, Status, TransportSuccess, HeaderDurationUs, SignDurationUs, SignSuccess, SignDomain, EntriesReturned, EntriesConsidered, EntriesValidated, ValidationConcurrency);
 let Backend = materialize(Scoped | where Event == 'overmesh_backend_request' and not((isempty(Fingerprint) or Fingerprint == 'missing') and Operation == 'validate_control_container' and ObjectClass == 'system_container'));
 let Signing = materialize(Scoped | where Event == 'overmesh_manifest_sign');
 let Listing = materialize(Scoped | where Event == 'overmesh_listing_scan');
@@ -407,6 +459,7 @@ def query_repeated_aggregate_batches(
     workspace: str,
     app_names: str | list[str],
     gateway_cases: list[dict[str, Any]],
+    run_id: str,
 ) -> list[dict[str, Any]]:
     if not gateway_cases:
         return []
@@ -418,6 +471,7 @@ def query_repeated_aggregate_batches(
                     workspace,
                     app_names,
                     [benchmark_case],
+                    run_id,
                 )
             except subprocess.CalledProcessError:
                 if attempt == AGGREGATE_QUERY_ATTEMPTS:
@@ -1559,6 +1613,7 @@ def collect_stable_repeated_aggregates(
                 workspace,
                 app_names,
                 gateway_cases,
+                run_id,
             )
         )
         current_vector = aggregate_fingerprint_vector(
