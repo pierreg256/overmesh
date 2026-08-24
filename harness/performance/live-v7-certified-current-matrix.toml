@@ -22,7 +22,7 @@ p50_comparison_statistic = "median-per-run"
 benchmark_host_sku = "Standard_D2as_v5"
 pre_optimization_commit = "5202eccff4b1e277342cf784dde285e891eb865b"
 pre_optimization_project_version = "0.11.0"
-final_commit = "da89d88f0c917f9fc41c04c59a98df14f4e4c76b"
+final_commit = "05cd91116e6c6531dc0b0a7530041e012bafdd7e"
 final_project_version = "0.11.1"
 
 [non_regression]

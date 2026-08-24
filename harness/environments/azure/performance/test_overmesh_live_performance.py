@@ -733,7 +733,7 @@ class PerformanceContractTests(unittest.TestCase):
         )
         self.assertEqual(
             contract.certification.final_commit,
-            "da89d88f0c917f9fc41c04c59a98df14f4e4c76b",
+            "05cd91116e6c6531dc0b0a7530041e012bafdd7e",
         )
 
     def test_v7_container_fixtures_are_isolated_by_runtime_role(self) -> None:
