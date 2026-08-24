@@ -27,7 +27,7 @@ jsonwebtoken = "9.3.1"
 p256 = { version = "0.13.2", features = ["ecdsa", "pem", "pkcs8"] }
 quick-xml = { version = "0.38.4", features = ["serialize"] }
 rand = "0.8.5"
-rand_chacha = "0.3.1"
+rand_chacha = "0.10.0"
 reqwest = { version = "0.12.28", default-features = false, features = ["http2", "json", "rustls-tls", "stream"] }
 rsa = "0.9.9"
 semver = { version = "1.0.27", features = ["serde"] }
