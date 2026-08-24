@@ -88,11 +88,11 @@ manifest_sha256 = "b7269e56115a14c5b20c73f5d15bbbeb99d8bb97aea3406ff09417255eb38
 [[fixture]]
 id = "list-containers-20"
 kind = "containers"
-prefix = "omv5fixture"
+prefix = "omv7fixture"
 naming_scheme = "{container_prefix}-{index:02d}/fixture.bin"
 container_count = 20
 payload_size_bytes = 1
-manifest_sha256 = "790dda770c05badcd64ea6b673d3332e516c821dab51d31ca026c9322cee82a1"
+manifest_sha256 = "6a9ad5949f40cca946e88f075362722d48b4d56416beb6aa12e9d5937dcc03f2"
 
 [[workload]]
 operation = "put_blob"

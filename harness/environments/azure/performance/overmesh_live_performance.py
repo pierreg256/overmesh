@@ -417,6 +417,7 @@ def validate_certified_current_matrix_identity(
     payloads: dict[str, Payload],
     fixtures: dict[str, Fixture],
     cases: list[BenchmarkCase],
+    revision: str,
 ) -> None:
     if {
         payload_id: payload.size_bytes for payload_id, payload in payloads.items()
@@ -485,13 +486,17 @@ def validate_certified_current_matrix_identity(
         ),
         "list-containers-20": (
             "containers",
-            "omv5fixture",
+            "omv7fixture" if revision == V7_REVISION else "omv5fixture",
             "{container_prefix}-{index:02d}/fixture.bin",
             0,
             20,
             0,
             1,
-            "790dda770c05badcd64ea6b673d3332e516c821dab51d31ca026c9322cee82a1",
+            (
+                "6a9ad5949f40cca946e88f075362722d48b4d56416beb6aa12e9d5937dcc03f2"
+                if revision == V7_REVISION
+                else "790dda770c05badcd64ea6b673d3332e516c821dab51d31ca026c9322cee82a1"
+            ),
         ),
     }:
         raise ValueError(
@@ -1555,7 +1560,12 @@ def load_contract(path: Path) -> Contract:
             raise ValueError(
                 "certified-current-matrix does not match the approved matrix"
             )
-        validate_certified_current_matrix_identity(payloads, fixtures, cases)
+        validate_certified_current_matrix_identity(
+            payloads,
+            fixtures,
+            cases,
+            revision,
+        )
         for case in cases:
             if case.operation in LISTING_OPERATIONS:
                 if (
