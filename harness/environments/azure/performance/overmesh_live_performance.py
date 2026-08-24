@@ -1547,17 +1547,21 @@ def load_contract(path: Path) -> Contract:
             "overwrite_blob": 37,
             "delete_blob": 31,
             "get_blob": None,
-            "get_range": 15,
-            "head_blob": 10,
+            "get_range": 13,
+            "head_blob": 8,
             "put_block_sequence": None,
-            "get_block_list": 18,
+            "get_block_list": 14,
         }
         for case in cases:
             if case.operation in LISTING_OPERATIONS:
                 continue
             expected_final = final_budget_by_operation[case.operation]
             if case.operation == "get_blob":
-                expected_final = 18 if case.payload.size_bytes == 16 * 1024 * 1024 else 15
+                expected_final = (
+                    16
+                    if case.payload.size_bytes == 16 * 1024 * 1024
+                    else 13
+                )
             elif case.operation == "put_block_sequence":
                 expected_final = (
                     396
