@@ -916,6 +916,22 @@ concurrency = [1]
             setup_request_id("run", "gateway", "overwrite", 3),
             request_id("run", "gateway", "overwrite", 3),
         )
+        self.assertNotEqual(
+            setup_request_id(
+                "run",
+                "gateway",
+                "fixture",
+                3,
+                repeat_index=0,
+            ),
+            setup_request_id(
+                "run",
+                "gateway",
+                "fixture",
+                3,
+                repeat_index=1,
+            ),
+        )
 
     def test_repeated_requests_have_distinct_ids(self) -> None:
         self.assertNotEqual(

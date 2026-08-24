@@ -2326,56 +2326,100 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                             item.name: item
                             for item in observed_items
                         }
-                        extras = set(observed) - expected_set
-                        if extras:
-                            raise RuntimeError(
-                                f"fixture {fixture.id} target {target} has "
-                                f"unexpected entries: {sorted(extras)[:5]}"
-                            )
-                        missing_names = sorted(expected_set - set(observed))
                         fixture_indexes = {
                             name: index
                             for index, name in enumerate(expected_names)
                         }
-
-                        def create_fixture_blob(name: str) -> None:
-                            container_client.upload_blob(
-                                name,
-                                payload,
-                                overwrite=False,
-                                metadata={
-                                    "overmesh_fixture_sha256": payload_sha256
-                                },
-                                **sdk_request_options(
-                                    setup_request_id(
-                                        run_id,
-                                        target,
-                                        fixture.id,
-                                        fixture_indexes[name],
-                                    )
-                                ),
+                        verified = observed_items
+                        for publication_attempt in range(
+                            FIXTURE_READ_ATTEMPTS
+                        ):
+                            extras = set(observed) - expected_set
+                            if extras:
+                                raise RuntimeError(
+                                    f"fixture {fixture.id} target {target} "
+                                    "has unexpected entries: "
+                                    f"{sorted(extras)[:5]}"
+                                )
+                            missing_names = sorted(
+                                expected_set - set(observed)
                             )
+                            if not missing_names:
+                                if [
+                                    item.name for item in verified
+                                ] != expected_names:
+                                    raise RuntimeError(
+                                        f"fixture {fixture.id} target "
+                                        f"{target} is not ordered by its "
+                                        "manifest"
+                                    )
+                                break
 
-                        with ThreadPoolExecutor(max_workers=16) as executor:
-                            list(executor.map(create_fixture_blob, missing_names))
-                        verified = retry_fixture_read(
-                            lambda: [
-                                item
-                                for page in container_client.list_blobs(
-                                    name_starts_with=target_prefix + "/",
-                                    include=["metadata"],
-                                    results_per_page=FIXTURE_SETUP_PAGE_SIZE,
-                                ).by_page()
-                                for item in page
-                            ],
-                            f"fixture {fixture.id} target {target} verification",
-                            fixture_retryable_errors,
-                            should_retry_fixture_read,
-                        )
-                        if [item.name for item in verified] != expected_names:
+                            def publish_fixture_blob(name: str) -> None:
+                                container_client.upload_blob(
+                                    name,
+                                    payload,
+                                    overwrite=True,
+                                    metadata={
+                                        "overmesh_fixture_sha256": (
+                                            payload_sha256
+                                        )
+                                    },
+                                    **sdk_request_options(
+                                        setup_request_id(
+                                            run_id,
+                                            target,
+                                            fixture.id,
+                                            fixture_indexes[name],
+                                            publication_attempt,
+                                        )
+                                    ),
+                                )
+
+                            with ThreadPoolExecutor(
+                                max_workers=16
+                            ) as executor:
+                                list(
+                                    executor.map(
+                                        publish_fixture_blob,
+                                        missing_names,
+                                    )
+                                )
+                            verified = retry_fixture_read(
+                                lambda: [
+                                    item
+                                    for page in container_client.list_blobs(
+                                        name_starts_with=target_prefix + "/",
+                                        include=["metadata"],
+                                        results_per_page=(
+                                            FIXTURE_SETUP_PAGE_SIZE
+                                        ),
+                                    ).by_page()
+                                    for item in page
+                                ],
+                                (
+                                    f"fixture {fixture.id} target {target} "
+                                    f"publication attempt "
+                                    f"{publication_attempt + 1}"
+                                ),
+                                fixture_retryable_errors,
+                                should_retry_fixture_read,
+                            )
+                            observed = {
+                                item.name: item for item in verified
+                            }
+                        if [
+                            item.name for item in verified
+                        ] != expected_names:
+                            remaining = sorted(
+                                expected_set - set(observed)
+                            )
                             raise RuntimeError(
-                                f"fixture {fixture.id} target {target} names "
-                                "do not match its manifest"
+                                f"fixture {fixture.id} target {target} "
+                                "did not converge after "
+                                f"{FIXTURE_READ_ATTEMPTS} publication "
+                                f"attempts; missing {len(remaining)}: "
+                                f"{remaining[:5]}"
                             )
                         for item in verified:
                             content_hash = (
