@@ -46,6 +46,7 @@ FIXTURE_READ_ATTEMPTS = 8
 FIXTURE_SETUP_PAGE_SIZE = 1_000
 V51_REVISION = "v5.1"
 V6_REVISION = "v6"
+V7_REVISION = "v7"
 CERTIFIED_CURRENT_MATRIX_ROLE_BASELINE = "pre-optimization"
 CERTIFIED_CURRENT_MATRIX_ROLE_FINAL = "final"
 CERTIFIED_CURRENT_MATRIX_HOST_SKU = "Standard_D2as_v5"
@@ -55,6 +56,9 @@ CERTIFIED_CURRENT_MATRIX_BASELINE_COMMIT = (
 CERTIFIED_CURRENT_MATRIX_BASELINE_VERSION = "0.11.0"
 CERTIFIED_CURRENT_MATRIX_FINAL_COMMIT = (
     "123001619e5c75a8ffd241d4b1865b97a6a7cdef"
+)
+CERTIFIED_CURRENT_MATRIX_V7_FINAL_COMMIT = (
+    "da89d88f0c917f9fc41c04c59a98df14f4e4c76b"
 )
 CERTIFIED_CURRENT_MATRIX_FINAL_VERSION = "0.11.1"
 CERTIFIED_CURRENT_MATRIX_WALL_TIME_BUDGET_SECONDS = 7_200
@@ -591,8 +595,12 @@ def load_contract(path: Path) -> Contract:
     if sorted(target_order) != ["direct", "gateway"]:
         raise ValueError("target_order must contain direct and gateway exactly once")
     revision = document.get("contract_revision")
-    if revision is not None and revision not in {V51_REVISION, V6_REVISION}:
-        raise ValueError("contract_revision must be v5.1 or v6 when present")
+    if revision is not None and revision not in {
+        V51_REVISION,
+        V6_REVISION,
+        V7_REVISION,
+    }:
+        raise ValueError("contract_revision must be v5.1, v6, or v7 when present")
     target_order_policy = document.get("target_order_policy", "fixed")
     if target_order_policy not in {"fixed", "counterbalanced"}:
         raise ValueError(
@@ -734,7 +742,7 @@ def load_contract(path: Path) -> Contract:
             raise ValueError(
                 "confirmation_pass is valid only for diagnostic-fast"
             )
-    elif revision == V6_REVISION:
+    elif revision in {V6_REVISION, V7_REVISION}:
         expected_certification_keys = {
             "benchmark_host_sku",
             "pre_optimization_commit",
@@ -744,11 +752,12 @@ def load_contract(path: Path) -> Contract:
         }
         if campaign_purpose != "certified-current-matrix":
             raise ValueError(
-                "contract_revision v6 requires certified-current-matrix purpose"
+                f"contract_revision {revision} requires "
+                "certified-current-matrix purpose"
             )
         if baseline_eligible is not True:
             raise ValueError(
-                "contract_revision v6 must be baseline eligible"
+                f"contract_revision {revision} must be baseline eligible"
             )
         client_wall_time_budget_seconds = require_positive_integer(
             client_wall_time_budget_seconds,
@@ -759,29 +768,36 @@ def load_contract(path: Path) -> Contract:
             != CERTIFIED_CURRENT_MATRIX_WALL_TIME_BUDGET_SECONDS
         ):
             raise ValueError(
-                "contract_revision v6 requires a 7200-second wall-time budget"
+                f"contract_revision {revision} requires a "
+                "7200-second wall-time budget"
             )
         if latency_evidence != "individual-samples":
             raise ValueError(
-                "contract_revision v6 requires individual latency samples"
+                f"contract_revision {revision} requires "
+                "individual latency samples"
             )
         if p50_gate_policy != "stable-only":
             raise ValueError(
-                "contract_revision v6 requires stable-only p50 gating"
+                f"contract_revision {revision} requires stable-only p50 gating"
             )
         if schema_version != 5:
-            raise ValueError("contract_revision v6 requires schema_version 5")
+            raise ValueError(
+                f"contract_revision {revision} requires schema_version 5"
+            )
         if target_order_policy != "counterbalanced":
             raise ValueError(
-                "contract_revision v6 requires counterbalanced target order"
+                f"contract_revision {revision} requires "
+                "counterbalanced target order"
             )
         if p50_comparison_statistic != "median-per-run":
             raise ValueError(
-                "contract_revision v6 requires median-per-run p50 comparison"
+                f"contract_revision {revision} requires "
+                "median-per-run p50 comparison"
             )
         if confirmation_pass is not None or sampling_basis is not None:
             raise ValueError(
-                "contract_revision v6 does not permit diagnostic metadata"
+                f"contract_revision {revision} does not permit "
+                "diagnostic metadata"
             )
         if (
             not isinstance(certification_document, dict)
@@ -792,7 +808,8 @@ def load_contract(path: Path) -> Contract:
             )
         ):
             raise ValueError(
-                "contract_revision v6 requires complete certification metadata"
+                f"contract_revision {revision} requires complete "
+                "certification metadata"
             )
         pre_optimization_commit = certification_document[
             "pre_optimization_commit"
@@ -825,7 +842,12 @@ def load_contract(path: Path) -> Contract:
             != CERTIFIED_CURRENT_MATRIX_BASELINE_COMMIT
             or certification_document["pre_optimization_project_version"]
             != CERTIFIED_CURRENT_MATRIX_BASELINE_VERSION
-            or final_commit != CERTIFIED_CURRENT_MATRIX_FINAL_COMMIT
+            or final_commit
+            != (
+                CERTIFIED_CURRENT_MATRIX_FINAL_COMMIT
+                if revision == V6_REVISION
+                else CERTIFIED_CURRENT_MATRIX_V7_FINAL_COMMIT
+            )
             or certification_document["final_project_version"]
             != CERTIFIED_CURRENT_MATRIX_FINAL_VERSION
         ):
@@ -887,7 +909,7 @@ def load_contract(path: Path) -> Contract:
         if schema_version == 5:
             expected_keys.add(
                 "requests_per_entry_validated"
-                if revision in {V51_REVISION, V6_REVISION}
+                if revision in {V51_REVISION, V6_REVISION, V7_REVISION}
                 else "requests_per_entry_scanned"
             )
         if not isinstance(policy_document, dict) or set(policy_document) != expected_keys:
@@ -908,7 +930,7 @@ def load_contract(path: Path) -> Contract:
             and policy_document[
                 (
                     "requests_per_entry_validated"
-                    if revision in {V51_REVISION, V6_REVISION}
+                    if revision in {V51_REVISION, V6_REVISION, V7_REVISION}
                     else "requests_per_entry_scanned"
                 )
             ]
@@ -924,13 +946,13 @@ def load_contract(path: Path) -> Contract:
             requests_per_entry_scanned=(
                 "blocking"
                 if schema_version == 5
-                and revision not in {V51_REVISION, V6_REVISION}
+                and revision not in {V51_REVISION, V6_REVISION, V7_REVISION}
                 else None
             ),
             requests_per_entry_validated=(
                 "blocking"
                 if schema_version == 5
-                and revision in {V51_REVISION, V6_REVISION}
+                and revision in {V51_REVISION, V6_REVISION, V7_REVISION}
                 else None
             ),
             p50_stability_spread_ratio_threshold=require_ratio(
@@ -1094,7 +1116,7 @@ def load_contract(path: Path) -> Contract:
         baseline_backend_requests_per_operation = None
         if raw_baseline_budget is not None:
             if (
-                revision != V6_REVISION
+                revision not in {V6_REVISION, V7_REVISION}
                 or operation in LISTING_OPERATIONS
                 or not isinstance(backend_requests_per_operation, int)
             ):
@@ -1123,7 +1145,7 @@ def load_contract(path: Path) -> Contract:
         allowed_variable_backend_operations: tuple[str, ...] = ()
         if raw_variable_operations is not None:
             if (
-                revision not in {V51_REVISION, V6_REVISION}
+                revision not in {V51_REVISION, V6_REVISION, V7_REVISION}
                 or operation in LISTING_OPERATIONS
                 or not isinstance(backend_requests_per_operation, int)
             ):
@@ -1175,7 +1197,7 @@ def load_contract(path: Path) -> Contract:
         case_id_suffix = workload.get("case_id_suffix")
         if case_id_suffix is not None:
             if (
-                revision != V6_REVISION
+                revision not in {V6_REVISION, V7_REVISION}
                 or operation not in LISTING_OPERATIONS
                 or not isinstance(case_id_suffix, str)
                 or not case_id_suffix
@@ -1225,7 +1247,7 @@ def load_contract(path: Path) -> Contract:
             )
         per_entry_key = (
             "requests_per_entry_validated"
-            if revision in {V51_REVISION, V6_REVISION}
+            if revision in {V51_REVISION, V6_REVISION, V7_REVISION}
             else "requests_per_entry_scanned"
         )
         expected_per_entry = workload.get(per_entry_key)
@@ -1280,12 +1302,20 @@ def load_contract(path: Path) -> Contract:
                     block_size_bytes=block_size_bytes,
                     expected_requests_per_entry_scanned=(
                         expected_per_entry
-                        if revision not in {V51_REVISION, V6_REVISION}
+                        if revision not in {
+                            V51_REVISION,
+                            V6_REVISION,
+                            V7_REVISION,
+                        }
                         else None
                     ),
                     expected_requests_per_entry_validated=(
                         expected_per_entry
-                        if revision in {V51_REVISION, V6_REVISION}
+                        if revision in {
+                            V51_REVISION,
+                            V6_REVISION,
+                            V7_REVISION,
+                        }
                         else None
                     ),
                 )
@@ -1355,7 +1385,7 @@ def load_contract(path: Path) -> Contract:
                             and fixture.blob_count == 5_000
                             else None
                         )
-                    elif revision == V6_REVISION:
+                    elif revision in {V6_REVISION, V7_REVISION}:
                         if operation in READ_OPERATIONS:
                             expected_iterations = 20
                         elif operation in {
@@ -1519,7 +1549,7 @@ def load_contract(path: Path) -> Contract:
             raise ValueError(
                 "diagnostic-fast must contain the approved 38-case matrix"
             )
-    elif revision == V6_REVISION:
+    elif revision in {V6_REVISION, V7_REVISION}:
         by_id = {case.id: case for case in cases}
         if set(by_id) != certified_current_matrix_case_ids():
             raise ValueError(
@@ -1833,7 +1863,8 @@ def plan(contract: Contract) -> dict[str, Any]:
                     {"listingRequestBudget": "establish"}
                     if (
                         benchmark_case.expected_requests_per_entry_validated
-                        if contract.revision in {V51_REVISION, V6_REVISION}
+                        if contract.revision
+                        in {V51_REVISION, V6_REVISION, V7_REVISION}
                         else benchmark_case.expected_requests_per_entry_scanned
                     )
                     == "establish"
@@ -2038,7 +2069,7 @@ def read_path_pool_index(
         raise ValueError("read path pool is unavailable")
     repeat_offset = (
         repeat_index * benchmark_case.measured_iterations
-        if contract.revision in {V51_REVISION, V6_REVISION}
+        if contract.revision in {V51_REVISION, V6_REVISION, V7_REVISION}
         else 0
     )
     return (
@@ -3194,7 +3225,11 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                     bytes_per_operation,
                 ),
             }
-            if contract.revision in {V51_REVISION, V6_REVISION}:
+            if contract.revision in {
+                V51_REVISION,
+                V6_REVISION,
+                V7_REVISION,
+            }:
                 result["validity"] = {
                     "status": "valid",
                     "mandatory": True,
@@ -3221,7 +3256,11 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                 and contract.read_path_pool_size is not None
             ):
                 result["pathPoolSize"] = contract.read_path_pool_size
-                if contract.revision in {V51_REVISION, V6_REVISION}:
+                if contract.revision in {
+                    V51_REVISION,
+                    V6_REVISION,
+                    V7_REVISION,
+                }:
                     result["readPathPoolPolicy"] = "repeat-strided"
             expected_backend_request_budget = (
                 benchmark_case.backend_request_budget_for(runtime_role)

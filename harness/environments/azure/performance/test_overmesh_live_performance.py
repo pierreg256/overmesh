@@ -715,6 +715,26 @@ class PerformanceContractTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     load_contract(path)
 
+    def test_v7_certifies_the_corrected_final_runtime(self) -> None:
+        contract = load_contract(
+            Path(
+                "harness/performance/"
+                "live-v7-certified-current-matrix.toml"
+            )
+        )
+
+        self.assertEqual(contract.revision, "v7")
+        self.assertEqual(len(contract.cases), 43)
+        self.assertIsNotNone(contract.certification)
+        self.assertEqual(
+            contract.certification.pre_optimization_commit,
+            "5202eccff4b1e277342cf784dde285e891eb865b",
+        )
+        self.assertEqual(
+            contract.certification.final_commit,
+            "da89d88f0c917f9fc41c04c59a98df14f4e4c76b",
+        )
+
     def test_v51_rejects_weakened_diagnostic_safeguards(self) -> None:
         source = Path("harness/performance/live-v5.1.toml").read_text(
             encoding="utf-8"

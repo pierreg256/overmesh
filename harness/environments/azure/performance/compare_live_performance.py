@@ -113,7 +113,7 @@ def certified_current_matrix_contract(
     contract = document.get("contract", {})
     revision = contract.get("revision")
     certification = contract.get("certification")
-    if revision == "v6":
+    if revision in {"v6", "v7"}:
         if not isinstance(certification, dict):
             raise ValueError(
                 f"{label} is missing certified current matrix metadata"
@@ -121,7 +121,7 @@ def certified_current_matrix_contract(
         return certification
     if certification is not None:
         raise ValueError(
-            f"{label} has certification metadata without the v6 revision"
+            f"{label} has certification metadata without a certified revision"
         )
     return None
 

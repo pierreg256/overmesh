@@ -426,7 +426,7 @@ def validate_document(
     if len(cases) != len(expected_keys) or indexed.keys() != expected_keys:
         raise ValueError("performance evidence case set does not match contract")
 
-    if contract.revision in {"v5.1", "v6"}:
+    if contract.revision in {"v5.1", "v6", "v7"}:
         invalid_cases = []
         for key, case in indexed.items():
             validity = case.get("validity")
@@ -480,7 +480,7 @@ def validate_document(
         is_listing_case = benchmark_case.operation in LISTING_OPERATIONS
         if case.get("iterations") != expected_iterations:
             raise ValueError(f"case {key} has an unexpected iteration count")
-        if contract.revision == "v6" and not is_listing_case:
+        if contract.revision in {"v6", "v7"} and not is_listing_case:
             if (
                 case.get("expectedBackendRequestsPerOperation")
                 != expected_backend_request_budget
@@ -671,7 +671,7 @@ def validate_document(
             if is_listing:
                 expected_listing_budget = (
                     benchmark_case.expected_requests_per_entry_validated
-                    if contract.revision in {"v5.1", "v6"}
+                    if contract.revision in {"v5.1", "v6", "v7"}
                     else benchmark_case.expected_requests_per_entry_scanned
                 )
                 if (
@@ -723,7 +723,11 @@ def validate_document(
             )
         if contract.schema_version in {4, 5}:
             if contract.schema_version == 5 and is_listing:
-                uses_validated_metric = contract.revision in {"v5.1", "v6"}
+                uses_validated_metric = contract.revision in {
+                    "v5.1",
+                    "v6",
+                    "v7",
+                }
                 per_run = []
                 for run in case["runs"]:
                     validate_classified_backend_telemetry(
@@ -913,7 +917,7 @@ def validate_document(
                 "head_blob",
             }:
                 if (
-                    contract.revision in {"v5.1", "v6"}
+                    contract.revision in {"v5.1", "v6", "v7"}
                     and case.get("readPathPoolPolicy") != "repeat-strided"
                 ):
                     raise ValueError(
@@ -1190,7 +1194,7 @@ def validate_document(
                     (
                         (
                             "requestsPerEntryValidated"
-                            if contract.revision in {"v5.1", "v6"}
+                            if contract.revision in {"v5.1", "v6", "v7"}
                             else "requestsPerEntryScanned"
                         )
                         if benchmark_case.operation
