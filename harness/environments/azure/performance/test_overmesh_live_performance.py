@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from overmesh_live_performance import (
+    fixture_error_is_retryable,
     fixture_hash_matches,
     fixture_blob_names,
     fixture_container_names,
@@ -82,6 +83,33 @@ class PerformanceContractTests(unittest.TestCase):
                 delays.append,
             )
         self.assertEqual(delays, [2, 4])
+
+    def test_fixture_retry_accepts_only_transient_leases(self) -> None:
+        class FixtureError(Exception):
+            def __init__(
+                self,
+                status_code: int,
+                error_code: str,
+            ) -> None:
+                super().__init__(error_code)
+                self.status_code = status_code
+                self.error_code = error_code
+
+        self.assertTrue(
+            fixture_error_is_retryable(
+                FixtureError(409, "LeaseAlreadyPresent")
+            )
+        )
+        self.assertFalse(
+            fixture_error_is_retryable(
+                FixtureError(409, "BlobAlreadyExists")
+            )
+        )
+        self.assertFalse(
+            fixture_error_is_retryable(
+                FixtureError(400, "InvalidMarker")
+            )
+        )
 
     def test_fixture_hash_accepts_gateway_sha256_prefix(self) -> None:
         digest = "a" * 64

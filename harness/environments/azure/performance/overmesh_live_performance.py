@@ -91,6 +91,26 @@ def retry_fixture_read(
     raise AssertionError("fixture read retry loop exhausted unexpectedly")
 
 
+def fixture_error_is_retryable(
+    error: Exception,
+    transport_error_types: tuple[type[Exception], ...] = (),
+) -> bool:
+    if isinstance(error, transport_error_types):
+        return True
+    status_code = getattr(error, "status_code", None)
+    if status_code is None:
+        status_code = getattr(
+            getattr(error, "response", None),
+            "status_code",
+            None,
+        )
+    error_code = getattr(error, "error_code", None)
+    error_code = getattr(error_code, "value", error_code)
+    return status_code in TRANSIENT_FIXTURE_HTTP_STATUSES or (
+        status_code == 409 and error_code == "LeaseAlreadyPresent"
+    )
+
+
 @dataclass(frozen=True)
 class Payload:
     id: str
@@ -2225,16 +2245,10 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
     )
 
     def should_retry_fixture_read(error: Exception) -> bool:
-        if isinstance(error, (ServiceRequestError, ServiceResponseError)):
-            return True
-        status_code = getattr(error, "status_code", None)
-        if status_code is None:
-            status_code = getattr(
-                getattr(error, "response", None),
-                "status_code",
-                None,
-            )
-        return status_code in TRANSIENT_FIXTURE_HTTP_STATUSES
+        return fixture_error_is_retryable(
+            error,
+            (ServiceRequestError, ServiceResponseError),
+        )
 
     listing_services = {
         (
@@ -2649,18 +2663,26 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                             benchmark_case.id,
                             pool_index,
                         )
-                        container_client.upload_blob(
-                            blob_name,
-                            payload,
-                            overwrite=True,
-                            **sdk_request_options(
-                                setup_request_id(
-                                    run_id,
-                                    target,
-                                    benchmark_case.id,
-                                    pool_index,
-                                )
+                        retry_fixture_read(
+                            lambda: container_client.upload_blob(
+                                blob_name,
+                                payload,
+                                overwrite=True,
+                                **sdk_request_options(
+                                    setup_request_id(
+                                        run_id,
+                                        target,
+                                        benchmark_case.id,
+                                        pool_index,
+                                    )
+                                ),
                             ),
+                            (
+                                f"read-path fixture {benchmark_case.id} "
+                                f"target {target} index {pool_index}"
+                            ),
+                            fixture_retryable_errors,
+                            should_retry_fixture_read,
                         )
                         read_cleanup.append(
                             (
