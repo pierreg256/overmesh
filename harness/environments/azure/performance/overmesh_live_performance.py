@@ -2250,6 +2250,17 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
             (ServiceRequestError, ServiceResponseError),
         )
 
+    def retry_fixture_operation(
+        operation: Callable[[], Any],
+        description: str,
+    ) -> Any:
+        return retry_fixture_read(
+            operation,
+            description,
+            fixture_retryable_errors,
+            should_retry_fixture_read,
+        )
+
     listing_services = {
         (
             target,
@@ -2370,23 +2381,29 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                 break
 
                             def publish_fixture_blob(name: str) -> None:
-                                container_client.upload_blob(
-                                    name,
-                                    payload,
-                                    overwrite=True,
-                                    metadata={
-                                        "overmesh_fixture_sha256": (
-                                            payload_sha256
-                                        )
-                                    },
-                                    **sdk_request_options(
-                                        setup_request_id(
-                                            run_id,
-                                            target,
-                                            fixture.id,
-                                            fixture_indexes[name],
-                                            publication_attempt,
-                                        )
+                                retry_fixture_operation(
+                                    lambda: container_client.upload_blob(
+                                        name,
+                                        payload,
+                                        overwrite=True,
+                                        metadata={
+                                            "overmesh_fixture_sha256": (
+                                                payload_sha256
+                                            )
+                                        },
+                                        **sdk_request_options(
+                                            setup_request_id(
+                                                run_id,
+                                                target,
+                                                fixture.id,
+                                                fixture_indexes[name],
+                                                publication_attempt,
+                                            )
+                                        ),
+                                    ),
+                                    (
+                                        f"fixture {fixture.id} target "
+                                        f"{target} blob {name}"
                                     ),
                                 )
 
@@ -2520,21 +2537,28 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                     should_retry_fixture_read,
                                 )
                             except ResourceNotFoundError:
-                                blob_client.upload_blob(
-                                    payload,
-                                    overwrite=False,
-                                    metadata={
-                                        "overmesh_fixture_sha256": (
-                                            payload_sha256
-                                        )
-                                    },
-                                    **sdk_request_options(
-                                        setup_request_id(
-                                            run_id,
-                                            target,
-                                            fixture.id,
-                                            index,
-                                        )
+                                retry_fixture_operation(
+                                    lambda: blob_client.upload_blob(
+                                        payload,
+                                        overwrite=True,
+                                        metadata={
+                                            "overmesh_fixture_sha256": (
+                                                payload_sha256
+                                            )
+                                        },
+                                        **sdk_request_options(
+                                            setup_request_id(
+                                                run_id,
+                                                target,
+                                                fixture.id,
+                                                index,
+                                            )
+                                        ),
+                                    ),
+                                    (
+                                        f"fixture {fixture.id} target "
+                                        f"{target} container "
+                                        f"{fixture_container}"
                                     ),
                                 )
                                 properties = retry_fixture_read(
@@ -2663,7 +2687,7 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                             benchmark_case.id,
                             pool_index,
                         )
-                        retry_fixture_read(
+                        retry_fixture_operation(
                             lambda: container_client.upload_blob(
                                 blob_name,
                                 payload,
@@ -2681,8 +2705,6 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                 f"read-path fixture {benchmark_case.id} "
                                 f"target {target} index {pool_index}"
                             ),
-                            fixture_retryable_errors,
-                            should_retry_fixture_read,
                         )
                         read_cleanup.append(
                             (
@@ -2784,30 +2806,50 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                     seed_block_ids
                                 ):
                                     offset = block_index * seed_block_size
-                                    seed_client.stage_block(
-                                        block_id,
-                                        payload[
-                                            offset : offset + seed_block_size
-                                        ],
-                                        **sdk_request_options(seed_request),
+                                    retry_fixture_operation(
+                                        lambda: seed_client.stage_block(
+                                            block_id,
+                                            payload[
+                                                offset : offset
+                                                + seed_block_size
+                                            ],
+                                            **sdk_request_options(seed_request),
+                                        ),
+                                        (
+                                            f"case {benchmark_case.id} "
+                                            f"target {target} seed block "
+                                            f"{block_index}"
+                                        ),
                                     )
-                                seed_client.commit_block_list(
-                                    seed_block_ids,
-                                    **sdk_request_options(seed_request),
+                                retry_fixture_operation(
+                                    lambda: seed_client.commit_block_list(
+                                        seed_block_ids,
+                                        **sdk_request_options(seed_request),
+                                    ),
+                                    (
+                                        f"case {benchmark_case.id} target "
+                                        f"{target} seed block commit"
+                                    ),
                                 )
                             else:
-                                container_client.upload_blob(
-                                    seed_blob,
-                                    payload,
-                                    overwrite=False,
-                                    **sdk_request_options(
-                                        setup_request_id(
-                                            run_id,
-                                            target,
-                                            benchmark_case.id,
-                                            0,
-                                            repeat_index,
-                                        )
+                                retry_fixture_operation(
+                                    lambda: container_client.upload_blob(
+                                        seed_blob,
+                                        payload,
+                                        overwrite=True,
+                                        **sdk_request_options(
+                                            setup_request_id(
+                                                run_id,
+                                                target,
+                                                benchmark_case.id,
+                                                0,
+                                                repeat_index,
+                                            )
+                                        ),
+                                    ),
+                                    (
+                                        f"case {benchmark_case.id} target "
+                                        f"{target} seed blob"
                                     ),
                                 )
                             write_cleanup.add(seed_blob)
@@ -3069,18 +3111,24 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                                 + benchmark_case.measured_iterations
                             ):
                                 blob_name = f"{prefix}/item-{index:05}.bin"
-                                container_client.upload_blob(
-                                    blob_name,
-                                    initial_payload,
-                                    overwrite=False,
-                                    **sdk_request_options(
-                                        setup_request_id(
-                                            run_id,
-                                            target,
-                                            benchmark_case.id,
-                                            index,
-                                            repeat_index,
-                                        )
+                                retry_fixture_operation(
+                                    lambda: container_client.upload_blob(
+                                        blob_name,
+                                        initial_payload,
+                                        overwrite=True,
+                                        **sdk_request_options(
+                                            setup_request_id(
+                                                run_id,
+                                                target,
+                                                benchmark_case.id,
+                                                index,
+                                                repeat_index,
+                                            )
+                                        ),
+                                    ),
+                                    (
+                                        f"case {benchmark_case.id} target "
+                                        f"{target} initial blob {index}"
                                     ),
                                 )
                         failure_phase = "warmup"
