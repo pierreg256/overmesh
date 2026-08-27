@@ -489,6 +489,30 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         )
 
     @patch("collect_live_performance_telemetry.run_json")
+    def test_log_query_unions_multiple_workspaces(self, run_json) -> None:
+        run_json.return_value = []
+        query_logs(
+            "workspace-frc,workspace-swe",
+            "gateway-frc,gateway-swe",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:01:00Z",
+        )
+        command = run_json.call_args.args[0]
+        query = command[command.index("--analytics-query") + 1]
+        self.assertIn(
+            'workspace("workspace-frc").ContainerAppConsoleLogs',
+            query,
+        )
+        self.assertIn(
+            'workspace("workspace-swe").ContainerAppConsoleLogs',
+            query,
+        )
+        self.assertEqual(
+            command[command.index("--workspace") + 1],
+            "workspace-frc",
+        )
+
+    @patch("collect_live_performance_telemetry.run_json")
     def test_repeated_query_scopes_events_by_request_fingerprint(
         self,
         run_json,

@@ -72,6 +72,21 @@ def comma_separated_values(value: str | list[str]) -> list[str]:
     return normalized
 
 
+def kusto_log_union(workspaces: str | list[str]) -> tuple[str, str]:
+    workspace_ids = comma_separated_values(workspaces)
+    if len(workspace_ids) == 1:
+        return (
+            "union isfuzzy=true "
+            "ContainerAppConsoleLogs, ContainerAppConsoleLogs_CL",
+            workspace_ids[0],
+        )
+    sources = ", ".join(
+        f"workspace({json.dumps(workspace)}).ContainerAppConsoleLogs"
+        for workspace in workspace_ids
+    )
+    return f"union {sources}", workspace_ids[0]
+
+
 def request_id(
     run_id: str,
     target: str,
@@ -160,12 +175,13 @@ def query_logs(
     started_at: str,
     finished_at: str,
 ) -> list[tuple[datetime, str]]:
+    log_union, query_workspace = kusto_log_union(workspace)
     escaped_names = ", ".join(
         f"'{name.replace(chr(39), chr(39) * 2)}'"
         for name in comma_separated_values(app_names)
     )
     query = f"""
-union isfuzzy=true ContainerAppConsoleLogs, ContainerAppConsoleLogs_CL
+{log_union}
 | extend AppName = tostring(column_ifexists("ContainerAppName", column_ifexists("ContainerAppName_s", "")))
 | extend Message = tostring(column_ifexists("Log", column_ifexists("Log_s", "")))
 | where AppName in ({escaped_names})
@@ -181,7 +197,7 @@ union isfuzzy=true ContainerAppConsoleLogs, ContainerAppConsoleLogs_CL
             "log-analytics",
             "query",
             "--workspace",
-            workspace,
+            query_workspace,
             "--analytics-query",
             query,
             "--timespan",
@@ -199,12 +215,13 @@ def query_backend_request_count(
     started_at: str,
     finished_at: str,
 ) -> int:
+    log_union, query_workspace = kusto_log_union(workspace)
     escaped_names = ", ".join(
         f"'{name.replace(chr(39), chr(39) * 2)}'"
         for name in comma_separated_values(app_names)
     )
     query = f"""
-union isfuzzy=true ContainerAppConsoleLogs, ContainerAppConsoleLogs_CL
+{log_union}
 | extend AppName = tostring(column_ifexists("ContainerAppName", column_ifexists("ContainerAppName_s", "")))
 | extend Message = tostring(column_ifexists("Log", column_ifexists("Log_s", "")))
 | where AppName in ({escaped_names})
@@ -219,7 +236,7 @@ union isfuzzy=true ContainerAppConsoleLogs, ContainerAppConsoleLogs_CL
             "log-analytics",
             "query",
             "--workspace",
-            workspace,
+            query_workspace,
             "--analytics-query",
             query,
             "--timespan",
@@ -371,9 +388,10 @@ def query_repeated_aggregates(
     ingestion_windows, started_at, finished_at = (
         kusto_ingestion_window_expression(scopes)
     )
+    log_union, query_workspace = kusto_log_union(workspace)
     query = f"""
 let Base = materialize(
-  union isfuzzy=true ContainerAppConsoleLogs, ContainerAppConsoleLogs_CL
+  {log_union}
   | extend AppName = tostring(column_ifexists("ContainerAppName", column_ifexists("ContainerAppName_s", "")))
   | extend Message = tostring(column_ifexists("Log", column_ifexists("Log_s", "")))
   | where AppName in ({escaped_names})
@@ -434,7 +452,7 @@ union
             "log-analytics",
             "query",
             "--workspace",
-            workspace,
+            query_workspace,
             "--analytics-query",
             query,
             "--timespan",
