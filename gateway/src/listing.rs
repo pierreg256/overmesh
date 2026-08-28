@@ -739,34 +739,26 @@ impl ListingService {
             Ok(value) => value,
             Err(_) => return Ok(None),
         };
-        // Currency is only meaningful against documents Overmesh signed, so each
-        // replica's document is verified independently: canonical encoding, the
-        // BlobCommitState signature, structural validity, and the binding to
-        // this object key.
-        //
-        // ADR-0012 makes the prepared manifest a state of that document, so the
-        // two replicas can hold different bytes while publishing the same
-        // generation. Byte inequality alone would hide a committed blob for the
-        // whole window of an interrupted preparation, which is a liveness
-        // failure rather than a safety one. What listing requires is that both
-        // replicas agree on the *published generation*.
-        let (Ok(primary_published), Ok(secondary_published)) = (
-            verify_state_bytes(&primary_state.bytes, &state_key, self.signer.as_ref()),
-            verify_state_bytes(&secondary_state.bytes, &state_key, self.signer.as_ref()),
-        ) else {
-            return Ok(None);
+        // Verify each distinct signed document once. In the steady state the
+        // catalogue and both commit-state objects contain identical bytes, so
+        // the catalogue validation above already proves all three copies. An
+        // interrupted preparation produces a distinct state document, which is
+        // still verified before its published generation is trusted.
+        let state_publishes_catalog = |bytes: &[u8]| {
+            if bytes == primary_catalog.bytes {
+                return true;
+            }
+            verify_state_bytes(bytes, &state_key, self.signer.as_ref()).is_ok_and(|published| {
+                published.payload.blob == logical_blob.canonical()
+                    && published.payload.current() == entry.head()
+            })
         };
-        if primary_published.payload.blob != logical_blob.canonical()
-            || secondary_published.payload.blob != logical_blob.canonical()
+        if !state_publishes_catalog(&primary_state.bytes) {
+            return Ok(None);
+        }
+        if secondary_state.bytes != primary_state.bytes
+            && !state_publishes_catalog(&secondary_state.bytes)
         {
-            return Ok(None);
-        }
-        let published_current = primary_published.payload.current();
-        if published_current != secondary_published.payload.current() {
-            return Ok(None);
-        }
-        // The agreed generation must be the one the catalogue entry publishes.
-        if published_current != entry.head() {
             return Ok(None);
         }
         let path_hash = entry.logical_blob.path_hash();

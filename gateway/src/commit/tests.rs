@@ -5029,6 +5029,65 @@ async fn listing_hides_a_blob_whose_replicas_publish_different_generations() {
 }
 
 #[tokio::test]
+async fn listing_hides_a_blob_when_the_primary_publishes_a_stale_generation() {
+    use crate::listing::{BlobListEntry, ListRequest};
+
+    let (service, primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/listing-stale-primary-generation");
+    let first = spool_body(Body::from("first"), 4).await.expect("first");
+    service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "listing-stale-primary-1",
+            &first,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("first commit");
+    let state_key = format!("heads/{}.json", logical_blob.path_hash());
+    let stale = primary.object(&state_key).expect("first state").bytes;
+    let second = spool_body(Body::from("second"), 4).await.expect("second");
+    service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "listing-stale-primary-2",
+            &second,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("second commit");
+
+    let coordinator = service.coordinator(&logical_blob).expect("coordinator");
+    let listing_primary = if primary.id() == coordinator.primary.id() {
+        &primary
+    } else {
+        &secondary
+    };
+    listing_primary
+        .put(&state_key, stale, PutCondition::None)
+        .expect("stale primary generation");
+    let page = service
+        .listing_service("test-account")
+        .list_blobs(
+            "container",
+            &ListRequest::new(String::new(), String::new(), None, Some(10), Vec::new())
+                .expect("request"),
+            &principal(),
+        )
+        .await
+        .expect("listing");
+    assert!(
+        !page.entries.iter().any(|entry| matches!(
+            entry,
+            BlobListEntry::Blob(entry) if entry.name == "listing-stale-primary-generation"
+        )),
+        "listing exposed a blob whose primary publishes a stale generation"
+    );
+}
+
+#[tokio::test]
 async fn listing_hides_a_commit_state_document_that_is_not_signed_overmesh_state() {
     use crate::listing::{BlobListEntry, ListRequest};
 
