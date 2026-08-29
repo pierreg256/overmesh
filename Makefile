@@ -86,6 +86,9 @@ performance-contract-check:
 	python3 harness/environments/azure/performance/overmesh_live_performance.py \
 		--contract harness/performance/live-v6-certified-current-matrix.toml \
 		--plan >/dev/null
+	python3 harness/environments/azure/performance/overmesh_live_performance.py \
+		--contract harness/performance/live-v7-certified-current-matrix.toml \
+		--plan >/dev/null
 	python3 harness/environments/azure/performance/client_observed_campaign.py \
 		--contract harness/performance/client-observed-v1.toml \
 		--check-publication \

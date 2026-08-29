@@ -38,6 +38,11 @@ CERTIFIED_PAIRING_IDENTITY_KEYS = {
     "runId",
     "environment",
 }
+CERTIFIED_PAIRING_TELEMETRY_KEYS = {
+    "runtimeBaseCommit",
+    "backendTelemetryFormat",
+    "telemetryProtocolSha256",
+}
 
 
 def validate_v2_request_coverage(
@@ -170,6 +175,25 @@ def validate_certified_current_matrix_campaign(
         )
     except ValueError as error:
         raise ValueError(str(error)) from error
+    if contract.certification.backend_telemetry_format is not None:
+        runtime_base_commit = campaign.get("runtimeBaseCommit")
+        expected_base_commit = (
+            contract.certification.pre_optimization_base_commit
+            if runtime_role == "pre-optimization"
+            else contract.certification.final_base_commit
+        )
+        if runtime_base_commit != expected_base_commit:
+            raise ValueError(
+                "certified current matrix runtime base commit does not "
+                "match the contract"
+            )
+        try:
+            contract.certification.validate_telemetry(
+                campaign.get("backendTelemetryFormat", ""),
+                campaign.get("telemetryProtocolSha256", ""),
+            )
+        except ValueError as error:
+            raise ValueError(str(error)) from error
     return runtime_role
 
 
@@ -177,15 +201,16 @@ def certified_pairing_identity(
     identity: object,
     label: str,
     allow_evidence_sha256: bool = False,
+    telemetry_required: bool = False,
 ) -> dict[str, Any]:
     if not isinstance(identity, dict):
         raise ValueError(f"{label} pairing identity is missing")
-    allowed_keys = set(CERTIFIED_PAIRING_IDENTITY_KEYS)
-    if allow_evidence_sha256:
-        allowed_keys.add("evidenceSha256")
-    if set(identity) != CERTIFIED_PAIRING_IDENTITY_KEYS and not (
+    identity_keys = set(CERTIFIED_PAIRING_IDENTITY_KEYS)
+    if telemetry_required:
+        identity_keys.update(CERTIFIED_PAIRING_TELEMETRY_KEYS)
+    if set(identity) != identity_keys and not (
         allow_evidence_sha256
-        and set(identity) == allowed_keys
+        and set(identity) == identity_keys | {"evidenceSha256"}
     ):
         raise ValueError(f"{label} pairing identity has unexpected fields")
     benchmark_host = identity.get("benchmarkHost")
@@ -199,7 +224,14 @@ def certified_pairing_identity(
         )
         or any(
             not isinstance(identity.get(field), str) or not identity[field]
-            for field in CERTIFIED_PAIRING_IDENTITY_KEYS
+            for field in (
+                CERTIFIED_PAIRING_IDENTITY_KEYS
+                | (
+                    CERTIFIED_PAIRING_TELEMETRY_KEYS
+                    if telemetry_required
+                    else set()
+                )
+            )
             - {"benchmarkHost"}
         )
         or (
@@ -213,7 +245,7 @@ def certified_pairing_identity(
     ):
         raise ValueError(f"{label} pairing identity is invalid")
     return {
-        key: identity[key] for key in CERTIFIED_PAIRING_IDENTITY_KEYS
+        key: identity[key] for key in identity_keys
     }
 
 
@@ -225,6 +257,9 @@ def validate_certified_pairing_proof(
 ) -> None:
     if contract.certification is None:
         return
+    telemetry_required = (
+        contract.certification.backend_telemetry_format is not None
+    )
     current_identity = certified_pairing_identity(
         {
             "runtimeRole": campaign.get("runtimeRole"),
@@ -234,17 +269,33 @@ def validate_certified_pairing_proof(
             "commit": campaign.get("commit"),
             "runId": campaign.get("runId"),
             "environment": campaign.get("environment"),
+            **(
+                {
+                    "runtimeBaseCommit": campaign.get("runtimeBaseCommit"),
+                    "backendTelemetryFormat": campaign.get(
+                        "backendTelemetryFormat"
+                    ),
+                    "telemetryProtocolSha256": campaign.get(
+                        "telemetryProtocolSha256"
+                    ),
+                }
+                if telemetry_required
+                else {}
+            ),
         },
         "current campaign",
+        telemetry_required=telemetry_required,
     )
     current_proof = certified_pairing_identity(
         historical.get("current"),
         "current",
+        telemetry_required=telemetry_required,
     )
     baseline_proof = certified_pairing_identity(
         historical.get("baseline"),
         "baseline",
         allow_evidence_sha256=True,
+        telemetry_required=telemetry_required,
     )
     status = historical.get("status")
     if status == "baseline-established":
@@ -274,6 +325,32 @@ def validate_certified_pairing_proof(
         )
     except ValueError as error:
         raise ValueError("certified baseline pairing provenance is invalid") from error
+    if telemetry_required:
+        if (
+            baseline_proof["runtimeBaseCommit"]
+            != contract.certification.pre_optimization_base_commit
+        ):
+            raise ValueError(
+                "certified baseline pairing base commit is invalid"
+            )
+        try:
+            contract.certification.validate_telemetry(
+                baseline_proof["backendTelemetryFormat"],
+                baseline_proof["telemetryProtocolSha256"],
+            )
+        except ValueError as error:
+            raise ValueError(
+                "certified baseline pairing telemetry provenance is invalid"
+            ) from error
+        if (
+            baseline_proof["backendTelemetryFormat"]
+            != current_proof["backendTelemetryFormat"]
+            or baseline_proof["telemetryProtocolSha256"]
+            != current_proof["telemetryProtocolSha256"]
+        ):
+            raise ValueError(
+                "certified current matrix pairing telemetry does not match"
+            )
     if (
         baseline_proof["runtimeRole"] != "pre-optimization"
         or baseline_proof["benchmarkHost"]

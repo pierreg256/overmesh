@@ -248,14 +248,24 @@ and concurrency.
 
 ### Certified 0.11.1 current matrix
 
-`harness/performance/live-v6-certified-current-matrix.toml` is the
+`harness/performance/live-v7-certified-current-matrix.toml` is the
 baseline-eligible, 43-case contract for the 0.11.1 closure. It runs twice from
 the same dedicated `Standard_D2as_v5` validation host: first against the
-pre-optimization `v0.11.0` runtime at
-`5202eccff4b1e277342cf784dde285e891eb865b`, then against the final `0.11.1`
-runtime. Keep the harness tooling and contract at the closure checkout for
-both runs; only the deployed Gateway runtime changes. Checking out the old
-runtime would change the contract bytes and make the evidence incomparable.
+pre-optimization `v0.11.0` base at
+`5202eccff4b1e277342cf784dde285e891eb865b`, instrumented by
+`9aa9fff33c1a7d75406d6570445da503c2c3cdad`, then against the final `0.11.1`
+base at `5596a1701bec0c0132a715b28c92013c4550d150`, instrumented by
+`1cce8e6d3120370cec773e19d33c61ddb047a5dd`. Keep the harness tooling and
+contract at the closure checkout for both runs; only the deployed Gateway
+runtime changes. Checking out the old runtime would change the contract bytes
+and make the evidence incomparable.
+
+Both derived runtimes add only the request-batched evidence transport. The
+contract pins the byte-identical protocol source SHA-256
+`cfcc9bdca85ab9a0b68709c1c3cbacf65e1a23dd5a594fb707fdc2b91e9f67ff`.
+Canonical validation rejects a derived commit whose declared base differs,
+a different telemetry format or protocol hash, an incomplete batch, or a
+comparison between different protocols.
 
 The contract freezes the retained `5202ecc` baseline and the closed ADR-0012
 budgets. First `PUT` moves from 49 to 33 requests, established overwrite from
@@ -295,13 +305,15 @@ With the contract bytes frozen, deploy the immutable 0.11.0 runtime and
 establish the baseline:
 
 ```bash
-export OVERMESH_LIVE_PERFORMANCE_CONTRACT=harness/performance/live-v6-certified-current-matrix.toml
+export OVERMESH_LIVE_PERFORMANCE_CONTRACT=harness/performance/live-v7-certified-current-matrix.toml
 export OVERMESH_LIVE_PERFORMANCE_HOST_SKU=Standard_D2as_v5
 export OVERMESH_LIVE_PERFORMANCE_HOST_ID="$(cat /sys/class/dmi/id/product_uuid)"
 export OVERMESH_LIVE_PERFORMANCE_RUNTIME_ROLE=pre-optimization
-export OVERMESH_LIVE_PERFORMANCE_COMMIT=5202eccff4b1e277342cf784dde285e891eb865b
+export OVERMESH_LIVE_PERFORMANCE_COMMIT=9aa9fff33c1a7d75406d6570445da503c2c3cdad
 export OVERMESH_LIVE_PERFORMANCE_PROJECT_VERSION=0.11.0
 export OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG=v0.11.0
+export OVERMESH_LIVE_PERFORMANCE_BACKEND_TELEMETRY_FORMAT=request-batch-v1
+export OVERMESH_LIVE_PERFORMANCE_TELEMETRY_PROTOCOL_SHA256=cfcc9bdca85ab9a0b68709c1c3cbacf65e1a23dd5a594fb707fdc2b91e9f67ff
 shasum -a 256 "$OVERMESH_LIVE_PERFORMANCE_CONTRACT"
 make test-live-azure-performance
 ```
@@ -313,7 +325,7 @@ commit must have an annotated nearest candidate or release tag accepted by
 
 ```bash
 export OVERMESH_LIVE_PERFORMANCE_RUNTIME_ROLE=final
-export OVERMESH_LIVE_PERFORMANCE_COMMIT=123001619e5c75a8ffd241d4b1865b97a6a7cdef
+export OVERMESH_LIVE_PERFORMANCE_COMMIT=1cce8e6d3120370cec773e19d33c61ddb047a5dd
 export OVERMESH_LIVE_PERFORMANCE_PROJECT_VERSION=0.11.1
 export OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG=v0.11.1-rc.1
 export OVERMESH_LIVE_PERFORMANCE_BASELINE_EVIDENCE=/path/to/pre-optimization-evidence.json

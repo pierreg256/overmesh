@@ -129,6 +129,7 @@ def certified_current_matrix_contract(
 def campaign_identity(
     campaign: dict[str, Any],
     label: str,
+    telemetry_required: bool = False,
 ) -> dict[str, Any]:
     benchmark_host = campaign.get("benchmarkHost")
     values = {
@@ -139,6 +140,19 @@ def campaign_identity(
         "commit": campaign.get("commit"),
         "runId": campaign.get("runId"),
         "environment": campaign.get("environment"),
+        **(
+            {
+                "runtimeBaseCommit": campaign.get("runtimeBaseCommit"),
+                "backendTelemetryFormat": campaign.get(
+                    "backendTelemetryFormat"
+                ),
+                "telemetryProtocolSha256": campaign.get(
+                    "telemetryProtocolSha256"
+                ),
+            }
+            if telemetry_required
+            else {}
+        ),
     }
     if (
         not isinstance(benchmark_host, dict)
@@ -159,6 +173,17 @@ def campaign_identity(
         "commit": values["commit"],
         "runId": values["runId"],
         "environment": values["environment"],
+        **(
+            {
+                "runtimeBaseCommit": values["runtimeBaseCommit"],
+                "backendTelemetryFormat": values["backendTelemetryFormat"],
+                "telemetryProtocolSha256": values[
+                    "telemetryProtocolSha256"
+                ],
+            }
+            if telemetry_required
+            else {}
+        ),
     }
 
 
@@ -180,13 +205,18 @@ def require_certified_current_matrix_pair(
         raise ValueError(
             "certified current matrix metadata does not match"
         )
+    telemetry_required = (
+        current_certification.get("backendTelemetryFormat") is not None
+    )
     current_identity = campaign_identity(
         current.get("campaign", {}),
         "current evidence",
+        telemetry_required,
     )
     baseline_identity = campaign_identity(
         baseline.get("campaign", {}),
         "baseline evidence",
+        telemetry_required,
     )
     if (
         current_identity["runtimeRole"] != "final"
@@ -220,6 +250,15 @@ def require_certified_current_matrix_pair(
     if current_identity["runId"] == baseline_identity["runId"]:
         raise ValueError(
             "certified current matrix runs must use different run IDs"
+        )
+    if telemetry_required and (
+        current_identity["backendTelemetryFormat"]
+        != baseline_identity["backendTelemetryFormat"]
+        or current_identity["telemetryProtocolSha256"]
+        != baseline_identity["telemetryProtocolSha256"]
+    ):
+        raise ValueError(
+            "certified current matrix runs must use the same telemetry protocol"
         )
     return True
 
@@ -327,6 +366,12 @@ def build_comparison(
     certified_current_matrix = require_certified_current_matrix_pair(
         current,
         baseline,
+    )
+    telemetry_required = (
+        current.get("contract", {})
+        .get("certification", {})
+        .get("backendTelemetryFormat")
+        is not None
     )
     schema_version = current["contract"]["schemaVersion"]
     if schema_version != baseline["contract"]["schemaVersion"]:
@@ -664,7 +709,11 @@ def build_comparison(
         "apiVersion": "performance.overmesh.io/comparison/v1",
         "contractSha256": current_hash,
         "baseline": (
-            campaign_identity(baseline["campaign"], "baseline evidence")
+            campaign_identity(
+                baseline["campaign"],
+                "baseline evidence",
+                telemetry_required,
+            )
             if certified_current_matrix
             else {
                 "runId": baseline["campaign"]["runId"],
@@ -672,7 +721,11 @@ def build_comparison(
             }
         ),
         "current": (
-            campaign_identity(current["campaign"], "current evidence")
+            campaign_identity(
+                current["campaign"],
+                "current evidence",
+                telemetry_required,
+            )
             if certified_current_matrix
             else {
                 "runId": current["campaign"]["runId"],
@@ -761,6 +814,10 @@ def main() -> int:
             current,
             "current evidence",
         )
+        telemetry_required = (
+            certification is not None
+            and certification.get("backendTelemetryFormat") is not None
+        )
         if (
             certification is not None
             and current.get("campaign", {}).get("runtimeRole")
@@ -789,7 +846,11 @@ def main() -> int:
             "apiVersion": "performance.overmesh.io/comparison/v1",
             "contractSha256": current["contract"]["sha256"],
             "current": (
-                campaign_identity(current["campaign"], "current evidence")
+                campaign_identity(
+                    current["campaign"],
+                    "current evidence",
+                    telemetry_required,
+                )
                 if certification is not None
                 else {
                     "runId": current["campaign"]["runId"],
@@ -801,6 +862,7 @@ def main() -> int:
                     "baseline": campaign_identity(
                         current["campaign"],
                         "current evidence",
+                        telemetry_required,
                     )
                 }
                 if certification is not None

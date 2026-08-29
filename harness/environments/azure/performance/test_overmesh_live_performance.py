@@ -757,11 +757,27 @@ class PerformanceContractTests(unittest.TestCase):
         self.assertIsNotNone(contract.certification)
         self.assertEqual(
             contract.certification.pre_optimization_commit,
-            "5202eccff4b1e277342cf784dde285e891eb865b",
+            "9aa9fff33c1a7d75406d6570445da503c2c3cdad",
         )
         self.assertEqual(
             contract.certification.final_commit,
+            "1cce8e6d3120370cec773e19d33c61ddb047a5dd",
+        )
+        self.assertEqual(
+            contract.certification.pre_optimization_base_commit,
+            "5202eccff4b1e277342cf784dde285e891eb865b",
+        )
+        self.assertEqual(
+            contract.certification.final_base_commit,
             "5596a1701bec0c0132a715b28c92013c4550d150",
+        )
+        self.assertEqual(
+            contract.certification.backend_telemetry_format,
+            "request-batch-v1",
+        )
+        self.assertEqual(
+            contract.certification.telemetry_protocol_sha256,
+            "cfcc9bdca85ab9a0b68709c1c3cbacf65e1a23dd5a594fb707fdc2b91e9f67ff",
         )
 
     def test_v7_container_fixtures_are_isolated_by_runtime_role(self) -> None:

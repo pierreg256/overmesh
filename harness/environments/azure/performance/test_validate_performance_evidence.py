@@ -353,6 +353,22 @@ def certified_current_matrix_document(
             "logAnalyticsExtension": "1",
         },
     }
+    if contract.certification.backend_telemetry_format is not None:
+        document["campaign"].update(
+            {
+                "runtimeBaseCommit": (
+                    contract.certification.pre_optimization_base_commit
+                    if runtime_role == "pre-optimization"
+                    else contract.certification.final_base_commit
+                ),
+                "backendTelemetryFormat": (
+                    contract.certification.backend_telemetry_format
+                ),
+                "telemetryProtocolSha256": (
+                    contract.certification.telemetry_protocol_sha256
+                ),
+            }
+        )
     return document
 
 
@@ -366,6 +382,19 @@ def pairing_identity(document: dict) -> dict:
         "commit": campaign["commit"],
         "runId": campaign["runId"],
         "environment": campaign["environment"],
+        **(
+            {
+                "runtimeBaseCommit": campaign["runtimeBaseCommit"],
+                "backendTelemetryFormat": campaign[
+                    "backendTelemetryFormat"
+                ],
+                "telemetryProtocolSha256": campaign[
+                    "telemetryProtocolSha256"
+                ],
+            }
+            if "backendTelemetryFormat" in campaign
+            else {}
+        ),
     }
 
 
@@ -389,6 +418,83 @@ def baseline_historical_comparison(contract, document: dict) -> dict:
 
 
 class ValidatePerformanceEvidenceTests(unittest.TestCase):
+    def test_v7_validates_instrumented_runtime_provenance(self) -> None:
+        contract = load_contract(
+            Path(
+                "harness/performance/"
+                "live-v7-certified-current-matrix.toml"
+            )
+        )
+        baseline = certified_current_matrix_document(
+            contract,
+            "pre-optimization",
+        )
+        baseline["historicalComparison"] = baseline_historical_comparison(
+            contract,
+            baseline,
+        )
+        validate_document(baseline, contract, canonical=False)
+
+        final = certified_current_matrix_document(contract, "final")
+        final["historicalComparison"] = build_comparison(final, baseline)
+        validate_document(final, contract, canonical=False)
+        self.assertEqual(
+            final["historicalComparison"]["baseline"][
+                "telemetryProtocolSha256"
+            ],
+            final["historicalComparison"]["current"][
+                "telemetryProtocolSha256"
+            ],
+        )
+
+        final["campaign"]["runtimeBaseCommit"] = "0" * 40
+        with self.assertRaisesRegex(ValueError, "runtime base commit"):
+            validate_document(final, contract, canonical=False)
+
+    def test_v7_rejects_telemetry_protocol_mismatch(self) -> None:
+        contract = load_contract(
+            Path(
+                "harness/performance/"
+                "live-v7-certified-current-matrix.toml"
+            )
+        )
+        baseline = certified_current_matrix_document(
+            contract,
+            "pre-optimization",
+        )
+        final = certified_current_matrix_document(contract, "final")
+        final["campaign"]["telemetryProtocolSha256"] = "0" * 64
+
+        with self.assertRaisesRegex(ValueError, "same telemetry protocol"):
+            build_comparison(final, baseline)
+
+    def test_v7_rejects_tampered_baseline_pairing_provenance(self) -> None:
+        contract = load_contract(
+            Path(
+                "harness/performance/"
+                "live-v7-certified-current-matrix.toml"
+            )
+        )
+        baseline = certified_current_matrix_document(
+            contract,
+            "pre-optimization",
+        )
+        final = certified_current_matrix_document(contract, "final")
+        final["historicalComparison"] = build_comparison(final, baseline)
+        final["historicalComparison"]["baseline"][
+            "runtimeBaseCommit"
+        ] = "0" * 40
+
+        with self.assertRaisesRegex(ValueError, "base commit is invalid"):
+            validate_document(final, contract, canonical=False)
+
+        final["historicalComparison"] = build_comparison(final, baseline)
+        final["historicalComparison"]["baseline"][
+            "backendTelemetryFormat"
+        ] = "bogus"
+        with self.assertRaisesRegex(ValueError, "telemetry provenance"):
+            validate_document(final, contract, canonical=False)
+
     def test_v6_validates_baseline_and_final_with_paired_budgets(self) -> None:
         contract = load_contract(
             Path(

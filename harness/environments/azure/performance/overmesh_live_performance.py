@@ -53,12 +53,22 @@ CERTIFIED_CURRENT_MATRIX_HOST_SKU = "Standard_D2as_v5"
 CERTIFIED_CURRENT_MATRIX_BASELINE_COMMIT = (
     "5202eccff4b1e277342cf784dde285e891eb865b"
 )
+CERTIFIED_CURRENT_MATRIX_V7_BASELINE_COMMIT = (
+    "9aa9fff33c1a7d75406d6570445da503c2c3cdad"
+)
 CERTIFIED_CURRENT_MATRIX_BASELINE_VERSION = "0.11.0"
 CERTIFIED_CURRENT_MATRIX_FINAL_COMMIT = (
     "123001619e5c75a8ffd241d4b1865b97a6a7cdef"
 )
 CERTIFIED_CURRENT_MATRIX_V7_FINAL_COMMIT = (
+    "1cce8e6d3120370cec773e19d33c61ddb047a5dd"
+)
+CERTIFIED_CURRENT_MATRIX_V7_FINAL_BASE_COMMIT = (
     "5596a1701bec0c0132a715b28c92013c4550d150"
+)
+CERTIFIED_CURRENT_MATRIX_V7_TELEMETRY_FORMAT = "request-batch-v1"
+CERTIFIED_CURRENT_MATRIX_V7_TELEMETRY_PROTOCOL_SHA256 = (
+    "cfcc9bdca85ab9a0b68709c1c3cbacf65e1a23dd5a594fb707fdc2b91e9f67ff"
 )
 CERTIFIED_CURRENT_MATRIX_FINAL_VERSION = "0.11.1"
 CERTIFIED_CURRENT_MATRIX_WALL_TIME_BUDGET_SECONDS = 7_200
@@ -215,6 +225,10 @@ class Certification:
     pre_optimization_project_version: str
     final_commit: str
     final_project_version: str
+    pre_optimization_base_commit: str | None = None
+    final_base_commit: str | None = None
+    backend_telemetry_format: str | None = None
+    telemetry_protocol_sha256: str | None = None
 
     def document(self) -> dict[str, str]:
         return {
@@ -225,7 +239,39 @@ class Certification:
             ),
             "finalCommit": self.final_commit,
             "finalProjectVersion": self.final_project_version,
+            **(
+                {
+                    "preOptimizationBaseCommit": (
+                        self.pre_optimization_base_commit
+                    ),
+                    "finalBaseCommit": self.final_base_commit,
+                    "backendTelemetryFormat": self.backend_telemetry_format,
+                    "telemetryProtocolSha256": (
+                        self.telemetry_protocol_sha256
+                    ),
+                }
+                if self.backend_telemetry_format is not None
+                else {}
+            ),
         }
+
+    def validate_telemetry(
+        self,
+        backend_telemetry_format: str,
+        telemetry_protocol_sha256: str,
+    ) -> None:
+        if (
+            self.backend_telemetry_format is not None
+            and (
+                backend_telemetry_format != self.backend_telemetry_format
+                or telemetry_protocol_sha256
+                != self.telemetry_protocol_sha256
+            )
+        ):
+            raise ValueError(
+                "certified current matrix telemetry protocol does not "
+                "match the contract"
+            )
 
     def validate_runtime(
         self,
@@ -775,6 +821,15 @@ def load_contract(path: Path) -> Contract:
             "final_commit",
             "final_project_version",
         }
+        if revision == V7_REVISION:
+            expected_certification_keys.update(
+                {
+                    "pre_optimization_base_commit",
+                    "final_base_commit",
+                    "backend_telemetry_format",
+                    "telemetry_protocol_sha256",
+                }
+            )
         if campaign_purpose != "certified-current-matrix":
             raise ValueError(
                 f"contract_revision {revision} requires "
@@ -864,7 +919,11 @@ def load_contract(path: Path) -> Contract:
             certification_document["benchmark_host_sku"]
             != CERTIFIED_CURRENT_MATRIX_HOST_SKU
             or pre_optimization_commit
-            != CERTIFIED_CURRENT_MATRIX_BASELINE_COMMIT
+            != (
+                CERTIFIED_CURRENT_MATRIX_BASELINE_COMMIT
+                if revision == V6_REVISION
+                else CERTIFIED_CURRENT_MATRIX_V7_BASELINE_COMMIT
+            )
             or certification_document["pre_optimization_project_version"]
             != CERTIFIED_CURRENT_MATRIX_BASELINE_VERSION
             or final_commit
@@ -875,6 +934,25 @@ def load_contract(path: Path) -> Contract:
             )
             or certification_document["final_project_version"]
             != CERTIFIED_CURRENT_MATRIX_FINAL_VERSION
+            or (
+                revision == V7_REVISION
+                and (
+                    certification_document[
+                        "pre_optimization_base_commit"
+                    ]
+                    != CERTIFIED_CURRENT_MATRIX_BASELINE_COMMIT
+                    or certification_document["final_base_commit"]
+                    != CERTIFIED_CURRENT_MATRIX_V7_FINAL_BASE_COMMIT
+                    or certification_document[
+                        "backend_telemetry_format"
+                    ]
+                    != CERTIFIED_CURRENT_MATRIX_V7_TELEMETRY_FORMAT
+                    or certification_document[
+                        "telemetry_protocol_sha256"
+                    ]
+                    != CERTIFIED_CURRENT_MATRIX_V7_TELEMETRY_PROTOCOL_SHA256
+                )
+            )
         ):
             raise ValueError(
                 "certified-current-matrix certification identity is invalid"
@@ -889,6 +967,18 @@ def load_contract(path: Path) -> Contract:
             final_project_version=certification_document[
                 "final_project_version"
             ],
+            pre_optimization_base_commit=certification_document.get(
+                "pre_optimization_base_commit"
+            ),
+            final_base_commit=certification_document.get(
+                "final_base_commit"
+            ),
+            backend_telemetry_format=certification_document.get(
+                "backend_telemetry_format"
+            ),
+            telemetry_protocol_sha256=certification_document.get(
+                "telemetry_protocol_sha256"
+            ),
         )
     elif any(
         value is not None
@@ -2177,6 +2267,13 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
                 "OVERMESH_LIVE_PERFORMANCE_HOST_SKU",
             ]
         )
+        if contract.certification.backend_telemetry_format is not None:
+            required_environment.extend(
+                [
+                    "OVERMESH_LIVE_PERFORMANCE_BACKEND_TELEMETRY_FORMAT",
+                    "OVERMESH_LIVE_PERFORMANCE_TELEMETRY_PROTOCOL_SHA256",
+                ]
+            )
     missing = [name for name in required_environment if not os.environ.get(name)]
     if missing:
         raise RuntimeError(
@@ -2199,6 +2296,9 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
         raise RuntimeError("OVERMESH_LIVE_PERFORMANCE_PROJECT_VERSION is required")
     runtime_role = None
     benchmark_host = None
+    runtime_base_commit = None
+    backend_telemetry_format = None
+    telemetry_protocol_sha256 = None
     if contract.certification is not None:
         runtime_role = os.environ["OVERMESH_LIVE_PERFORMANCE_RUNTIME_ROLE"]
         host_sku = os.environ["OVERMESH_LIVE_PERFORMANCE_HOST_SKU"]
@@ -2211,6 +2311,25 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
             )
         except ValueError as error:
             raise RuntimeError(str(error)) from error
+        if contract.certification.backend_telemetry_format is not None:
+            backend_telemetry_format = os.environ[
+                "OVERMESH_LIVE_PERFORMANCE_BACKEND_TELEMETRY_FORMAT"
+            ]
+            telemetry_protocol_sha256 = os.environ[
+                "OVERMESH_LIVE_PERFORMANCE_TELEMETRY_PROTOCOL_SHA256"
+            ]
+            try:
+                contract.certification.validate_telemetry(
+                    backend_telemetry_format,
+                    telemetry_protocol_sha256,
+                )
+            except ValueError as error:
+                raise RuntimeError(str(error)) from error
+            runtime_base_commit = (
+                contract.certification.pre_optimization_base_commit
+                if runtime_role == "pre-optimization"
+                else contract.certification.final_base_commit
+            )
         benchmark_host = {
             "sku": host_sku,
             "fingerprint": benchmark_host_fingerprint(
@@ -3616,6 +3735,15 @@ def run_campaign(contract_path: Path, output_path: Path) -> None:
             ],
             **({"runtimeRole": runtime_role} if runtime_role is not None else {}),
             **({"benchmarkHost": benchmark_host} if benchmark_host is not None else {}),
+            **(
+                {
+                    "runtimeBaseCommit": runtime_base_commit,
+                    "backendTelemetryFormat": backend_telemetry_format,
+                    "telemetryProtocolSha256": telemetry_protocol_sha256,
+                }
+                if backend_telemetry_format is not None
+                else {}
+            ),
             "isolatedEnvironment": True,
             "storageApiVersion": next(iter(storage_api_versions.values())),
             **(

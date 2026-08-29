@@ -20,10 +20,14 @@ p50_comparison_statistic = "median-per-run"
 
 [certification]
 benchmark_host_sku = "Standard_D2as_v5"
-pre_optimization_commit = "5202eccff4b1e277342cf784dde285e891eb865b"
+pre_optimization_base_commit = "5202eccff4b1e277342cf784dde285e891eb865b"
+pre_optimization_commit = "9aa9fff33c1a7d75406d6570445da503c2c3cdad"
 pre_optimization_project_version = "0.11.0"
-final_commit = "5596a1701bec0c0132a715b28c92013c4550d150"
+final_base_commit = "5596a1701bec0c0132a715b28c92013c4550d150"
+final_commit = "1cce8e6d3120370cec773e19d33c61ddb047a5dd"
 final_project_version = "0.11.1"
+backend_telemetry_format = "request-batch-v1"
+telemetry_protocol_sha256 = "cfcc9bdca85ab9a0b68709c1c3cbacf65e1a23dd5a594fb707fdc2b91e9f67ff"
 
 [non_regression]
 backend_requests_per_operation = "blocking"

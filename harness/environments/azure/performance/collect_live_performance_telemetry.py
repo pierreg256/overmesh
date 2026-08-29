@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import math
@@ -15,7 +17,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-FIELD = re.compile(r"\b([a-z_]+)=(\"[^\"]*\"|\S+)")
+FIELD = re.compile(r"\b([a-z0-9_]+)=(\"[^\"]*\"|\S+)")
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 AGGREGATE_QUERY_ATTEMPTS = 3
 AGGREGATE_QUERY_WORKERS = 4
@@ -692,17 +694,38 @@ def collect_stable_backend_request_count(
     finished_at: str,
     wait_seconds: int,
     poll_seconds: int,
+    batched: bool = False,
 ) -> int:
     deadline = time.monotonic() + wait_seconds
     previous: int | None = None
     stable_polls = 0
     while True:
-        count = query_backend_request_count(
-            workspace,
-            app_names,
-            started_at,
-            finished_at,
-        )
+        if batched:
+            events, incomplete_batches = expand_backend_request_batches(
+                deduplicate_events(
+                    query_logs(
+                        workspace,
+                        app_names,
+                        started_at,
+                        finished_at,
+                    )
+                )
+            )
+            count = sum(
+                1
+                for _, message in events
+                if parse_fields(message).get("event")
+                == "overmesh_backend_request"
+            )
+            if incomplete_batches:
+                count = 0
+        else:
+            count = query_backend_request_count(
+                workspace,
+                app_names,
+                started_at,
+                finished_at,
+            )
         if count > 0:
             stable_polls = stable_polls + 1 if count == previous else 1
             previous = count
@@ -1275,6 +1298,193 @@ def deduplicate_events(
     return sorted(set(events), key=lambda event: (event[0], event[1]))
 
 
+def expand_backend_request_batches(
+    events: list[tuple[datetime, str]],
+) -> tuple[list[tuple[datetime, str]], list[str]]:
+    groups: dict[str, dict[str, Any]] = {}
+    expanded = []
+    for timestamp, message in events:
+        fields = parse_fields(message)
+        event = fields.get("event")
+        if event == "overmesh_backend_request_batch_error":
+            raise RuntimeError(
+                "Gateway failed to serialize a backend request telemetry batch"
+            )
+        if event != "overmesh_backend_request_batch":
+            expanded.append((timestamp, message))
+            continue
+        required = {
+            "request_event_id",
+            "client_request_fingerprint",
+            "chunk_index",
+            "chunk_count",
+            "record_total",
+            "payload_base64",
+        }
+        missing = required - fields.keys()
+        if missing:
+            raise RuntimeError(
+                "backend request telemetry batch is missing fields: "
+                + ", ".join(sorted(missing))
+            )
+        request_event_id = fields["request_event_id"]
+        try:
+            chunk_index = int(fields["chunk_index"])
+            chunk_count = int(fields["chunk_count"])
+            record_total = int(fields["record_total"])
+        except ValueError as error:
+            raise RuntimeError(
+                "backend request telemetry batch has invalid numeric metadata"
+            ) from error
+        if (
+            chunk_index < 0
+            or chunk_count <= 0
+            or chunk_index >= chunk_count
+            or record_total <= 0
+        ):
+            raise RuntimeError(
+                "backend request telemetry batch has inconsistent metadata"
+            )
+        group = groups.setdefault(
+            request_event_id,
+            {
+                "fingerprint": fields["client_request_fingerprint"],
+                "chunkCount": chunk_count,
+                "recordTotal": record_total,
+                "timestamp": timestamp,
+                "chunks": {},
+            },
+        )
+        if (
+            group["fingerprint"] != fields["client_request_fingerprint"]
+            or group["chunkCount"] != chunk_count
+            or group["recordTotal"] != record_total
+        ):
+            raise RuntimeError(
+                f"backend request telemetry batch {request_event_id} "
+                "has conflicting metadata"
+            )
+        chunks = group["chunks"]
+        prior = chunks.setdefault(chunk_index, fields["payload_base64"])
+        if prior != fields["payload_base64"]:
+            raise RuntimeError(
+                f"backend request telemetry batch {request_event_id} "
+                f"has conflicting chunk {chunk_index}"
+            )
+
+    incomplete = []
+    for request_event_id, group in sorted(groups.items()):
+        expected_chunks = set(range(group["chunkCount"]))
+        observed_chunks = set(group["chunks"])
+        missing_chunks = sorted(expected_chunks - observed_chunks)
+        if missing_chunks:
+            incomplete.append(
+                f"request_event_id={request_event_id} "
+                f"missing_chunks={missing_chunks} "
+                f"expected_chunks={group['chunkCount']}"
+            )
+            continue
+        try:
+            decoded_chunks = []
+            for index in range(group["chunkCount"]):
+                encoded = group["chunks"][index]
+                padding = "=" * (-len(encoded) % 4)
+                decoded_chunks.append(
+                    base64.b64decode(
+                        encoded + padding,
+                        altchars=b"-_",
+                        validate=True,
+                    )
+                )
+            payload = json.loads(
+                b"".join(decoded_chunks)
+            )
+        except (ValueError, binascii.Error, json.JSONDecodeError) as error:
+            raise RuntimeError(
+                f"backend request telemetry batch {request_event_id} "
+                "has an invalid payload"
+            ) from error
+        if (
+            not isinstance(payload, dict)
+            or
+            payload.get("schemaVersion") != 1
+            or payload.get("requestEventId") != request_event_id
+            or payload.get("clientRequestFingerprint")
+            != group["fingerprint"]
+        ):
+            raise RuntimeError(
+                f"backend request telemetry batch {request_event_id} "
+                "payload does not match its envelope"
+            )
+        backends = payload.get("backends")
+        operations = payload.get("operations")
+        object_classes = payload.get("objectClasses")
+        records = payload.get("records")
+        if (
+            not isinstance(backends, list)
+            or not isinstance(operations, list)
+            or not isinstance(object_classes, list)
+            or not isinstance(records, list)
+            or len(records) != group["recordTotal"]
+            or not all(isinstance(value, str) for value in backends)
+            or not all(isinstance(value, str) for value in operations)
+            or not all(isinstance(value, str) for value in object_classes)
+        ):
+            raise RuntimeError(
+                f"backend request telemetry batch {request_event_id} "
+                "has an invalid record dictionary"
+            )
+        for record in records:
+            if (
+                not isinstance(record, list)
+                or len(record) != 6
+                or not all(type(record[index]) is int for index in range(5))
+                or not isinstance(record[5], bool)
+            ):
+                raise RuntimeError(
+                    f"backend request telemetry batch {request_event_id} "
+                    "has an invalid record"
+                )
+            backend_index, operation_index, class_index, status, duration = (
+                record[:5]
+            )
+            if (
+                backend_index < 0
+                or backend_index >= len(backends)
+                or operation_index < 0
+                or operation_index >= len(operations)
+                or class_index < 0
+                or class_index >= len(object_classes)
+                or status < 0
+                or duration < 0
+            ):
+                raise RuntimeError(
+                    f"backend request telemetry batch {request_event_id} "
+                    "has an out-of-range record"
+                )
+            transport_success = str(record[5]).lower()
+            expanded.append(
+                (
+                    group["timestamp"],
+                    " ".join(
+                        (
+                            'event="overmesh_backend_request"',
+                            f"request_event_id={request_event_id}",
+                            "client_request_fingerprint="
+                            f"{group['fingerprint']}",
+                            f"backend_id={backends[backend_index]}",
+                            f"operation={operations[operation_index]}",
+                            f"object_class={object_classes[class_index]}",
+                            f"status={status}",
+                            f"response_headers_duration_us={duration}",
+                            f"transport_success={transport_success}",
+                        )
+                    ),
+                )
+            )
+    return sorted(expanded, key=lambda event: (event[0], event[1])), incomplete
+
+
 def fingerprint_count_vector(
     events: list[tuple[datetime, str]],
     gateway_cases: list[dict[str, Any]],
@@ -1416,7 +1626,15 @@ def fingerprint_count_diagnostics(
         for repeat in repeats:
             counts = grouped.get((benchmark_case["id"], repeat), [])
             for fingerprint, count in counts:
-                if count != target:
+                surplus_is_allowed = (
+                    bool(
+                        benchmark_case.get(
+                            "allowedVariableBackendOperations"
+                        )
+                    )
+                    and count > target
+                )
+                if count != target and not surplus_is_allowed:
                     repeat_detail = (
                         f" repeat={repeat}" if repeat is not None else ""
                     )
@@ -1552,7 +1770,7 @@ def collect_stable_events(
     previous_vector: FingerprintCountVector | None = None
     stable_polls = 0
     while True:
-        events = deduplicate_events(
+        raw_events = deduplicate_events(
             [
                 event
                 for window_started_at, window_finished_at in query_windows
@@ -1564,14 +1782,20 @@ def collect_stable_events(
                 )
             ]
         )
+        events, incomplete_batches = expand_backend_request_batches(
+            raw_events
+        )
         current_vector = fingerprint_count_vector(
             events,
             gateway_cases,
             run_id,
         )
-        complete = fingerprint_count_vector_complete(
-            current_vector,
-            gateway_cases,
+        complete = (
+            not incomplete_batches
+            and fingerprint_count_vector_complete(
+                current_vector,
+                gateway_cases,
+            )
         )
         previous_vector, stable_polls = next_stability(
             previous_vector,
@@ -1586,8 +1810,10 @@ def collect_stable_events(
                 current_vector,
                 gateway_cases,
             )
+            if incomplete_batches:
+                diagnostics = [*incomplete_batches, *diagnostics]
             detail = (
-                "fingerprint counts incomplete or mismatched: "
+                "backend telemetry incomplete or mismatched: "
                 + "; ".join(diagnostics)
                 if diagnostics
                 else (
@@ -1798,6 +2024,10 @@ def main() -> int:
     campaign = evidence["campaign"]
     fixture_setup = campaign.get("fixtureSetup")
     repeated = bool(gateway_cases and gateway_cases[0].get("runs"))
+    batched = (
+        campaign.get("backendTelemetryFormat") == "request-batch-v1"
+    )
+    aggregate_queries = repeated and not batched
     aggregate_metrics_by_scope: dict[
         tuple[str, str], dict[str, Any]
     ] = {}
@@ -1809,7 +2039,7 @@ def main() -> int:
         str, dict[str, set[str]]
     ] = {}
     events: list[tuple[datetime, str]] = []
-    if repeated:
+    if aggregate_queries:
         (
             aggregate_metrics_by_scope,
             aggregate_fingerprint_counts,
@@ -1866,7 +2096,7 @@ def main() -> int:
         )
         event_metrics = (
             aggregate_metrics_by_scope[("case", benchmark_case["id"])]
-            if repeated
+            if aggregate_queries
             else aggregate_events(case_messages)
         )
         if event_metrics["backendRequests"]["count"] == 0:
@@ -1899,7 +2129,7 @@ def main() -> int:
                 )
                 run_metrics = (
                     aggregate_metrics_by_scope[("run", scope)]
-                    if repeated
+                    if aggregate_queries
                     else aggregate_events(
                         run_messages,
                         include_ambient=False,
@@ -1973,7 +2203,7 @@ def main() -> int:
                     )
                     operations_by_fingerprint = (
                         aggregate_fingerprint_operations.get(scope, {})
-                        if repeated
+                        if aggregate_queries
                         else request_operations_by_fingerprint(
                             run_messages,
                             expected,
@@ -2105,7 +2335,7 @@ def main() -> int:
                             aggregate_fingerprint_backends,
                             event_metrics,
                         )
-                        if repeated
+                        if aggregate_queries
                         else placement_coverage(
                             campaign["runId"],
                             benchmark_case,
@@ -2139,6 +2369,7 @@ def main() -> int:
                 fixture_setup["finishedAt"],
                 wait_seconds,
                 poll_seconds,
+                batched,
             )
         }
 
