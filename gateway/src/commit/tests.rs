@@ -3430,8 +3430,12 @@ async fn reads_validated_heads_and_ranges_across_block_boundaries() {
     assert_eq!(metadata.logical_etag, committed.logical_etag);
     assert_eq!(metadata.content_length, 10);
 
-    let read = crate::request_context::scope(
+    let telemetry = crate::request_context::request_telemetry(
         "stream-request".to_owned(),
+        "stream-event".to_owned(),
+    );
+    let read = crate::request_context::scope(
+        telemetry,
         read_service.get_blob(&blob(path), &principal(), Some("bytes=3-8")),
     )
     .await

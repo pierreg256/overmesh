@@ -21,7 +21,10 @@ use uuid::Uuid;
 use crate::app::SUPPORTED_STORAGE_VERSION;
 use crate::{
     identity::{CallerToken, ControlToken},
-    request_context::current_client_request_fingerprint,
+    request_context::{
+        BackendRequestRecord, current_client_request_fingerprint, current_request_event_id,
+        record_backend_request,
+    },
     resource::{LogicalBlobId, encode_blob_path, encode_path_component},
 };
 
@@ -367,29 +370,31 @@ impl HttpBlobBackend {
         let response = request.send().await;
         let duration_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
         let client_request_fingerprint = current_client_request_fingerprint();
-        match &response {
-            Ok(response) => info!(
+        let request_event_id = current_request_event_id();
+        let (status, transport_success) = match &response {
+            Ok(response) => (response.status().as_u16(), true),
+            Err(_) => (0, false),
+        };
+        if !record_backend_request(BackendRequestRecord {
+            backend_id: self.id.clone(),
+            operation,
+            object_class,
+            status,
+            response_headers_duration_us: duration_us,
+            transport_success,
+        }) {
+            info!(
                 event = "overmesh_backend_request",
+                request_event_id = %request_event_id,
                 client_request_fingerprint = %client_request_fingerprint,
                 backend_id = %self.id,
                 operation,
                 object_class,
-                status = response.status().as_u16(),
+                status,
                 response_headers_duration_us = duration_us,
-                transport_success = true,
+                transport_success,
                 "Overmesh backend request completed"
-            ),
-            Err(_) => info!(
-                event = "overmesh_backend_request",
-                client_request_fingerprint = %client_request_fingerprint,
-                backend_id = %self.id,
-                operation,
-                object_class,
-                status = 0_u16,
-                response_headers_duration_us = duration_us,
-                transport_success = false,
-                "Overmesh backend request failed"
-            ),
+            );
         }
         response.map_err(BackendError::Transport)
     }
@@ -1321,6 +1326,7 @@ mod tests {
     };
 
     use axum::Router;
+    use base64::Engine;
     use tracing::instrument::WithSubscriber;
 
     use super::*;
@@ -1444,15 +1450,18 @@ mod tests {
             .finish();
         let backend = HttpBlobBackend::new("storage-a", endpoint, false).expect("backend");
 
-        let result = crate::request_context::scope(
+        let telemetry = crate::request_context::request_telemetry(
             "performance-request".to_owned(),
-            backend
-                .control_get_object(
-                    "heads/path.json",
-                    &ControlToken::new("control-token".to_owned()),
-                )
-                .with_subscriber(subscriber),
+            "request-event-1".to_owned(),
+        );
+        let result = crate::request_context::scope(
+            telemetry,
+            backend.control_get_object(
+                "heads/path.json",
+                &ControlToken::new("control-token".to_owned()),
+            ),
         )
+        .with_subscriber(subscriber)
         .await
         .expect("request");
         server.abort();
@@ -1461,8 +1470,36 @@ mod tests {
         assert_eq!(received.load(Ordering::SeqCst), 1);
         let telemetry = String::from_utf8(writer.bytes.lock().expect("telemetry buffer").clone())
             .expect("UTF-8 telemetry");
-        assert_eq!(telemetry.matches("overmesh_backend_request").count(), 1);
-        assert!(telemetry.contains("object_class=\"head\""));
+        assert_eq!(
+            telemetry
+                .matches("event=\"overmesh_backend_request_batch\"")
+                .count(),
+            1
+        );
+        assert!(telemetry.contains("record_total=1"));
         assert!(telemetry.contains("client_request_fingerprint=performance-request"));
+        assert!(telemetry.contains("request_event_id=request-event-1"));
+        let encoded = telemetry
+            .split("payload_base64=")
+            .nth(1)
+            .and_then(|value| value.split_whitespace().next())
+            .expect("encoded batch payload")
+            .trim_matches('"');
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded)
+            .expect("base64 batch payload");
+        let batch: serde_json::Value =
+            serde_json::from_slice(&decoded).expect("JSON batch payload");
+        assert_eq!(batch["backends"], serde_json::json!(["storage-a"]));
+        assert_eq!(
+            batch["operations"],
+            serde_json::json!(["control_get_object"])
+        );
+        assert_eq!(batch["objectClasses"], serde_json::json!(["head"]));
+        assert_eq!(batch["records"][0][0], 0);
+        assert_eq!(batch["records"][0][1], 0);
+        assert_eq!(batch["records"][0][2], 0);
+        assert_eq!(batch["records"][0][3], 404);
+        assert_eq!(batch["records"][0][5], true);
     }
 }
