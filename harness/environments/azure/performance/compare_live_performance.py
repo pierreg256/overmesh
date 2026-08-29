@@ -31,6 +31,72 @@ def requests_per_operation(case: dict[str, Any]) -> float:
     return round(count / iterations, 4)
 
 
+def structural_requests_per_operation(case: dict[str, Any]) -> float:
+    allowed_variable_operations = case.get(
+        "allowedVariableBackendOperations",
+        [],
+    )
+    if not allowed_variable_operations:
+        return requests_per_operation(case)
+    if (
+        not isinstance(allowed_variable_operations, list)
+        or not all(
+            isinstance(operation, str) and operation
+            for operation in allowed_variable_operations
+        )
+    ):
+        raise ValueError(
+            f"case {case.get('id')} has invalid variable request operations"
+        )
+    runs = case.get("runs")
+    if not isinstance(runs, list) or not runs:
+        raise ValueError(
+            f"case {case.get('id')} has no repeated structural request evidence"
+        )
+    structural_counts = []
+    for run in runs:
+        budget = run.get("backendRequestBudget", {})
+        structural = budget.get("structuralRequestsPerOperation")
+        variable_counts = budget.get("variableRequestsByOperation")
+        iterations = run.get("iterations")
+        backend_count = (
+            run.get("serverTelemetry", {})
+            .get("backendRequests", {})
+            .get("count")
+        )
+        if (
+            isinstance(structural, bool)
+            or not isinstance(structural, int)
+            or structural <= 0
+            or budget.get("allowedVariableOperations")
+            != allowed_variable_operations
+            or not isinstance(variable_counts, dict)
+            or set(variable_counts) != set(allowed_variable_operations)
+            or any(
+                isinstance(count, bool)
+                or not isinstance(count, int)
+                or count < 0
+                for count in variable_counts.values()
+            )
+            or isinstance(iterations, bool)
+            or not isinstance(iterations, int)
+            or iterations <= 0
+            or isinstance(backend_count, bool)
+            or not isinstance(backend_count, int)
+            or backend_count
+            != structural * iterations + sum(variable_counts.values())
+        ):
+            raise ValueError(
+                f"case {case.get('id')} has invalid structural request evidence"
+            )
+        structural_counts.append(structural)
+    if len(set(structural_counts)) != 1:
+        raise ValueError(
+            f"case {case.get('id')} structural request budget varies by run"
+        )
+    return float(structural_counts[0])
+
+
 def require_isolated_api(document: dict[str, Any], label: str) -> None:
     api_version = document.get("apiVersion")
     if api_version != "performance.overmesh.io/v1":
@@ -38,6 +104,179 @@ def require_isolated_api(document: dict[str, Any], label: str) -> None:
             f"{label} uses unsupported apiVersion {api_version!r}; "
             "client-observed campaigns can never be baselines or comparisons"
         )
+
+
+def certified_current_matrix_contract(
+    document: dict[str, Any],
+    label: str,
+) -> dict[str, Any] | None:
+    contract = document.get("contract", {})
+    revision = contract.get("revision")
+    certification = contract.get("certification")
+    if revision in {"v6", "v7"}:
+        if not isinstance(certification, dict):
+            raise ValueError(
+                f"{label} is missing certified current matrix metadata"
+            )
+        return certification
+    if certification is not None:
+        raise ValueError(
+            f"{label} has certification metadata without a certified revision"
+        )
+    return None
+
+
+def campaign_identity(
+    campaign: dict[str, Any],
+    label: str,
+    telemetry_required: bool = False,
+) -> dict[str, Any]:
+    benchmark_host = campaign.get("benchmarkHost")
+    values = {
+        "runtimeRole": campaign.get("runtimeRole"),
+        "projectVersion": campaign.get("projectVersion"),
+        "benchmarkHost": benchmark_host,
+        "deployment": campaign.get("deployment"),
+        "commit": campaign.get("commit"),
+        "runId": campaign.get("runId"),
+        "environment": campaign.get("environment"),
+        **(
+            {
+                "runtimeBaseCommit": campaign.get("runtimeBaseCommit"),
+                "backendTelemetryFormat": campaign.get(
+                    "backendTelemetryFormat"
+                ),
+                "telemetryProtocolSha256": campaign.get(
+                    "telemetryProtocolSha256"
+                ),
+            }
+            if telemetry_required
+            else {}
+        ),
+    }
+    if (
+        not isinstance(benchmark_host, dict)
+        or any(
+            not isinstance(value, str) or not value
+            for key, value in values.items()
+            if key != "benchmarkHost"
+        )
+    ):
+        raise ValueError(
+            f"{label} is missing certified current matrix campaign identity"
+        )
+    return {
+        "runtimeRole": values["runtimeRole"],
+        "projectVersion": values["projectVersion"],
+        "benchmarkHost": benchmark_host,
+        "deployment": values["deployment"],
+        "commit": values["commit"],
+        "runId": values["runId"],
+        "environment": values["environment"],
+        **(
+            {
+                "runtimeBaseCommit": values["runtimeBaseCommit"],
+                "backendTelemetryFormat": values["backendTelemetryFormat"],
+                "telemetryProtocolSha256": values[
+                    "telemetryProtocolSha256"
+                ],
+            }
+            if telemetry_required
+            else {}
+        ),
+    }
+
+
+def require_certified_current_matrix_pair(
+    current: dict[str, Any],
+    baseline: dict[str, Any],
+) -> bool:
+    current_certification = certified_current_matrix_contract(
+        current,
+        "current evidence",
+    )
+    baseline_certification = certified_current_matrix_contract(
+        baseline,
+        "baseline evidence",
+    )
+    if current_certification is None and baseline_certification is None:
+        return False
+    if current_certification != baseline_certification:
+        raise ValueError(
+            "certified current matrix metadata does not match"
+        )
+    telemetry_required = (
+        current_certification.get("backendTelemetryFormat") is not None
+    )
+    current_identity = campaign_identity(
+        current.get("campaign", {}),
+        "current evidence",
+        telemetry_required,
+    )
+    baseline_identity = campaign_identity(
+        baseline.get("campaign", {}),
+        "baseline evidence",
+        telemetry_required,
+    )
+    if (
+        current_identity["runtimeRole"] != "final"
+        or baseline_identity["runtimeRole"] != "pre-optimization"
+    ):
+        raise ValueError(
+            "certified current matrix comparison requires a pre-optimization "
+            "baseline and final current runtime"
+        )
+    current_host = current_identity["benchmarkHost"]
+    baseline_host = baseline_identity["benchmarkHost"]
+    if (
+        current_host.get("sku")
+        != current_certification.get("benchmarkHostSku")
+        or baseline_host.get("sku")
+        != current_certification.get("benchmarkHostSku")
+        or current_host.get("fingerprint")
+        != baseline_host.get("fingerprint")
+    ):
+        raise ValueError(
+            "certified current matrix runs must use the same benchmark host"
+        )
+    if current_identity["deployment"] == baseline_identity["deployment"]:
+        raise ValueError(
+            "certified current matrix runs must use different deployments"
+        )
+    if current_identity["environment"] != baseline_identity["environment"]:
+        raise ValueError(
+            "certified current matrix runs must use the same environment"
+        )
+    if current_identity["runId"] == baseline_identity["runId"]:
+        raise ValueError(
+            "certified current matrix runs must use different run IDs"
+        )
+    if telemetry_required and (
+        current_identity["backendTelemetryFormat"]
+        != baseline_identity["backendTelemetryFormat"]
+        or current_identity["telemetryProtocolSha256"]
+        != baseline_identity["telemetryProtocolSha256"]
+    ):
+        raise ValueError(
+            "certified current matrix runs must use the same telemetry protocol"
+        )
+    return True
+
+
+def certified_final_budget(case: dict[str, Any]) -> int:
+    final_budget = case.get(
+        "finalBackendRequestsPerOperation",
+        case.get("expectedBackendRequestsPerOperation"),
+    )
+    if (
+        isinstance(final_budget, bool)
+        or not isinstance(final_budget, int)
+        or final_budget <= 0
+    ):
+        raise ValueError(
+            f"case {case.get('id')} is missing its exact final request budget"
+        )
+    return final_budget
 
 
 def p50_signal_reasons(
@@ -124,6 +363,16 @@ def build_comparison(
     baseline_hash = baseline["contract"]["sha256"]
     if current_hash != baseline_hash:
         raise ValueError("performance contract hashes do not match")
+    certified_current_matrix = require_certified_current_matrix_pair(
+        current,
+        baseline,
+    )
+    telemetry_required = (
+        current.get("contract", {})
+        .get("certification", {})
+        .get("backendTelemetryFormat")
+        is not None
+    )
     schema_version = current["contract"]["schemaVersion"]
     if schema_version != baseline["contract"]["schemaVersion"]:
         raise ValueError("performance contract schema versions do not match")
@@ -165,8 +414,10 @@ def build_comparison(
         baseline_backend = baseline_server.get("backendRequests", {})
         current_signing = current_server.get("manifestSigning", {})
         baseline_signing = baseline_server.get("manifestSigning", {})
-        current_requests = requests_per_operation(current_gateway)
-        baseline_requests = requests_per_operation(baseline_gateway)
+        current_requests = structural_requests_per_operation(current_gateway)
+        baseline_requests = structural_requests_per_operation(
+            baseline_gateway
+        )
         is_listing = (
             schema_version == 5
             and current_gateway["operation"].startswith("list_")
@@ -194,20 +445,43 @@ def build_comparison(
             raise ValueError(
                 f"listing case {case_id} is missing per-entry request budgets"
             )
-        request_status = (
-            "passed"
-            if (
-                current_listing_requests == baseline_listing_requests
-                if is_listing
-                else current_requests == baseline_requests
-                if schema_version >= 4
-                else current_backend["count"]
-                * baseline_gateway["iterations"]
-                <= baseline_backend["count"]
-                * current_gateway["iterations"]
+        if is_listing:
+            request_status = (
+                "passed"
+                if current_listing_requests == baseline_listing_requests
+                else "failed"
             )
-            else "failed"
-        )
+        elif certified_current_matrix:
+            current_final_budget = certified_final_budget(current_gateway)
+            baseline_final_budget = certified_final_budget(baseline_gateway)
+            current_expected_budget = current_gateway.get(
+                "expectedBackendRequestsPerOperation"
+            )
+            baseline_expected_budget = baseline_gateway.get(
+                "expectedBackendRequestsPerOperation"
+            )
+            request_status = (
+                "passed"
+                if (
+                    current_requests == current_final_budget
+                    and current_expected_budget == current_final_budget
+                    and baseline_final_budget == current_final_budget
+                    and baseline_requests == baseline_expected_budget
+                    and baseline_requests >= current_requests
+                )
+                else "failed"
+            )
+        elif schema_version >= 4:
+            request_status = (
+                "passed" if current_requests == baseline_requests else "failed"
+            )
+        else:
+            request_status = (
+                "passed"
+                if current_backend["count"] * baseline_gateway["iterations"]
+                <= baseline_backend["count"] * current_gateway["iterations"]
+                else "failed"
+            )
         p50_classification = (
             "blocking"
             if schema_version >= 4
@@ -264,6 +538,11 @@ def build_comparison(
             else "passed"
             if p50_classification == "blocking"
             else "not-gated"
+        )
+        request_budget_metadata = (
+            {"finalBudget": certified_final_budget(current_gateway)}
+            if certified_current_matrix and not is_listing
+            else {}
         )
         cases.append(
             {
@@ -330,6 +609,7 @@ def build_comparison(
                                     if is_listing
                                     else current_requests
                                 ),
+                                **request_budget_metadata,
                                 "status": request_status,
                             },
                             "p50Latency": {
@@ -428,14 +708,30 @@ def build_comparison(
         "status": "compared",
         "apiVersion": "performance.overmesh.io/comparison/v1",
         "contractSha256": current_hash,
-        "baseline": {
-            "runId": baseline["campaign"]["runId"],
-            "commit": baseline["campaign"]["commit"],
-        },
-        "current": {
-            "runId": current["campaign"]["runId"],
-            "commit": current["campaign"]["commit"],
-        },
+        "baseline": (
+            campaign_identity(
+                baseline["campaign"],
+                "baseline evidence",
+                telemetry_required,
+            )
+            if certified_current_matrix
+            else {
+                "runId": baseline["campaign"]["runId"],
+                "commit": baseline["campaign"]["commit"],
+            }
+        ),
+        "current": (
+            campaign_identity(
+                current["campaign"],
+                "current evidence",
+                telemetry_required,
+            )
+            if certified_current_matrix
+            else {
+                "runId": current["campaign"]["runId"],
+                "commit": current["campaign"]["commit"],
+            }
+        ),
         "campaignTelemetryChange": {
             "cpuMaximum": ratio(
                 current_container.get("cpuCores", {}).get("maximum"),
@@ -514,6 +810,23 @@ def main() -> int:
             },
         }
     elif arguments.baseline is None:
+        certification = certified_current_matrix_contract(
+            current,
+            "current evidence",
+        )
+        telemetry_required = (
+            certification is not None
+            and certification.get("backendTelemetryFormat") is not None
+        )
+        if (
+            certification is not None
+            and current.get("campaign", {}).get("runtimeRole")
+            != "pre-optimization"
+        ):
+            raise ValueError(
+                "certified current matrix can establish a baseline only from "
+                "the pre-optimization runtime"
+            )
         policy = current["contract"].get("nonRegression")
         schema_version = current["contract"]["schemaVersion"]
         current_cases = {
@@ -532,10 +845,29 @@ def main() -> int:
             ),
             "apiVersion": "performance.overmesh.io/comparison/v1",
             "contractSha256": current["contract"]["sha256"],
-            "current": {
-                "runId": current["campaign"]["runId"],
-                "commit": current["campaign"]["commit"],
-            },
+            "current": (
+                campaign_identity(
+                    current["campaign"],
+                    "current evidence",
+                    telemetry_required,
+                )
+                if certification is not None
+                else {
+                    "runId": current["campaign"]["runId"],
+                    "commit": current["campaign"]["commit"],
+                }
+            ),
+            **(
+                {
+                    "baseline": campaign_identity(
+                        current["campaign"],
+                        "current evidence",
+                        telemetry_required,
+                    )
+                }
+                if certification is not None
+                else {}
+            ),
             **(
                 {
                     "nonRegression": {

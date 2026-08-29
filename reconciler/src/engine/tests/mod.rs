@@ -588,7 +588,7 @@ impl Fixture {
         let mut history = Vec::new();
         for (index, state) in states.iter().enumerate() {
             let version = u64::try_from(index).expect("version") + 1;
-            let signed = signed_manifest(ManifestFixtureInput {
+            let manifest = signed_manifest(ManifestFixtureInput {
                 blob: &blob,
                 path_hash: &path_hash,
                 version,
@@ -599,8 +599,9 @@ impl Fixture {
                 replicas: &["storage-a", "storage-b"],
             })
             .await;
+            let signed = signed_commit_state(&manifest, signer.as_ref()).await;
             let bytes = signed.canonical_bytes().expect("history bytes");
-            let history_key = high_water_history_key(&path_hash, &signed.payload);
+            let history_key = high_water_history_key(&path_hash, &manifest);
             first.put_control(&history_key, bytes.clone());
             second.put_control(&history_key, bytes.clone());
             let first_etag = first
@@ -611,29 +612,23 @@ impl Fixture {
                 .control(&history_key)
                 .and_then(|value| value.etag)
                 .expect("second history ETag");
-            if signed.payload.state == ManifestState::Committed {
-                let committed_key = format!(
-                    "{}/committed.json",
-                    expected_version_prefix(&path_hash, &signed.payload).expect("prefix")
-                );
-                first.put_control(&committed_key, bytes.clone());
-                second.put_control(&committed_key, bytes.clone());
+            if manifest.state == ManifestState::Committed {
                 let content = format!("content-{version}").into_bytes();
                 first.put_data(
-                    &signed.payload.content_container,
-                    &signed.payload.content_object,
+                    &manifest.content_container,
+                    &manifest.content_object,
                     content.clone(),
                 );
                 second.put_data(
-                    &signed.payload.content_container,
-                    &signed.payload.content_object,
+                    &manifest.content_container,
+                    &manifest.content_object,
                     content,
                 );
             }
-            previous = Some(signed.payload.logical_etag.clone());
+            previous = Some(manifest.logical_etag.clone());
             history.push(ValidatedHistoryEntry {
                 logical_blob: logical_blob.clone(),
-                signed,
+                manifest,
                 bytes,
                 object_key: history_key,
                 first_etag: Some(first_etag),
@@ -657,13 +652,12 @@ impl Fixture {
         let replica = || ValidatedReplica {
             head: ValidatedHead {
                 logical_blob: active.logical_blob.clone(),
-                signed: active.signed.clone(),
+                manifest: active.manifest.clone(),
                 bytes: active.bytes.clone(),
                 backend_etag: Some("\"head\"".to_owned()),
             },
             block_manifest: None,
             block_pages: Vec::new(),
-            committed_manifest: active.bytes.clone(),
             high_water_checkpoint: active.bytes.clone(),
         };
         (replica(), replica())
@@ -671,7 +665,7 @@ impl Fixture {
 
     fn replace_history(&self, version: usize, first: bool, second: bool, bytes: Vec<u8>) {
         let original = &self.history[version - 1];
-        let key = high_water_history_key(&self.logical_blob.path_hash(), &original.signed.payload);
+        let key = high_water_history_key(&self.logical_blob.path_hash(), &original.manifest);
         if first {
             self.first.put_control(&key, bytes.clone());
         }
@@ -737,8 +731,7 @@ impl Fixture {
                     .history
                     .last()
                     .expect("active")
-                    .signed
-                    .payload
+                    .manifest
                     .logical_version,
                 collected_through_logical_version: through,
                 collected_committed_versions: collected,
@@ -776,12 +769,9 @@ impl Fixture {
                 ring_version: 1,
                 checkpoint_version,
                 compacted_through_logical_version: through,
-                compacted_through_state: terminal.signed.payload.state,
-                compacted_through_logical_etag: terminal.signed.payload.logical_etag.clone(),
-                compacted_through_committed_at_unix_ms: terminal
-                    .signed
-                    .payload
-                    .committed_at_unix_ms,
+                compacted_through_state: terminal.manifest.state,
+                compacted_through_logical_etag: terminal.manifest.logical_etag.clone(),
+                compacted_through_committed_at_unix_ms: terminal.manifest.committed_at_unix_ms,
                 covered_terminal_manifest_sha256: sha256_bytes(&terminal.bytes),
                 previous_checkpoint_sha256: previous.map(|(_, bytes)| sha256_bytes(bytes)),
                 previous_checkpoint_version: previous.map(|(version, _)| version),
@@ -826,7 +816,7 @@ struct ManifestFixtureInput<'a> {
     replicas: &'a [&'a str],
 }
 
-async fn signed_manifest(input: ManifestFixtureInput<'_>) -> SignedDocument<CommitManifest> {
+async fn signed_manifest(input: ManifestFixtureInput<'_>) -> CommitManifest {
     let ManifestFixtureInput {
         blob,
         path_hash,
@@ -880,7 +870,7 @@ async fn signed_manifest(input: ManifestFixtureInput<'_>) -> SignedDocument<Comm
             None,
         )
     };
-    let payload = CommitManifest {
+    CommitManifest {
         blob: blob.to_owned(),
         caller: overmesh_gateway::identity::CallerIdentity {
             tenant_id: "test-tenant".to_owned(),
@@ -905,10 +895,27 @@ async fn signed_manifest(input: ManifestFixtureInput<'_>) -> SignedDocument<Comm
         state,
         prepared_replicas: replicas.iter().map(|value| (*value).to_owned()).collect(),
         signing_key_id: signer.key_id().to_owned(),
-    };
-    SignedDocument::create(payload, SignatureDomain::CommitManifest, signer)
-        .await
-        .expect("signed manifest")
+    }
+}
+
+/// Wraps a committed generation in the ADR-0012 merged commit-state document.
+async fn signed_commit_state(
+    manifest: &CommitManifest,
+    signer: &dyn ManifestSigner,
+) -> SignedDocument<BlobCommitState> {
+    SignedDocument::create(
+        BlobCommitState::new(
+            &manifest.blob,
+            manifest.ring_version,
+            Some(manifest.clone()),
+            None,
+            signer.key_id(),
+        ),
+        SignatureDomain::BlobCommitState,
+        signer,
+    )
+    .await
+    .expect("signed commit state")
 }
 
 fn test_ring(ids: &[&str]) -> RingDocument {

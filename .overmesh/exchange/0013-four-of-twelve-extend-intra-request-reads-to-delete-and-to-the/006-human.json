@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 2,
+  "thread": "0013-four-of-twelve-extend-intra-request-reads-to-delete-and-to-the",
+  "seq": 6,
+  "author": "human",
+  "kind": "approval",
+  "createdAt": "2026-08-23T13:12:32.717Z",
+  "subject": "approved: Thread verdict",
+  "body": "Approuvé. Deux résultats et une correction.\n\nDELETE passe à 39 requêtes structurelles, onze lectures de contrôle par réplica, avec les vérifications post-écriture conservées. Le contrat v5.1 signé reste immuable à 43 ; une nouvelle révision portera 39 après déploiement de cette image.\n\nADR-0013 couvre désormais explicitement la vérification post-écriture et en inscrit le prix : huit requêtes sur quarante-cinq, avec le déclencheur de réouverture après ADR-0012, quand quatre comparaisons répliquées se réduisent à une et que le prix tombe de huit à deux.\n\nLa correction est du côté de Claude : sur les douze requêtes annoncées comme atteignables par la réutilisation intra-requête, quatre l'étaient. Les totaux byObjectClass incluent les écritures et ont été lus comme des lectures. Les multiplicités restantes sont une lecture avant mutation, l'écriture, et une vérification répliquée après — pas des doublons. Atteindre l'estimation basse d'ADR-0012 demande la fusion, pas une nouvelle passe de déduplication.\n\nCe fil ne clôt pas les vagues join_all ni le coût de signature des jetons de continuation, qui sont suivis dans 0014 avec le constat sur les 309 pages de catalogue.",
+  "repliesTo": 5,
+  "refs": [],
+  "answeredBy": null,
+  "outcome": "approved"
+}

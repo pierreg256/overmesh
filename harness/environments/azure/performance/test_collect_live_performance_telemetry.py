@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 from collections import Counter
 from datetime import datetime, timezone
 from subprocess import CalledProcessError
@@ -18,6 +20,7 @@ from collect_live_performance_telemetry import (
     deduplicate_events,
     event_timestamp,
     events_in_case_window,
+    expand_backend_request_batches,
     fingerprint_count_vector,
     fingerprint_count_vector_complete,
     log_rows,
@@ -41,6 +44,155 @@ from collect_live_performance_telemetry import (
 
 
 class CollectLivePerformanceTelemetryTests(unittest.TestCase):
+    def test_backend_request_batches_expand_without_reconstructing_fields(
+        self,
+    ) -> None:
+        payload = json.dumps(
+            {
+                "schemaVersion": 1,
+                "clientRequestFingerprint": "fingerprint-a",
+                "requestEventId": "event-a",
+                "backends": ["storage-a", "storage-b"],
+                "operations": ["control_get_object"],
+                "objectClasses": ["head"],
+                "records": [
+                    [0, 0, 0, 200, 100, True],
+                    [1, 0, 0, 404, 200, True],
+                ],
+            },
+            separators=(",", ":"),
+        ).encode()
+        midpoint = len(payload) // 2
+        chunks = [
+            base64.urlsafe_b64encode(part).decode().rstrip("=")
+            for part in (payload[:midpoint], payload[midpoint:])
+        ]
+        timestamp = datetime(2026, 8, 29, tzinfo=timezone.utc)
+        events = [
+            (
+                timestamp,
+                'event="overmesh_backend_request_batch" '
+                "request_event_id=event-a "
+                "client_request_fingerprint=fingerprint-a "
+                f"chunk_index={index} chunk_count=2 record_total=2 "
+                f'payload_base64="{chunks[index]}"',
+            )
+            for index in (1, 0)
+        ]
+
+        expanded, incomplete = expand_backend_request_batches(events)
+
+        self.assertEqual(incomplete, [])
+        metrics = aggregate_events([message for _, message in expanded])
+        self.assertEqual(metrics["backendRequests"]["count"], 2)
+        self.assertEqual(
+            metrics["backendRequests"]["byBackend"],
+            {"storage-a": 1, "storage-b": 1},
+        )
+        self.assertEqual(
+            metrics["backendRequests"]["byObjectClassAndStatus"],
+            {"head": {"200": 1, "404": 1}},
+        )
+        self.assertEqual(
+            metrics["backendRequests"]["responseHeadersDuration"][
+                "totalDurationUs"
+            ],
+            300,
+        )
+
+    def test_backend_request_batch_rejects_a_missing_chunk(self) -> None:
+        timestamp = datetime(2026, 8, 29, tzinfo=timezone.utc)
+        events = [
+            (
+                timestamp,
+                'event="overmesh_backend_request_batch" '
+                "request_event_id=event-a "
+                "client_request_fingerprint=fingerprint-a "
+                "chunk_index=0 chunk_count=2 record_total=1 "
+                'payload_base64="e30"',
+            )
+        ]
+
+        expanded, incomplete = expand_backend_request_batches(events)
+
+        self.assertEqual(expanded, [])
+        self.assertEqual(
+            incomplete,
+            [
+                "request_event_id=event-a missing_chunks=[1] "
+                "expected_chunks=2"
+            ],
+        )
+
+    def test_backend_request_batch_preserves_duplicate_records(self) -> None:
+        payload = json.dumps(
+            {
+                "schemaVersion": 1,
+                "clientRequestFingerprint": "fingerprint-a",
+                "requestEventId": "event-a",
+                "backends": ["storage-a"],
+                "operations": ["data_put"],
+                "objectClasses": ["data"],
+                "records": [
+                    [0, 0, 0, 201, 100, True],
+                    [0, 0, 0, 201, 100, True],
+                ],
+            },
+            separators=(",", ":"),
+        ).encode()
+        encoded = base64.urlsafe_b64encode(payload).decode().rstrip("=")
+        timestamp = datetime(2026, 8, 29, tzinfo=timezone.utc)
+
+        expanded, incomplete = expand_backend_request_batches(
+            [
+                (
+                    timestamp,
+                    'event="overmesh_backend_request_batch" '
+                    "request_event_id=event-a "
+                    "client_request_fingerprint=fingerprint-a "
+                    "chunk_index=0 chunk_count=1 record_total=2 "
+                    f'payload_base64="{encoded}"',
+                )
+            ]
+        )
+
+        self.assertEqual(incomplete, [])
+        self.assertEqual(len(expanded), 2)
+
+    def test_backend_request_batch_rejects_conflicting_chunks(self) -> None:
+        timestamp = datetime(2026, 8, 29, tzinfo=timezone.utc)
+        common = (
+            'event="overmesh_backend_request_batch" '
+            "request_event_id=event-a "
+            "client_request_fingerprint=fingerprint-a "
+            "chunk_index=0 chunk_count=1 record_total=1 "
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "conflicting chunk 0"):
+            expand_backend_request_batches(
+                [
+                    (timestamp, common + 'payload_base64="e30"'),
+                    (timestamp, common + 'payload_base64="W10"'),
+                ]
+            )
+
+    def test_backend_request_batch_rejects_malformed_payload(self) -> None:
+        timestamp = datetime(2026, 8, 29, tzinfo=timezone.utc)
+
+        with self.assertRaisesRegex(RuntimeError, "invalid payload"):
+            expand_backend_request_batches(
+                [
+                    (
+                        timestamp,
+                        'event="overmesh_backend_request_batch" '
+                        "request_event_id=event-a "
+                        "client_request_fingerprint=fingerprint-a "
+                        "chunk_index=0 chunk_count=1 record_total=1 "
+                        'payload_base64="not+url+safe"',
+                    )
+                ]
+            )
+
     def test_log_rows_accepts_azure_cli_list_shape(self) -> None:
         rows = log_rows(
             [
@@ -489,7 +641,31 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
         )
 
     @patch("collect_live_performance_telemetry.run_json")
-    def test_repeated_query_deduplicates_dual_table_ingestion(
+    def test_log_query_unions_multiple_workspaces(self, run_json) -> None:
+        run_json.return_value = []
+        query_logs(
+            "workspace-frc,workspace-swe",
+            "gateway-frc,gateway-swe",
+            "2026-01-01T00:00:00Z",
+            "2026-01-01T00:01:00Z",
+        )
+        command = run_json.call_args.args[0]
+        query = command[command.index("--analytics-query") + 1]
+        self.assertIn(
+            'workspace("workspace-frc").ContainerAppConsoleLogs',
+            query,
+        )
+        self.assertIn(
+            'workspace("workspace-swe").ContainerAppConsoleLogs',
+            query,
+        )
+        self.assertEqual(
+            command[command.index("--workspace") + 1],
+            "workspace-frc",
+        )
+
+    @patch("collect_live_performance_telemetry.run_json")
+    def test_repeated_query_scopes_events_by_request_fingerprint(
         self,
         run_json,
     ) -> None:
@@ -500,22 +676,34 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
             [
                 {
                     "id": "put-1kib-c1",
+                    "warmupIterations": 1,
+                    "repeatability": {"runs": 1},
                     "runs": [
                         {
                             "repeat": 1,
+                            "iterations": 1,
                             "startedAt": "2026-01-01T00:00:00Z",
                             "finishedAt": "2026-01-01T00:01:00Z",
                         }
                     ],
                 }
             ],
+            "run-1",
         )
         command = run_json.call_args.args[0]
         query = command[command.index("--analytics-query") + 1]
+        expected_fingerprint = request_fingerprint(
+            request_id("run-1", "gateway", "put-1kib-c1", 1)
+        )
         self.assertIn(
             "summarize TimeGenerated=min(TimeGenerated) by AppName, Message",
             query,
         )
+        self.assertIn(
+            f"Fingerprint in ('{expected_fingerprint}')",
+            query,
+        )
+        self.assertIn("Scope=TemporalCaseId", query)
         self.assertIn("RowType='fingerprint-operation'", query)
         self.assertIn("RowType='ambient-operation-object-class'", query)
         self.assertIn(
@@ -547,6 +735,7 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
             "workspace",
             "gateway",
             [{"id": "case-a"}, {"id": "case-b"}],
+            "run-1",
         )
         self.assertEqual(
             rows,
@@ -561,6 +750,10 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
                 (("id", "case-a"),),
                 (("id", "case-b"),),
             },
+        )
+        self.assertEqual(
+            {call.args[3] for call in query_repeated_aggregates.call_args_list},
+            {"run-1"},
         )
 
     @patch("collect_live_performance_telemetry.time.sleep")
@@ -580,6 +773,7 @@ class CollectLivePerformanceTelemetryTests(unittest.TestCase):
             "workspace",
             "gateway",
             [{"id": "case-a"}],
+            "run-1",
         )
         self.assertEqual(rows, [{"Scope": "case-a"}])
         sleep.assert_called_once_with(5)

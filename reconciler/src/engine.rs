@@ -13,11 +13,11 @@ use overmesh_gateway::{
     },
     identity::ControlToken,
     manifest::{
-        BlockDescriptor, BlockManifest, BlockManifestPage, CommitManifest, GarbageCollectionMarker,
-        HistoryCompactionCheckpoint, ManifestSigner, ManifestState, ReconciliationClassification,
-        ReconciliationRecord, ReconciliationRecordAction, SignatureDomain, SignedDocument,
-        commit_manifest_object_prefix, logical_etag, sha256_bytes, validate_block_manifest_link,
-        validate_block_manifest_page,
+        BlobCommitState, BlockDescriptor, BlockManifest, BlockManifestPage, CommitManifest,
+        GarbageCollectionMarker, HistoryCompactionCheckpoint, ManifestSigner, ManifestState,
+        ReconciliationClassification, ReconciliationRecord, ReconciliationRecordAction,
+        SignatureDomain, SignedDocument, logical_etag, sha256_bytes, validate_blob_commit_state,
+        validate_block_manifest_link, validate_block_manifest_page,
     },
     resource::{LogicalBlobId, stable_component},
     ring::SignedRing,
@@ -86,16 +86,17 @@ use history::{
 };
 use storage::*;
 
-#[cfg(test)]
 use history::high_water_history_key;
 #[cfg(test)]
 use orchestration::authoritative_over;
 #[cfg(test)]
 use overmesh_gateway::commit::logical_path_hash;
 
+/// The merged ADR-0012 commit-state document published at `heads/{path_hash}`,
+/// together with the committed generation it asserts.
 struct ValidatedHead {
     logical_blob: LogicalBlobId,
-    signed: SignedDocument<CommitManifest>,
+    manifest: CommitManifest,
     bytes: Vec<u8>,
     backend_etag: Option<String>,
 }
@@ -104,7 +105,6 @@ struct ValidatedReplica {
     head: ValidatedHead,
     block_manifest: Option<Vec<u8>>,
     block_pages: Vec<(String, Vec<u8>)>,
-    committed_manifest: Vec<u8>,
     high_water_checkpoint: Vec<u8>,
 }
 
@@ -194,7 +194,7 @@ struct ValidatedHistory {
 
 struct ValidatedHistoryEntry {
     logical_blob: LogicalBlobId,
-    signed: SignedDocument<CommitManifest>,
+    manifest: CommitManifest,
     bytes: Vec<u8>,
     object_key: String,
     first_etag: Option<String>,
@@ -274,12 +274,45 @@ impl ReplicaValidation {
             | Self::Unavailable { .. } => None,
         }
     }
+
+    /// The terminal form of the generation this replica publishes. It is the
+    /// durable high-water history entry, which never carries a preparation.
+    fn terminal_commit_state(&self) -> Option<&[u8]> {
+        match self {
+            Self::RecoverableTombstone { replica, .. } | Self::Valid(replica) => {
+                Some(&replica.high_water_checkpoint)
+            }
+            Self::MissingHead
+            | Self::Incomplete { .. }
+            | Self::Tampered { .. }
+            | Self::Unavailable { .. } => None,
+        }
+    }
 }
 
-fn committed_manifest_object(manifest: &CommitManifest) -> Result<String> {
-    let prefix = commit_manifest_object_prefix(manifest)
-        .context("commit manifest does not use the expected version layout")?;
-    Ok(format!("{prefix}/committed.json"))
+/// Parses and verifies a merged commit-state document. Callers trust nothing
+/// before this returns.
+fn parse_blob_commit_state(
+    bytes: &[u8],
+    signer: &dyn ManifestSigner,
+    document_kind: &str,
+) -> Result<SignedDocument<BlobCommitState>> {
+    let signed = SignedDocument::<BlobCommitState>::from_bytes(bytes)
+        .with_context(|| format!("{document_kind} is not valid JSON"))?;
+    ensure!(
+        signed.canonical_bytes()? == bytes,
+        "{document_kind} is not canonically encoded"
+    );
+    signed
+        .verify(
+            SignatureDomain::BlobCommitState,
+            &signed.payload.signing_key_id,
+            signer,
+        )
+        .with_context(|| format!("{document_kind} signature validation failed"))?;
+    validate_blob_commit_state(&signed.payload)
+        .with_context(|| format!("{document_kind} structure validation failed"))?;
+    Ok(signed)
 }
 
 fn head_object_key(logical_blob: &LogicalBlobId) -> String {

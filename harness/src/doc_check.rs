@@ -23,6 +23,11 @@ const TRACEABILITY_PATH: &str = "docs/traceability.toml";
 const ADR_DIRECTORY: &str = "docs/adr";
 const ADR_INDEX_PATH: &str = "docs/adr/README.md";
 const RETAINED_ARTIFACTS_DIRECTORY: &str = "harness/artifacts";
+const REDACTION_CHECKED_DIRECTORIES: [&str; 2] =
+    [RETAINED_ARTIFACTS_DIRECTORY, ".overmesh/exchange"];
+const LEGACY_REDACTION_EXEMPTIONS: [&str; 1] = [
+    ".overmesh/exchange/0008-documentation-drift-including-a-harness-specification-must-that/007-copilot.json",
+];
 const PUBLISHED_BASE_REF_ENV: &str = "OVERMESH_DOC_CHECK_BASE_REF";
 const DEFAULT_PUBLISHED_BASE_REF: &str = "refs/remotes/origin/main";
 
@@ -965,33 +970,38 @@ fn check_retained_artifact_redaction(
     repository_root: &Path,
     report: &mut DocumentationReport,
 ) -> Result<()> {
-    let artifacts = repository_root.join(RETAINED_ARTIFACTS_DIRECTORY);
-    if !artifacts.is_dir() {
-        return Ok(());
-    }
-    for entry in WalkDir::new(&artifacts)
-        .into_iter()
-        .filter_map(std::result::Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-    {
-        let relative = entry
-            .path()
-            .strip_prefix(repository_root)
-            .context("retained artifact escaped repository root")?
-            .to_string_lossy()
-            .replace('\\', "/");
-        let bytes = fs::read(entry.path())
-            .with_context(|| format!("failed to read retained artifact {relative}"))?;
-        let content = String::from_utf8_lossy(&bytes);
-        for (index, line) in content.lines().enumerate() {
-            if let Some(description) = forbidden_retained_artifact_pattern(line) {
-                report.push(
-                    "R8",
-                    &relative,
-                    Some(index + 1),
-                    format!("contains a forbidden retained-artifact pattern: {description}"),
-                    "regenerate the retained artifact with harness/environments/azure/build-live-evidence.py before signing it",
-                );
+    for directory in REDACTION_CHECKED_DIRECTORIES {
+        let root = repository_root.join(directory);
+        if !root.is_dir() {
+            continue;
+        }
+        for entry in WalkDir::new(&root)
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| entry.file_type().is_file())
+        {
+            let relative = entry
+                .path()
+                .strip_prefix(repository_root)
+                .context("redaction-checked file escaped repository root")?
+                .to_string_lossy()
+                .replace('\\', "/");
+            if LEGACY_REDACTION_EXEMPTIONS.contains(&relative.as_str()) {
+                continue;
+            }
+            let bytes = fs::read(entry.path())
+                .with_context(|| format!("failed to read redaction-checked file {relative}"))?;
+            let content = String::from_utf8_lossy(&bytes);
+            for (index, line) in content.lines().enumerate() {
+                if let Some(description) = forbidden_retained_artifact_pattern(line) {
+                    report.push(
+                        "R8",
+                        &relative,
+                        Some(index + 1),
+                        format!("contains a forbidden retained-artifact pattern: {description}"),
+                        "regenerate retained evidence before signing it, or keep an unsafe exchange record out of Git",
+                    );
+                }
             }
         }
     }
@@ -1043,21 +1053,38 @@ fn contains_guid(value: &str) -> bool {
 }
 
 fn contains_ip_literal(value: &str) -> bool {
-    value
-        .split(|character: char| {
-            !(character.is_ascii_hexdigit() || matches!(character, ':' | '.' | '[' | ']' | '%'))
-        })
-        .filter(|candidate| !candidate.is_empty())
-        .any(|candidate| {
-            let candidate = candidate.trim_matches(['[', ']']);
-            Ipv4Addr::from_str(candidate).is_ok()
-                || (candidate != "::"
-                    && (candidate.len() >= 7 || candidate.starts_with("::"))
-                    && candidate.split_once('%').map_or_else(
-                        || Ipv6Addr::from_str(candidate).is_ok(),
-                        |(address, _)| Ipv6Addr::from_str(address).is_ok(),
-                    ))
-        })
+    let bytes = value.as_bytes();
+    let mut start = None;
+    for index in 0..=bytes.len() {
+        let allowed = index < bytes.len()
+            && (bytes[index].is_ascii_hexdigit()
+                || matches!(bytes[index], b':' | b'.' | b'[' | b']' | b'%'));
+        if allowed {
+            start.get_or_insert(index);
+            continue;
+        }
+        let Some(candidate_start) = start.take() else {
+            continue;
+        };
+        if candidate_start > 0 && bytes[candidate_start - 1].is_ascii_alphanumeric() {
+            continue;
+        }
+        if index < bytes.len() && bytes[index].is_ascii_alphanumeric() {
+            continue;
+        }
+        let candidate = value[candidate_start..index].trim_matches(['[', ']']);
+        if Ipv4Addr::from_str(candidate).is_ok()
+            || (candidate != "::"
+                && (candidate.len() >= 7 || candidate.starts_with("::"))
+                && candidate.split_once('%').map_or_else(
+                    || Ipv6Addr::from_str(candidate).is_ok(),
+                    |(address, _)| Ipv6Addr::from_str(address).is_ok(),
+                ))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn contains_email_address(value: &str) -> bool {
@@ -1804,6 +1831,35 @@ reason = "Intentional fixture."
                 .iter()
                 .any(|message| message.contains("Authorization header"))
         );
+    }
+
+    #[test]
+    fn rejects_unredacted_exchange_provenance() {
+        let fixture = documentation_fixture();
+        write(
+            fixture.path(),
+            ".overmesh/exchange/0001-review/001-assistant.json",
+            r#"{"body":"resource /subscriptions/11111111-2222-3333-4444-555555555555"}"#,
+        );
+
+        let report = check(fixture.path()).expect("check fixture");
+        let violations = report
+            .violations
+            .iter()
+            .filter(|violation| violation.rule == "R8")
+            .collect::<Vec<_>>();
+        assert_eq!(violations.len(), 1);
+        assert_eq!(
+            violations[0].path,
+            ".overmesh/exchange/0001-review/001-assistant.json"
+        );
+    }
+
+    #[test]
+    fn rust_paths_are_not_ipv6_literals() {
+        assert!(!contains_ip_literal("p256::ecdsa::VerifyingKey"));
+        assert!(!contains_ip_literal("self.backend(&replicas[0].id)?"));
+        assert!(contains_ip_literal(r#"{"address":"2001:db8::1"}"#));
     }
 
     #[test]

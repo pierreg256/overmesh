@@ -641,7 +641,7 @@ resource validationVm 'Microsoft.Compute/virtualMachines@2024-11-01' = {
   }
   properties: {
     hardwareProfile: {
-      vmSize: 'Standard_B1s'
+      vmSize: 'Standard_D2as_v5'
     }
     osProfile: {
       computerName: 'omv050'

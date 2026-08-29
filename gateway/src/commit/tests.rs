@@ -38,6 +38,10 @@ struct MemoryState {
     objects: Mutex<HashMap<String, ObjectValue>>,
     control_get_calls: Mutex<HashMap<String, u64>>,
     control_get_failures: Mutex<HashSet<String>>,
+    control_put_calls: AtomicU64,
+    control_acquire_lock_calls: AtomicU64,
+    control_release_lock_calls: AtomicU64,
+    authorize_blob_delete_calls: AtomicU64,
     etag_counter: AtomicU64,
     digest_calls: AtomicU64,
     list_calls: AtomicU64,
@@ -54,6 +58,7 @@ struct MemoryState {
     containers: Mutex<BTreeMap<String, u64>>,
     lease_held: AtomicBool,
     fail_prefix: Mutex<Option<String>>,
+    fail_prefix_skip: AtomicU64,
     empty_control_page_once: AtomicBool,
 }
 
@@ -72,6 +77,14 @@ impl MemoryBackend {
 
     fn fail_on_prefix(&self, prefix: &str) {
         *self.state.fail_prefix.lock().expect("failure lock") = Some(prefix.to_owned());
+        self.state.fail_prefix_skip.store(0, Ordering::SeqCst);
+    }
+
+    /// Lets the first `skip` writes through so a failure can be injected into a
+    /// specific step of the ADR-0012 commit-state transition.
+    fn fail_on_prefix_after(&self, prefix: &str, skip: u64) {
+        *self.state.fail_prefix.lock().expect("failure lock") = Some(prefix.to_owned());
+        self.state.fail_prefix_skip.store(skip, Ordering::SeqCst);
     }
 
     fn clear_failure(&self) {
@@ -159,6 +172,60 @@ impl MemoryBackend {
             .clear();
     }
 
+    fn reset_request_budget_counts(&self) {
+        self.reset_control_get_counts();
+        self.state.control_put_calls.store(0, Ordering::SeqCst);
+        self.state
+            .control_acquire_lock_calls
+            .store(0, Ordering::SeqCst);
+        self.state
+            .control_release_lock_calls
+            .store(0, Ordering::SeqCst);
+        self.state
+            .authorize_blob_delete_calls
+            .store(0, Ordering::SeqCst);
+        self.state
+            .caller_data_write_calls
+            .store(0, Ordering::SeqCst);
+        self.state.list_calls.store(0, Ordering::SeqCst);
+        self.state.control_page_calls.store(0, Ordering::SeqCst);
+        self.state
+            .caller_range_fingerprints
+            .lock()
+            .expect("fingerprint lock")
+            .clear();
+    }
+
+    fn request_budget_count(&self) -> u64 {
+        self.control_get_snapshot().values().sum::<u64>()
+            + self.state.control_put_calls.load(Ordering::SeqCst)
+            // The Azure implementation conditionally creates the lock object,
+            // then acquires its lease.
+            + 2 * self
+                .state
+                .control_acquire_lock_calls
+                .load(Ordering::SeqCst)
+            + self
+                .state
+                .control_release_lock_calls
+                .load(Ordering::SeqCst)
+            + self
+                .state
+                .authorize_blob_delete_calls
+                .load(Ordering::SeqCst)
+            + self.state.caller_data_write_calls.load(Ordering::SeqCst)
+            + self.state.list_calls.load(Ordering::SeqCst)
+            + self.state.control_page_calls.load(Ordering::SeqCst)
+            + u64::try_from(
+                self.state
+                    .caller_range_fingerprints
+                    .lock()
+                    .expect("fingerprint lock")
+                    .len(),
+            )
+            .expect("range call count")
+    }
+
     fn maybe_fail(&self, key: &str) -> Result<(), BackendError> {
         if self
             .state
@@ -168,6 +235,16 @@ impl MemoryBackend {
             .as_ref()
             .is_some_and(|prefix| key.starts_with(prefix))
         {
+            if self
+                .state
+                .fail_prefix_skip
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+                    value.checked_sub(1)
+                })
+                .is_ok()
+            {
+                return Ok(());
+            }
             return Err(BackendError::Http {
                 status: StatusCode::SERVICE_UNAVAILABLE,
                 message: "injected failure".to_owned(),
@@ -233,6 +310,7 @@ impl ReplicaBackend for MemoryBackend {
         condition: PutCondition,
         _control_token: &ControlToken,
     ) -> Result<PutResult, BackendError> {
+        self.state.control_put_calls.fetch_add(1, Ordering::SeqCst);
         self.put(object_key, bytes, condition)
     }
 
@@ -334,6 +412,9 @@ impl ReplicaBackend for MemoryBackend {
         _blob: &LogicalBlobId,
         _caller_token: &CallerToken,
     ) -> Result<(), BackendError> {
+        self.state
+            .authorize_blob_delete_calls
+            .fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
@@ -538,6 +619,9 @@ impl ReplicaBackend for MemoryBackend {
         _control_token: &ControlToken,
     ) -> Result<BackendLease, BackendError> {
         self.state
+            .control_acquire_lock_calls
+            .fetch_add(1, Ordering::SeqCst);
+        self.state
             .lease_held
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .map_err(|_| BackendError::LeaseConflict)?;
@@ -552,6 +636,9 @@ impl ReplicaBackend for MemoryBackend {
         _lease: &BackendLease,
         _control_token: &ControlToken,
     ) -> Result<(), BackendError> {
+        self.state
+            .control_release_lock_calls
+            .fetch_add(1, Ordering::SeqCst);
         self.state.lease_held.store(false, Ordering::SeqCst);
         Ok(())
     }
@@ -905,6 +992,36 @@ fn other_principal() -> AuthenticatedPrincipal {
     }
 }
 
+fn published_manifest(bytes: &[u8]) -> CommitManifest {
+    SignedDocument::<BlobCommitState>::from_bytes(bytes)
+        .expect("merged commit state document")
+        .payload
+        .current()
+        .expect("published generation")
+        .clone()
+}
+
+fn state_document(backend: &MemoryBackend, logical_blob: &LogicalBlobId) -> BlobCommitState {
+    let bytes = backend
+        .object(&format!("heads/{}.json", logical_blob.path_hash()))
+        .expect("merged commit state")
+        .bytes;
+    SignedDocument::<BlobCommitState>::from_bytes(&bytes)
+        .expect("merged commit state document")
+        .payload
+}
+
+fn history_key_for(backend: &MemoryBackend, logical_blob: &LogicalBlobId) -> String {
+    let state = state_document(backend, logical_blob);
+    let current = state.current().expect("published generation");
+    format!(
+        "high-water/{}/history/{:020}-{}.json",
+        logical_blob.path_hash(),
+        current.logical_version,
+        stable_component(&current.write_id)
+    )
+}
+
 fn blob(path: &str) -> LogicalBlobId {
     LogicalBlobId::parse("test-account", path).expect("logical blob")
 }
@@ -947,11 +1064,10 @@ async fn commits_signed_tombstone_to_both_replicas() {
     .expect("commit");
     let head_key = format!("heads/{}.json", blob("/container/deleted").path_hash());
     let committed_head = primary.object(&head_key).expect("committed head");
-    let committed =
-        SignedDocument::<CommitManifest>::from_bytes(&committed_head.bytes).expect("manifest");
+    let committed = published_manifest(&committed_head.bytes);
     let content_key = format!(
         "data/{}/{}",
-        committed.payload.content_container, committed.payload.content_object
+        committed.content_container, committed.content_object
     );
 
     let result = delete(
@@ -968,21 +1084,22 @@ async fn commits_signed_tombstone_to_both_replicas() {
     let primary_head = primary.object(&head_key).expect("primary tombstone");
     let secondary_head = secondary.object(&head_key).expect("secondary tombstone");
     assert_eq!(primary_head.bytes, secondary_head.bytes);
-    let tombstone =
-        SignedDocument::<CommitManifest>::from_bytes(&primary_head.bytes).expect("tombstone");
-    tombstone
+    let signed_state = SignedDocument::<BlobCommitState>::from_bytes(&primary_head.bytes)
+        .expect("merged commit state");
+    signed_state
         .verify(
-            SignatureDomain::CommitManifest,
-            &tombstone.payload.signing_key_id,
+            SignatureDomain::BlobCommitState,
+            &signed_state.payload.signing_key_id,
             coordinator.signer.as_ref(),
         )
         .expect("tombstone signature");
-    assert_eq!(tombstone.payload.state, ManifestState::Tombstoned);
+    let tombstone = published_manifest(&primary_head.bytes);
+    assert_eq!(tombstone.state, ManifestState::Tombstoned);
     assert_eq!(
-        tombstone.payload.previous_logical_etag,
-        Some(committed.payload.logical_etag)
+        tombstone.previous_logical_etag,
+        Some(committed.logical_etag)
     );
-    assert!(tombstone.payload.deleted_at_unix_ms.is_some());
+    assert!(tombstone.deleted_at_unix_ms.is_some());
     assert!(primary.object(&content_key).is_some());
     assert!(secondary.object(&content_key).is_some());
     assert!(matches!(
@@ -1011,14 +1128,10 @@ async fn first_put_control_reads_have_a_closed_object_level_budget() {
 
     let primary_reads = primary.control_get_snapshot();
     let secondary_reads = secondary.control_get_snapshot();
-    assert_eq!(
-        primary_reads.values().sum::<u64>(),
-        12,
-        "{primary_reads:#?}"
-    );
+    assert_eq!(primary_reads.values().sum::<u64>(), 8, "{primary_reads:#?}");
     assert_eq!(
         secondary_reads.values().sum::<u64>(),
-        12,
+        8,
         "{secondary_reads:#?}"
     );
     let mut by_object_class = BTreeMap::<&str, u64>::new();
@@ -1027,19 +1140,66 @@ async fn first_put_control_reads_have_a_closed_object_level_budget() {
             .entry(control_object_class(object_key))
             .or_default() += count;
     }
+    // ADR-0012 merges the head, high-water current, prepared and terminal
+    // manifests into one document. The three remaining reads of that class are
+    // one load and the two post-write verifications ADR-0013 requires.
     assert_eq!(
         by_object_class,
         BTreeMap::from([
             ("block_manifest", 2),
             ("catalogue", 4),
             ("compaction_checkpoint", 2),
-            ("head", 4),
-            ("high_water_current", 4),
-            ("prepared_manifest", 4),
+            ("head", 6),
             ("quarantine", 2),
-            ("terminal_manifest", 2),
         ])
     );
+    // A first write has no published generation, so it needs no durable-history
+    // rollback probe.
+    assert_eq!(primary.state.list_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(secondary.state.list_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        primary.request_budget_count() + secondary.request_budget_count(),
+        33
+    );
+}
+
+#[tokio::test]
+async fn overwrite_has_a_closed_backend_request_budget() {
+    let path = "/container/overwrite-budget";
+    let (coordinator, _, primary, secondary) = read_fixture(path);
+    let first = spool_body(Body::from("first"), 4).await.expect("first");
+    let second = spool_body(Body::from("second"), 4).await.expect("second");
+
+    commit(
+        &coordinator,
+        path,
+        "write-before-overwrite-budget",
+        &first,
+        LogicalCondition::None,
+    )
+    .await
+    .expect("first commit");
+    for backend in [&primary, &secondary] {
+        backend.reset_request_budget_counts();
+    }
+
+    commit(
+        &coordinator,
+        path,
+        "overwrite-budget",
+        &second,
+        LogicalCondition::None,
+    )
+    .await
+    .expect("overwrite");
+
+    assert_eq!(
+        primary.request_budget_count() + secondary.request_budget_count(),
+        37
+    );
+    for backend in [&primary, &secondary] {
+        assert_eq!(backend.state.list_calls.load(Ordering::SeqCst), 1);
+    }
 }
 
 #[tokio::test]
@@ -1058,7 +1218,7 @@ async fn delete_control_reads_have_a_closed_object_level_budget() {
     .await
     .expect("commit");
     for backend in [&primary, &secondary] {
-        backend.reset_control_get_counts();
+        backend.reset_request_budget_counts();
     }
 
     delete(&coordinator, path, "delete-budget", LogicalCondition::None)
@@ -1070,11 +1230,9 @@ async fn delete_control_reads_have_a_closed_object_level_budget() {
     let expected = BTreeMap::from([
         ("catalogue", 2),
         ("compaction_checkpoint", 1),
-        ("head", 2),
-        ("high_water_current", 2),
-        ("prepared_manifest", 2),
+        ("head", 3),
+        ("high_water_history", 1),
         ("quarantine", 1),
-        ("terminal_manifest", 1),
     ]);
     for reads in [&primary_reads, &secondary_reads] {
         let mut by_object_class = BTreeMap::<&str, u64>::new();
@@ -1083,8 +1241,69 @@ async fn delete_control_reads_have_a_closed_object_level_budget() {
                 .entry(control_object_class(object_key))
                 .or_default() += count;
         }
-        assert_eq!(reads.values().sum::<u64>(), 11, "{reads:#?}");
+        assert_eq!(reads.values().sum::<u64>(), 8, "{reads:#?}");
         assert_eq!(by_object_class, expected, "{reads:#?}");
+    }
+    // One narrow prefix listing per replica proves no durable history exists
+    // above the published generation.
+    for backend in [&primary, &secondary] {
+        assert_eq!(backend.state.list_calls.load(Ordering::SeqCst), 1);
+    }
+    assert_eq!(
+        primary.request_budget_count() + secondary.request_budget_count(),
+        31
+    );
+}
+
+#[tokio::test]
+async fn block_sequences_have_closed_structural_backend_request_budgets() {
+    use crate::block::{BlockSelection, BlockSelectionKind};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    for (block_count, expected_requests) in [(4_usize, 153_u64), (13, 396)] {
+        let (service, primary, secondary) = service_fixture_parts();
+        let blocks = service.block_service();
+        let logical_blob = blob(&format!("/container/block-budget-{block_count}"));
+        let upload_id = format!("block-budget-{block_count}");
+        let mut selections = Vec::with_capacity(block_count);
+
+        for index in 0..block_count {
+            let block_id = STANDARD.encode(format!("block-{index:04}"));
+            let content = spool_body(Body::from("x"), 1).await.expect("block");
+            blocks
+                .put_block(
+                    &logical_blob,
+                    &principal(),
+                    &upload_id,
+                    &upload_id,
+                    &block_id,
+                    &content,
+                )
+                .await
+                .expect("staged block");
+            selections.push(BlockSelection {
+                kind: BlockSelectionKind::Latest,
+                block_id,
+            });
+        }
+
+        blocks
+            .put_block_list(
+                &logical_blob,
+                &principal(),
+                &upload_id,
+                &upload_id,
+                &selections,
+                LogicalCondition::None,
+            )
+            .await
+            .expect("block list commit");
+
+        assert_eq!(
+            primary.request_budget_count() + secondary.request_budget_count(),
+            expected_requests,
+            "{block_count}-block sequence"
+        );
     }
 }
 
@@ -1367,7 +1586,8 @@ async fn put_block_list_retry_recovers_a_w1_head_publication() {
         kind: BlockSelectionKind::Latest,
         block_id: "YmxvY2stMDAwMQ==".to_owned(),
     }];
-    storage_b.fail_on_prefix("heads/");
+    // Let the preparation land and fail only the commit transition.
+    storage_b.fail_on_prefix_after("heads/", 1);
     assert!(
         blocks
             .put_block_list(
@@ -1398,9 +1618,16 @@ async fn put_block_list_retry_recovers_a_w1_head_publication() {
             .await
             .is_err()
     );
-    let head_key = format!("heads/{}.json", logical_blob.path_hash());
-    assert!(storage_a.object(&head_key).is_some());
-    assert!(storage_b.object(&head_key).is_none());
+    assert!(
+        state_document(&storage_a, &logical_blob)
+            .current()
+            .is_some()
+    );
+    assert!(
+        state_document(&storage_b, &logical_blob)
+            .current()
+            .is_none()
+    );
     storage_b.clear_failure();
     storage_b.deny_blob_write(true);
     assert!(matches!(
@@ -1421,7 +1648,11 @@ async fn put_block_list_retry_recovers_a_w1_head_publication() {
             }
         )))
     ));
-    assert!(storage_b.object(&head_key).is_none());
+    assert!(
+        state_document(&storage_b, &logical_blob)
+            .current()
+            .is_none()
+    );
     storage_b.deny_blob_write(false);
     assert!(
         blocks
@@ -1454,23 +1685,15 @@ async fn put_block_list_retry_recovers_a_w1_head_publication() {
 }
 
 #[tokio::test]
-async fn retry_does_not_spread_an_invalid_one_sided_commit_manifest() {
+async fn retry_does_not_spread_an_invalid_one_sided_commit_state() {
     let (service, primary, secondary) = service_fixture_parts();
     let logical_blob = blob("/container/invalid-one-sided-manifest");
     let write_id = "invalid-one-sided-manifest";
     let content = spool_body(Body::from("content"), 4).await.expect("content");
-    let digest = content
-        .content_sha256
-        .strip_prefix("sha256:")
-        .expect("sha256 digest");
-    let prepared_key = format!(
-        "objects/{}/versions/{}/{digest}/prepared.json",
-        logical_blob.path_hash(),
-        stable_component(write_id)
-    );
+    let state_key = format!("heads/{}.json", logical_blob.path_hash());
     primary
-        .put(&prepared_key, b"{}".to_vec(), PutCondition::IfAbsent)
-        .expect("tampered one-sided manifest");
+        .put(&state_key, b"{}".to_vec(), PutCondition::IfAbsent)
+        .expect("tampered one-sided commit state");
 
     assert!(
         service
@@ -1484,7 +1707,11 @@ async fn retry_does_not_spread_an_invalid_one_sided_commit_manifest() {
             .await
             .is_err()
     );
-    assert!(secondary.object(&prepared_key).is_none());
+    assert!(secondary.object(&state_key).is_none());
+    assert_eq!(
+        primary.object(&state_key).expect("tampered state").bytes,
+        b"{}".to_vec()
+    );
 }
 
 #[tokio::test]
@@ -2651,8 +2878,13 @@ async fn retry_repairs_one_sided_catalog_publication_with_exact_signed_bytes() {
         Err(CommitError::Ambiguous)
     ));
     let head_key = format!("heads/{}.json", logical_blob.path_hash());
-    assert!(primary.object(&head_key).is_none());
-    assert!(secondary.object(&head_key).is_none());
+    // The interrupted preparation is visible, but no generation is published.
+    assert!(state_document(&primary, &logical_blob).current().is_none());
+    assert!(
+        state_document(&secondary, &logical_blob)
+            .current()
+            .is_none()
+    );
     secondary.clear_failure();
     let retry = service
         .put_blob(
@@ -2683,7 +2915,8 @@ async fn listing_hides_a_catalog_generation_until_both_heads_publish() {
     let key = catalog_key(&logical_blob);
     let head_key = format!("heads/{}.json", logical_blob.path_hash());
     let content = spool_body(Body::from("content"), 4).await.expect("content");
-    secondary.fail_on_prefix(&head_key);
+    // Let the preparation land and fail only the commit transition.
+    secondary.fail_on_prefix_after(&head_key, 1);
 
     assert!(matches!(
         service
@@ -2701,8 +2934,12 @@ async fn listing_hides_a_catalog_generation_until_both_heads_publish() {
         primary.object(&key).expect("primary catalog").bytes,
         secondary.object(&key).expect("secondary catalog").bytes
     );
-    assert!(primary.object(&head_key).is_some());
-    assert!(secondary.object(&head_key).is_none());
+    assert!(state_document(&primary, &logical_blob).current().is_some());
+    assert!(
+        state_document(&secondary, &logical_blob)
+            .current()
+            .is_none()
+    );
 
     let page = service
         .listing_service("test-account")
@@ -2755,15 +2992,14 @@ async fn delete_retry_repairs_catalog_before_publishing_tombstone_heads() {
             .await,
         Err(CommitError::Ambiguous)
     ));
-    let head_key = format!("heads/{}.json", logical_blob.path_hash());
-    assert_eq!(
-        primary.object(&head_key).expect("primary head").bytes,
-        old_head
-    );
-    assert_eq!(
-        secondary.object(&head_key).expect("secondary head").bytes,
-        old_head
-    );
+    let old_generation = published_manifest(&old_head);
+    // The tombstone is prepared but not committed, so both replicas still
+    // publish the previous generation.
+    for backend in [&primary, &secondary] {
+        let state = state_document(backend, &logical_blob);
+        assert_eq!(state.current(), Some(&old_generation));
+        assert!(state.prepared().is_some());
+    }
 
     secondary.clear_failure();
     let result = service
@@ -2811,7 +3047,7 @@ async fn put_blob_replay_reauthorizes_and_rejects_a_different_caller() {
         .await
         .expect("commit");
 
-    let high_water_key = CommitCoordinator::high_water_current_key(&logical_blob.path_hash());
+    let high_water_key = history_key_for(&primary, &logical_blob);
     secondary.remove_object(&high_water_key);
     secondary.deny_blob_write(true);
     assert!(matches!(
@@ -2851,8 +3087,9 @@ async fn w1_put_blob_recovery_reauthorizes_before_repairing_the_head() {
     let (service, _primary, secondary) = service_fixture_parts();
     let logical_blob = blob("/container/w1-auth");
     let content = spool_body(Body::from("content"), 4).await.expect("content");
-    let head_key = format!("heads/{}.json", logical_blob.path_hash());
-    secondary.fail_on_prefix(&head_key);
+    let _head_key = format!("heads/{}.json", logical_blob.path_hash());
+    // Let the preparation land and fail only the commit transition.
+    secondary.fail_on_prefix_after(&_head_key, 1);
     assert!(matches!(
         service
             .put_blob(
@@ -2882,7 +3119,11 @@ async fn w1_put_blob_recovery_reauthorizes_before_repairing_the_head() {
             ..
         }))
     ));
-    assert!(secondary.object(&head_key).is_none());
+    assert!(
+        state_document(&secondary, &logical_blob)
+            .current()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -3048,7 +3289,7 @@ async fn put_block_list_replay_reauthorizes_and_repairs_catalog_visibility() {
         .await
         .expect("commit");
     let catalog_key = catalog_key(&logical_blob);
-    let high_water_key = CommitCoordinator::high_water_current_key(&logical_blob.path_hash());
+    let high_water_key = history_key_for(&primary, &logical_blob);
     primary.remove_object(&catalog_key);
     secondary.remove_object(&catalog_key);
     secondary.remove_object(&high_water_key);
@@ -3139,7 +3380,8 @@ async fn delete_retry_is_idempotent_and_repairs_partial_head_publication() {
     .await
     .expect("commit");
     let head_key = format!("heads/{}.json", blob("/container/delete-retry").path_hash());
-    secondary.fail_on_prefix(&head_key);
+    // Let the preparation land and fail only the tombstone commit transition.
+    secondary.fail_on_prefix_after(&head_key, 1);
     assert!(matches!(
         delete(
             &coordinator,
@@ -3221,7 +3463,7 @@ async fn stale_w1_retry_after_delete_recreate_cannot_roll_back_head_or_high_wate
     .expect("old commit");
     let logical_blob = blob("/container/stale-retry");
     let head_key = format!("heads/{}.json", logical_blob.path_hash());
-    let high_water_key = CommitCoordinator::high_water_current_key(&logical_blob.path_hash());
+    let high_water_key = history_key_for(&primary, &logical_blob);
     let old_head = primary.object(&head_key).expect("old head");
     delete(
         &coordinator,
@@ -3289,8 +3531,7 @@ async fn compaction_floor_rejects_replayed_head_and_high_water_below_the_floor()
     let path_hash = blob(path).path_hash();
     let head_key = format!("heads/{path_hash}.json");
     let first_head = primary.object(&head_key).expect("first head");
-    let first =
-        SignedDocument::<CommitManifest>::from_bytes(&first_head.bytes).expect("first manifest");
+    let first = published_manifest(&first_head.bytes);
     let second_content = spool_body(Body::from("second"), 4).await.expect("second");
     commit(
         &coordinator,
@@ -3313,8 +3554,8 @@ async fn compaction_floor_rejects_replayed_head_and_high_water_below_the_floor()
             checkpoint_version: 1,
             compacted_through_logical_version: 1,
             compacted_through_state: ManifestState::Committed,
-            compacted_through_logical_etag: first.payload.logical_etag.clone(),
-            compacted_through_committed_at_unix_ms: first.payload.committed_at_unix_ms,
+            compacted_through_logical_etag: first.logical_etag.clone(),
+            compacted_through_committed_at_unix_ms: first.committed_at_unix_ms,
             covered_terminal_manifest_sha256: sha256_bytes(&first_head.bytes),
             previous_checkpoint_sha256: None,
             previous_checkpoint_version: None,
@@ -3326,8 +3567,8 @@ async fn compaction_floor_rejects_replayed_head_and_high_water_below_the_floor()
             garbage_collection_history_head_logical_version: 2,
             garbage_collected_committed_versions: vec![1],
             garbage_collection_delay_ms: 0,
-            garbage_collected_at_unix_ms: first.payload.committed_at_unix_ms,
-            compacted_at_unix_ms: first.payload.committed_at_unix_ms,
+            garbage_collected_at_unix_ms: first.committed_at_unix_ms,
+            compacted_at_unix_ms: first.committed_at_unix_ms,
             signing_key_id: coordinator.signer.key_id().to_owned(),
         },
         SignatureDomain::HistoryCompactionCheckpoint,
@@ -3344,18 +3585,10 @@ async fn compaction_floor_rejects_replayed_head_and_high_water_below_the_floor()
     secondary
         .put(&checkpoint_key, checkpoint, PutCondition::None)
         .expect("secondary checkpoint");
-    let high_water_key = CommitCoordinator::high_water_current_key(&path_hash);
     for backend in [&primary, &secondary] {
         backend
             .put(&head_key, first_head.bytes.clone(), PutCondition::None)
-            .expect("replayed head");
-        backend
-            .put(
-                &high_water_key,
-                first_head.bytes.clone(),
-                PutCondition::None,
-            )
-            .expect("replayed high water");
+            .expect("replayed merged commit state");
     }
 
     assert!(matches!(
@@ -3394,8 +3627,7 @@ async fn compaction_floor_rejects_w1_recovery_before_mutating_the_missing_head()
     let path_hash = logical_blob.path_hash();
     let head_key = format!("heads/{path_hash}.json");
     let first_head = primary.object(&head_key).expect("first head");
-    let first =
-        SignedDocument::<CommitManifest>::from_bytes(&first_head.bytes).expect("first manifest");
+    let first = published_manifest(&first_head.bytes);
     let second_content = spool_body(Body::from("second"), 4).await.expect("second");
     commit(
         &coordinator,
@@ -3416,8 +3648,8 @@ async fn compaction_floor_rejects_w1_recovery_before_mutating_the_missing_head()
             checkpoint_version: 1,
             compacted_through_logical_version: 1,
             compacted_through_state: ManifestState::Committed,
-            compacted_through_logical_etag: first.payload.logical_etag.clone(),
-            compacted_through_committed_at_unix_ms: first.payload.committed_at_unix_ms,
+            compacted_through_logical_etag: first.logical_etag.clone(),
+            compacted_through_committed_at_unix_ms: first.committed_at_unix_ms,
             covered_terminal_manifest_sha256: sha256_bytes(&first_head.bytes),
             previous_checkpoint_sha256: None,
             previous_checkpoint_version: None,
@@ -3429,8 +3661,8 @@ async fn compaction_floor_rejects_w1_recovery_before_mutating_the_missing_head()
             garbage_collection_history_head_logical_version: 2,
             garbage_collected_committed_versions: vec![1],
             garbage_collection_delay_ms: 0,
-            garbage_collected_at_unix_ms: first.payload.committed_at_unix_ms,
-            compacted_at_unix_ms: first.payload.committed_at_unix_ms,
+            garbage_collected_at_unix_ms: first.committed_at_unix_ms,
+            compacted_at_unix_ms: first.committed_at_unix_ms,
             signing_key_id: coordinator.signer.key_id().to_owned(),
         },
         SignatureDomain::HistoryCompactionCheckpoint,
@@ -3445,7 +3677,6 @@ async fn compaction_floor_rejects_w1_recovery_before_mutating_the_missing_head()
         backend
             .put(&checkpoint_key, checkpoint.clone(), PutCondition::None)
             .expect("checkpoint");
-        backend.remove_object(&CommitCoordinator::high_water_current_key(&path_hash));
     }
     primary
         .put(&head_key, first_head.bytes, PutCondition::None)
@@ -3541,26 +3772,20 @@ async fn commits_identical_heads_to_both_replicas() {
     let primary_head = primary.object(&head_key).expect("primary head");
     let secondary_head = secondary.object(&head_key).expect("secondary head");
     assert_eq!(primary_head.bytes, secondary_head.bytes);
-    let signed = SignedDocument::<CommitManifest>::from_bytes(&primary_head.bytes).expect("head");
-    assert_eq!(signed.payload.state, ManifestState::Committed);
-    assert_eq!(signed.payload.prepared_replicas, ["storage-a", "storage-b"]);
+    let signed = published_manifest(&primary_head.bytes);
+    assert_eq!(signed.state, ManifestState::Committed);
+    assert_eq!(signed.prepared_replicas, ["storage-a", "storage-b"]);
     assert_eq!(primary.state.digest_calls.load(Ordering::SeqCst), 0);
     assert_eq!(secondary.state.digest_calls.load(Ordering::SeqCst), 0);
     assert_eq!(primary.state.list_calls.load(Ordering::SeqCst), 0);
     assert_eq!(secondary.state.list_calls.load(Ordering::SeqCst), 0);
-    assert!(signed.payload.content_object.starts_with(&format!(
+    assert!(signed.content_object.starts_with(&format!(
         ".overmesh/objects/{}/",
         blob("/container/blob").path_hash()
     )));
+    assert!(!signed.content_object.contains(&stable_component("write-1")));
     assert!(
         !signed
-            .payload
-            .content_object
-            .contains(&stable_component("write-1"))
-    );
-    assert!(
-        !signed
-            .payload
             .content_object
             .contains(content.content_sha256.trim_start_matches("sha256:"))
     );
@@ -3590,8 +3815,12 @@ async fn reads_validated_heads_and_ranges_across_block_boundaries() {
     assert_eq!(metadata.logical_etag, committed.logical_etag);
     assert_eq!(metadata.content_length, 10);
 
-    let read = crate::request_context::scope(
+    let telemetry = crate::request_context::request_telemetry(
         "stream-request".to_owned(),
+        "stream-event".to_owned(),
+    );
+    let read = crate::request_context::scope(
+        telemetry,
         read_service.get_blob(&blob(path), &principal(), Some("bytes=3-8")),
     )
     .await
@@ -3637,8 +3866,8 @@ async fn head_does_not_load_block_integrity_metadata() {
     let head = primary
         .object(&format!("heads/{}.json", blob(path).path_hash()))
         .expect("head");
-    let signed = SignedDocument::<CommitManifest>::from_bytes(&head.bytes).expect("signed head");
-    let root_key = signed.payload.block_manifest_object;
+    let signed = published_manifest(&head.bytes);
+    let root_key = signed.block_manifest_object;
     let before_primary = primary.control_get_count(&root_key);
     let before_secondary = secondary.control_get_count(&root_key);
 
@@ -3678,9 +3907,9 @@ async fn range_get_loads_only_the_intersecting_block_manifest_page() {
     let head = primary
         .object(&format!("heads/{}.json", blob(path).path_hash()))
         .expect("head");
-    let signed = SignedDocument::<CommitManifest>::from_bytes(&head.bytes).expect("signed head");
+    let signed = published_manifest(&head.bytes);
     let root = primary
-        .object(&signed.payload.block_manifest_object)
+        .object(&signed.block_manifest_object)
         .expect("block manifest root");
     let signed_root =
         SignedDocument::<BlockManifest>::from_bytes(&root.bytes).expect("signed root");
@@ -3764,14 +3993,8 @@ async fn rejects_a_corrupted_intersecting_block_before_returning_its_bytes() {
     .await
     .expect("commit");
     let head_key = format!("heads/{}.json", blob(path).path_hash());
-    let head = SignedDocument::<CommitManifest>::from_bytes(
-        &primary.object(&head_key).expect("head").bytes,
-    )
-    .expect("signed head");
-    let data_key = format!(
-        "data/{}/{}",
-        head.payload.content_container, head.payload.content_object
-    );
+    let head = published_manifest(&primary.object(&head_key).expect("head").bytes);
+    let data_key = format!("data/{}/{}", head.content_container, head.content_object);
     let mut corrupted = primary.object(&data_key).expect("content").bytes;
     corrupted[3] = b'X';
     primary
@@ -3786,7 +4009,7 @@ async fn rejects_a_corrupted_intersecting_block_before_returning_its_bytes() {
 }
 
 #[tokio::test]
-async fn rejects_reading_a_head_replayed_below_the_high_water_checkpoint() {
+async fn a_replayed_commit_state_is_rejected_by_the_next_write() {
     let path = "/container/read-replay";
     let (coordinator, read_service, primary, secondary) = read_fixture(path);
     let first = spool_body(Body::from("first"), 4).await.expect("first");
@@ -3818,9 +4041,26 @@ async fn rejects_reading_a_head_replayed_below_the_high_water_checkpoint() {
         .put(&head_key, replayed, PutCondition::None)
         .expect("replay secondary");
 
+    // ADR-0012 merges the high-water assertion into the head, so a read of the
+    // replayed document is internally consistent and remains readable above the
+    // ADR-0010 compaction floor. The retained per-version history is the
+    // witness, and every write proves against it before publishing.
+    let metadata = read_service
+        .head_blob(&blob(path), &principal())
+        .await
+        .expect("replayed head is internally consistent");
+    assert_eq!(metadata.logical_version, 1);
+    let third = spool_body(Body::from("third"), 4).await.expect("third");
     assert!(matches!(
-        read_service.head_blob(&blob(path), &principal()).await,
-        Err(ReadError::VerificationFailed)
+        commit(
+            &coordinator,
+            path,
+            "write-3",
+            &third,
+            LogicalCondition::None
+        )
+        .await,
+        Err(CommitError::VerificationFailed)
     ));
 }
 
@@ -3914,7 +4154,9 @@ async fn rejects_reused_write_id_with_different_payload() {
 async fn reports_ambiguous_outcome_when_only_one_head_is_published() {
     let primary = Arc::new(MemoryBackend::new("storage-a"));
     let secondary = Arc::new(MemoryBackend::new("storage-b"));
-    secondary.fail_on_prefix("heads/");
+    // Let the preparation land on both replicas and fail only the commit
+    // transition of the merged document.
+    secondary.fail_on_prefix_after("heads/", 1);
     let coordinator = coordinator(primary.clone(), secondary.clone());
     let content = spool_body(Body::from("hello"), 4).await.expect("content");
 
@@ -3930,15 +4172,24 @@ async fn reports_ambiguous_outcome_when_only_one_head_is_published() {
         Err(CommitError::Ambiguous)
     ));
     let head_key = format!("heads/{}.json", blob("/container/blob").path_hash());
+    assert!(
+        state_document(&primary, &blob("/container/blob"))
+            .current()
+            .is_some()
+    );
+    assert!(
+        state_document(&secondary, &blob("/container/blob"))
+            .current()
+            .is_none()
+    );
     assert!(primary.object(&head_key).is_some());
-    assert!(secondary.object(&head_key).is_none());
 }
 
 #[tokio::test]
 async fn retry_completes_a_single_head_publication() {
     let primary = Arc::new(MemoryBackend::new("storage-a"));
     let secondary = Arc::new(MemoryBackend::new("storage-b"));
-    secondary.fail_on_prefix("heads/");
+    secondary.fail_on_prefix_after("heads/", 1);
     let coordinator = coordinator(primary.clone(), secondary.clone());
     let content = spool_body(Body::from("hello"), 4).await.expect("content");
 
@@ -4095,14 +4346,14 @@ async fn rejects_a_valid_head_replayed_below_the_high_water_record() {
 }
 
 #[tokio::test]
-async fn write_reuses_the_validated_high_water_snapshot() {
+async fn write_reuses_the_validated_commit_context() {
     let (service, primary, secondary) = service_fixture_parts();
     let logical_blob = blob("/container/high-water-snapshot");
     let coordinator = service.coordinator(&logical_blob).expect("coordinator");
     let content = spool_body(Body::from("content"), 4).await.expect("content");
     let path_hash = logical_blob.path_hash();
     let compaction_key = CommitCoordinator::history_compaction_checkpoint_key(&path_hash);
-    let current_key = CommitCoordinator::high_water_current_key(&path_hash);
+    let state_key = format!("heads/{path_hash}.json");
 
     coordinator
         .put_blob(
@@ -4140,22 +4391,1029 @@ async fn write_reuses_the_validated_high_water_snapshot() {
             1,
             "control reads: {reads:?}"
         );
+        // One load plus the two mandatory post-write verifications ADR-0013
+        // requires; the merged document is never re-read for its own sake.
         assert_eq!(
-            backend.control_get_count(&current_key),
-            2,
+            backend.control_get_count(&state_key),
+            3,
             "control reads: {reads:?}"
         );
     }
 }
 
+/// Leaves `{current: <committed>, prepared: <unrelated>}` on both replicas by
+/// interrupting a later write after its preparation and before any catalogue
+/// publication.
+async fn interrupt_an_unrelated_preparation(
+    service: &Arc<CommitService>,
+    primary: &MemoryBackend,
+    secondary: &MemoryBackend,
+    logical_blob: &LogicalBlobId,
+    write_id: &str,
+) {
+    use crate::catalog::catalog_key;
+
+    let content = spool_body(Body::from("interrupted"), 4)
+        .await
+        .expect("content");
+    let key = catalog_key(logical_blob);
+    primary.fail_on_prefix(&key);
+    secondary.fail_on_prefix(&key);
+    assert!(
+        service
+            .put_blob(
+                logical_blob,
+                &principal(),
+                write_id,
+                &content,
+                LogicalCondition::None,
+            )
+            .await
+            .is_err()
+    );
+    primary.clear_failure();
+    secondary.clear_failure();
+    for backend in [primary, secondary] {
+        let state = state_document(backend, logical_blob);
+        assert_eq!(
+            state.prepared().expect("interrupted preparation").write_id,
+            write_id
+        );
+    }
+}
+
+/// Leaves `{current, prepared}` on the primary and `{current}` on the secondary
+/// by failing the PREPARED transition of a later write on one replica only.
+/// Unlike `interrupt_an_unrelated_preparation`, the two documents diverge.
+async fn interrupt_a_one_sided_preparation(
+    service: &Arc<CommitService>,
+    primary: &MemoryBackend,
+    secondary: &MemoryBackend,
+    logical_blob: &LogicalBlobId,
+    write_id: &str,
+) {
+    let content = spool_body(Body::from("one-sided"), 4)
+        .await
+        .expect("content");
+    let state_key = format!("heads/{}.json", logical_blob.path_hash());
+    // The prepared transition is the first write to the state document, so the
+    // secondary refuses it while the primary accepts it.
+    secondary.fail_on_prefix(&state_key);
+    assert!(matches!(
+        service
+            .put_blob(
+                logical_blob,
+                &principal(),
+                write_id,
+                &content,
+                LogicalCondition::None,
+            )
+            .await,
+        Err(CommitError::Ambiguous)
+    ));
+    secondary.clear_failure();
+    assert_eq!(
+        state_document(primary, logical_blob)
+            .prepared()
+            .expect("one-sided preparation")
+            .write_id,
+        write_id
+    );
+    assert!(state_document(secondary, logical_blob).prepared().is_none());
+    assert_eq!(
+        state_document(primary, logical_blob).current(),
+        state_document(secondary, logical_blob).current(),
+        "the published generation must be identical on both replicas"
+    );
+    assert_ne!(
+        primary.object(&state_key).expect("primary state").bytes,
+        secondary.object(&state_key).expect("secondary state").bytes,
+        "the documents must actually diverge"
+    );
+}
+
+fn assert_catalogue_is_terminal(backend: &MemoryBackend, logical_blob: &LogicalBlobId) {
+    use crate::catalog::catalog_key;
+
+    let bytes = backend
+        .object(&catalog_key(logical_blob))
+        .expect("catalog entry")
+        .bytes;
+    let entry = SignedDocument::<BlobCommitState>::from_bytes(&bytes).expect("catalog document");
+    assert!(
+        entry.payload.prepared().is_none(),
+        "the catalogue must never publish an interrupted preparation"
+    );
+    let history_key = format!(
+        "high-water/{}/history/{:020}-{}.json",
+        logical_blob.path_hash(),
+        entry
+            .payload
+            .current()
+            .expect("published generation")
+            .logical_version,
+        stable_component(
+            &entry
+                .payload
+                .current()
+                .expect("published generation")
+                .write_id
+        )
+    );
+    assert_eq!(
+        backend.object(&history_key).expect("history entry").bytes,
+        bytes,
+        "the catalogue and the durable history must hold the same terminal bytes"
+    );
+}
+
 #[tokio::test]
-async fn high_water_publication_never_replaces_a_higher_version_by_etag() {
+async fn delete_replay_succeeds_across_a_one_sided_preparation() {
+    let (service, primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/one-sided-delete-replay");
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "one-sided-delete-base",
+            &content,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("commit");
+    let deleted = service
+        .delete_blob(
+            &logical_blob,
+            &principal(),
+            "one-sided-delete",
+            LogicalCondition::None,
+        )
+        .await
+        .expect("delete");
+    interrupt_a_one_sided_preparation(
+        &service,
+        &primary,
+        &secondary,
+        &logical_blob,
+        "one-sided-preparation",
+    )
+    .await;
+
+    // The same published tombstone on both replicas is not a partial tombstone
+    // publication, so the retry is an idempotent replay rather than a failed
+    // tombstone transition.
+    let replay = service
+        .delete_blob(
+            &logical_blob,
+            &principal(),
+            "one-sided-delete",
+            LogicalCondition::None,
+        )
+        .await
+        .expect("idempotent replay");
+    assert!(replay.idempotent_replay);
+    assert_eq!(replay.logical_etag, deleted.logical_etag);
+    for backend in [&primary, &secondary] {
+        assert_catalogue_is_terminal(backend, &logical_blob);
+        assert_eq!(
+            state_document(backend, &logical_blob)
+                .current()
+                .expect("published tombstone")
+                .logical_etag,
+            deleted.logical_etag
+        );
+    }
+}
+
+#[tokio::test]
+async fn block_list_retry_self_heals_a_one_sided_preparation() {
+    use crate::block::{BlockSelection, BlockSelectionKind};
+
+    let (service, primary, secondary) = service_fixture_parts();
+    let blocks = service.block_service();
+    let logical_blob = blob("/container/one-sided-block-list");
+    let first = spool_body(Body::from("first"), 4).await.expect("first");
+    blocks
+        .put_block(
+            &logical_blob,
+            &principal(),
+            "one-sided-blocks",
+            "one-sided-blocks",
+            "YmxvY2stMDAwMQ==",
+            &first,
+        )
+        .await
+        .expect("staged block");
+    let selections = [BlockSelection {
+        kind: BlockSelectionKind::Latest,
+        block_id: "YmxvY2stMDAwMQ==".to_owned(),
+    }];
+    let committed = blocks
+        .put_block_list(
+            &logical_blob,
+            &principal(),
+            "one-sided-blocks",
+            "one-sided-blocks",
+            &selections,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("block list commit");
+    interrupt_a_one_sided_preparation(
+        &service,
+        &primary,
+        &secondary,
+        &logical_blob,
+        "one-sided-preparation",
+    )
+    .await;
+
+    // Re-driving the same write is not refused by a divergence confined to an
+    // interrupted preparation.
+    let replay = blocks
+        .put_block_list(
+            &logical_blob,
+            &principal(),
+            "one-sided-blocks",
+            "one-sided-blocks",
+            &selections,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("idempotent replay");
+    assert!(replay.idempotent_replay);
+    assert_eq!(replay.logical_etag, committed.logical_etag);
+
+    // Staging still works against the agreed published generation, and the next
+    // block-list commit rewrites both documents, clearing the divergence.
+    let second = spool_body(Body::from("second"), 4).await.expect("second");
+    blocks
+        .put_block(
+            &logical_blob,
+            &principal(),
+            "one-sided-blocks-2",
+            "one-sided-blocks-2",
+            "YmxvY2stMDAwMg==",
+            &second,
+        )
+        .await
+        .expect("staged block after divergence");
+    blocks
+        .put_block_list(
+            &logical_blob,
+            &principal(),
+            "one-sided-blocks-2",
+            "one-sided-blocks-2",
+            &[BlockSelection {
+                kind: BlockSelectionKind::Latest,
+                block_id: "YmxvY2stMDAwMg==".to_owned(),
+            }],
+            LogicalCondition::None,
+        )
+        .await
+        .expect("healing block list commit");
+    let state_key = format!("heads/{}.json", logical_blob.path_hash());
+    assert_eq!(
+        primary.object(&state_key).expect("primary state").bytes,
+        secondary.object(&state_key).expect("secondary state").bytes
+    );
+    for backend in [&primary, &secondary] {
+        assert!(state_document(backend, &logical_blob).prepared().is_none());
+        assert_catalogue_is_terminal(backend, &logical_blob);
+    }
+}
+
+#[tokio::test]
+async fn get_block_list_stays_fail_closed_on_a_one_sided_preparation() {
+    use crate::block::{BlockListType, BlockSelection, BlockSelectionKind};
+
+    let (service, primary, secondary) = service_fixture_parts();
+    let blocks = service.block_service();
+    let logical_blob = blob("/container/one-sided-get-block-list");
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    blocks
+        .put_block(
+            &logical_blob,
+            &principal(),
+            "one-sided-get",
+            "one-sided-get",
+            "YmxvY2stMDAwMQ==",
+            &content,
+        )
+        .await
+        .expect("staged block");
+    blocks
+        .put_block_list(
+            &logical_blob,
+            &principal(),
+            "one-sided-get",
+            "one-sided-get",
+            &[BlockSelection {
+                kind: BlockSelectionKind::Latest,
+                block_id: "YmxvY2stMDAwMQ==".to_owned(),
+            }],
+            LogicalCondition::None,
+        )
+        .await
+        .expect("block list commit");
+    interrupt_a_one_sided_preparation(
+        &service,
+        &primary,
+        &secondary,
+        &logical_blob,
+        "one-sided-preparation",
+    )
+    .await;
+
+    // Client reads keep the ADR-0002 byte-identity rule that ADR-0012 widened
+    // to the merged document: a read never resolves a divergence it cannot
+    // repair. The write path and the Reconciler converge it instead.
+    assert!(matches!(
+        blocks
+            .get_block_list(
+                &logical_blob,
+                &principal(),
+                Some("one-sided-get"),
+                BlockListType::All,
+            )
+            .await,
+        Err(crate::block::BlockError::Commit(CommitError::ReplicaDrift))
+    ));
+}
+
+#[tokio::test]
+async fn put_replay_publishes_the_terminal_generation_despite_an_interrupted_preparation() {
+    let (service, primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/replay-terminal-put");
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "replay-put",
+            &content,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("commit");
+    let committed = state_document(&primary, &logical_blob)
+        .current()
+        .expect("published generation")
+        .clone();
+    interrupt_an_unrelated_preparation(
+        &service,
+        &primary,
+        &secondary,
+        &logical_blob,
+        "unrelated-preparation",
+    )
+    .await;
+
+    // The replay must publish the terminal form of the committed generation,
+    // not the loaded document that still carries the interrupted preparation.
+    let replay = service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "replay-put",
+            &content,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("idempotent replay");
+    assert!(replay.idempotent_replay);
+    assert_eq!(replay.logical_etag, committed.logical_etag);
+    for backend in [&primary, &secondary] {
+        assert_catalogue_is_terminal(backend, &logical_blob);
+        // The unrelated preparation is untouched by the replay.
+        assert_eq!(
+            state_document(backend, &logical_blob)
+                .prepared()
+                .expect("interrupted preparation")
+                .write_id,
+            "unrelated-preparation"
+        );
+    }
+}
+
+#[tokio::test]
+async fn delete_replay_publishes_the_terminal_tombstone_despite_an_interrupted_preparation() {
+    let (service, primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/replay-terminal-delete");
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "replay-delete-base",
+            &content,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("commit");
+    let deleted = service
+        .delete_blob(
+            &logical_blob,
+            &principal(),
+            "replay-delete",
+            LogicalCondition::None,
+        )
+        .await
+        .expect("delete");
+    interrupt_an_unrelated_preparation(
+        &service,
+        &primary,
+        &secondary,
+        &logical_blob,
+        "unrelated-preparation",
+    )
+    .await;
+
+    let replay = service
+        .delete_blob(
+            &logical_blob,
+            &principal(),
+            "replay-delete",
+            LogicalCondition::None,
+        )
+        .await
+        .expect("idempotent replay");
+    assert!(replay.idempotent_replay);
+    assert_eq!(replay.logical_etag, deleted.logical_etag);
+    for backend in [&primary, &secondary] {
+        assert_catalogue_is_terminal(backend, &logical_blob);
+        assert_eq!(
+            state_document(backend, &logical_blob)
+                .prepared()
+                .expect("interrupted preparation")
+                .write_id,
+            "unrelated-preparation"
+        );
+    }
+}
+
+#[tokio::test]
+async fn block_list_replay_publishes_the_terminal_generation_despite_an_interrupted_preparation() {
+    use crate::block::{BlockSelection, BlockSelectionKind};
+
+    let (service, primary, secondary) = service_fixture_parts();
+    let blocks = service.block_service();
+    let logical_blob = blob("/container/replay-terminal-blocks");
+    let content = spool_body(Body::from("block"), 4).await.expect("content");
+    blocks
+        .put_block(
+            &logical_blob,
+            &principal(),
+            "replay-blocks",
+            "replay-blocks",
+            "YmxvY2stMDAwMQ==",
+            &content,
+        )
+        .await
+        .expect("staged block");
+    let selections = [BlockSelection {
+        kind: BlockSelectionKind::Latest,
+        block_id: "YmxvY2stMDAwMQ==".to_owned(),
+    }];
+    blocks
+        .put_block_list(
+            &logical_blob,
+            &principal(),
+            "replay-blocks",
+            "replay-blocks",
+            &selections,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("block list commit");
+    interrupt_an_unrelated_preparation(
+        &service,
+        &primary,
+        &secondary,
+        &logical_blob,
+        "unrelated-preparation",
+    )
+    .await;
+
+    assert!(
+        blocks
+            .put_block_list(
+                &logical_blob,
+                &principal(),
+                "replay-blocks",
+                "replay-blocks",
+                &selections,
+                LogicalCondition::None,
+            )
+            .await
+            .expect("idempotent replay")
+            .idempotent_replay
+    );
+    for backend in [&primary, &secondary] {
+        assert_catalogue_is_terminal(backend, &logical_blob);
+        assert_eq!(
+            state_document(backend, &logical_blob)
+                .prepared()
+                .expect("interrupted preparation")
+                .write_id,
+            "unrelated-preparation"
+        );
+    }
+}
+
+#[tokio::test]
+async fn listing_keeps_a_committed_blob_visible_across_a_one_sided_preparation() {
+    use crate::listing::{BlobListEntry, ListRequest};
+
+    let (service, primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/listing-one-sided");
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "listing-one-sided",
+            &content,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("commit");
+    interrupt_a_one_sided_preparation(
+        &service,
+        &primary,
+        &secondary,
+        &logical_blob,
+        "one-sided-preparation",
+    )
+    .await;
+
+    // ADR-0012 makes the preparation a state of the merged document, so the two
+    // replicas differ in bytes while still publishing the same generation.
+    // Listing must not hide a committed blob for the whole window of an
+    // interrupted preparation.
+    let listing = service.listing_service("test-account");
+    let request = ListRequest::new(String::new(), String::new(), None, Some(10), Vec::new())
+        .expect("request");
+    let page = listing
+        .list_blobs("container", &request, &principal())
+        .await
+        .expect("listing");
+    assert!(
+        matches!(
+            page.entries.as_slice(),
+            [BlobListEntry::Blob(entry)] if entry.name == "listing-one-sided"
+        ),
+        "{:?}",
+        page.entries
+    );
+}
+
+#[tokio::test]
+async fn listing_hides_a_blob_whose_replicas_publish_different_generations() {
+    use crate::listing::{BlobListEntry, ListRequest};
+
+    let (service, primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/listing-divergent-generation");
+    let first = spool_body(Body::from("first"), 4).await.expect("first");
+    service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "listing-divergent-1",
+            &first,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("first commit");
+    let state_key = format!("heads/{}.json", logical_blob.path_hash());
+    let stale = primary.object(&state_key).expect("first state").bytes;
+    let second = spool_body(Body::from("second"), 4).await.expect("second");
+    service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "listing-divergent-2",
+            &second,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("second commit");
+
+    // Both documents are valid, signed and correctly keyed, but they publish
+    // different generations. That is real divergence and must fail closed.
+    //
+    // The stale document goes on the replica listing treats as the secondary,
+    // so the primary still agrees with the catalogue entry and only the
+    // cross-replica comparison can hide the blob.
+    let coordinator = service.coordinator(&logical_blob).expect("coordinator");
+    let listing_secondary = if primary.id() == coordinator.secondary.id() {
+        &primary
+    } else {
+        &secondary
+    };
+    listing_secondary
+        .put(&state_key, stale, PutCondition::None)
+        .expect("stale secondary generation");
+    let listing = service.listing_service("test-account");
+    let request = ListRequest::new(String::new(), String::new(), None, Some(10), Vec::new())
+        .expect("request");
+    let page = listing
+        .list_blobs("container", &request, &principal())
+        .await
+        .expect("listing");
+    assert!(
+        !page.entries.iter().any(|entry| matches!(
+            entry,
+            BlobListEntry::Blob(entry) if entry.name == "listing-divergent-generation"
+        )),
+        "listing exposed a blob whose replicas publish different generations"
+    );
+}
+
+#[tokio::test]
+async fn listing_hides_a_blob_when_the_primary_publishes_a_stale_generation() {
+    use crate::listing::{BlobListEntry, ListRequest};
+
+    let (service, primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/listing-stale-primary-generation");
+    let first = spool_body(Body::from("first"), 4).await.expect("first");
+    service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "listing-stale-primary-1",
+            &first,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("first commit");
+    let state_key = format!("heads/{}.json", logical_blob.path_hash());
+    let stale = primary.object(&state_key).expect("first state").bytes;
+    let second = spool_body(Body::from("second"), 4).await.expect("second");
+    service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "listing-stale-primary-2",
+            &second,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("second commit");
+
+    let coordinator = service.coordinator(&logical_blob).expect("coordinator");
+    let listing_primary = if primary.id() == coordinator.primary.id() {
+        &primary
+    } else {
+        &secondary
+    };
+    listing_primary
+        .put(&state_key, stale, PutCondition::None)
+        .expect("stale primary generation");
+    let page = service
+        .listing_service("test-account")
+        .list_blobs(
+            "container",
+            &ListRequest::new(String::new(), String::new(), None, Some(10), Vec::new())
+                .expect("request"),
+            &principal(),
+        )
+        .await
+        .expect("listing");
+    assert!(
+        !page.entries.iter().any(|entry| matches!(
+            entry,
+            BlobListEntry::Blob(entry) if entry.name == "listing-stale-primary-generation"
+        )),
+        "listing exposed a blob whose primary publishes a stale generation"
+    );
+}
+
+#[tokio::test]
+async fn listing_hides_a_commit_state_document_that_is_not_signed_overmesh_state() {
+    use crate::listing::{BlobListEntry, ListRequest};
+
+    #[derive(Debug, Clone, Copy)]
+    enum Tamper {
+        Signature,
+        NonCanonical,
+        ForeignBlob,
+    }
+
+    for tamper in [Tamper::Signature, Tamper::NonCanonical, Tamper::ForeignBlob] {
+        let (service, primary, secondary) = service_fixture_parts();
+        let logical_blob = blob("/container/listing-state-tamper");
+        let content = spool_body(Body::from("content"), 4).await.expect("content");
+        service
+            .put_blob(
+                &logical_blob,
+                &principal(),
+                "listing-state-tamper",
+                &content,
+                LogicalCondition::None,
+            )
+            .await
+            .expect("commit");
+        let listing = service.listing_service("test-account");
+        let request = ListRequest::new(String::new(), String::new(), None, Some(10), Vec::new())
+            .expect("request");
+        assert!(
+            matches!(
+                listing
+                    .list_blobs("container", &request, &principal())
+                    .await
+                    .expect("listing")
+                    .entries
+                    .as_slice(),
+                [BlobListEntry::Blob(entry)] if entry.name == "listing-state-tamper"
+            ),
+            "{tamper:?}"
+        );
+
+        let state_key = format!("heads/{}.json", logical_blob.path_hash());
+        let published = primary.object(&state_key).expect("published state").bytes;
+        let mut signed =
+            SignedDocument::<BlobCommitState>::from_bytes(&published).expect("state document");
+        let tampered = match tamper {
+            // A forged signature over otherwise well-formed state.
+            Tamper::Signature => {
+                signed.signature = "invalid-signature".to_owned();
+                signed.canonical_bytes().expect("tampered bytes")
+            }
+            // Signed content re-encoded outside the canonical form.
+            Tamper::NonCanonical => {
+                serde_json::to_vec_pretty(&signed).expect("non-canonical bytes")
+            }
+            // A validly signed document for a different blob, moved to this key.
+            Tamper::ForeignBlob => {
+                let other = blob("/container/listing-state-other");
+                let other_content = spool_body(Body::from("other"), 4).await.expect("other");
+                service
+                    .put_blob(
+                        &other,
+                        &principal(),
+                        "listing-state-other",
+                        &other_content,
+                        LogicalCondition::None,
+                    )
+                    .await
+                    .expect("other commit");
+                primary
+                    .object(&format!("heads/{}.json", other.path_hash()))
+                    .expect("other state")
+                    .bytes
+            }
+        };
+        // Both replicas hold the same tampered bytes, so byte equality alone
+        // cannot be what hides the entry.
+        for backend in [&primary, &secondary] {
+            backend
+                .put(&state_key, tampered.clone(), PutCondition::None)
+                .expect("tampered state");
+        }
+
+        let page = listing
+            .list_blobs("container", &request, &principal())
+            .await
+            .expect("listing after tampering");
+        assert!(
+            !page.entries.iter().any(|entry| matches!(
+                entry,
+                BlobListEntry::Blob(entry) if entry.name == "listing-state-tamper"
+            )),
+            "listing exposed a blob whose commit state is not signed Overmesh state: {tamper:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn interrupted_preparation_is_visible_and_reused_by_the_same_write() {
+    use crate::catalog::catalog_key;
+
+    let (service, primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/interrupted-preparation");
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    // The catalogue publication follows the prepared transition, so failing it
+    // interrupts the write with the preparation already durable on both.
+    secondary.fail_on_prefix(&catalog_key(&logical_blob));
+    assert!(
+        service
+            .put_blob(
+                &logical_blob,
+                &principal(),
+                "interrupted",
+                &content,
+                LogicalCondition::None,
+            )
+            .await
+            .is_err()
+    );
+    for backend in [&primary, &secondary] {
+        let state = state_document(backend, &logical_blob);
+        assert!(state.current().is_none());
+        let prepared = state.prepared().expect("interrupted preparation");
+        assert_eq!(prepared.state, ManifestState::Prepared);
+        assert_eq!(prepared.write_id, "interrupted");
+        assert_eq!(prepared.logical_version, 1);
+        assert!(prepared.prepared_replicas.is_empty());
+    }
+    let prepared = state_document(&primary, &logical_blob)
+        .prepared()
+        .expect("interrupted preparation")
+        .clone();
+
+    secondary.clear_failure();
+    service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "interrupted",
+            &content,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("retry");
+    let state = state_document(&primary, &logical_blob);
+    assert!(state.prepared().is_none());
+    let committed = state.current().expect("committed generation").clone();
+    // The retry republishes the identical generation rather than minting a new
+    // one, which is what the removed immutable prepared sidecar provided.
+    assert_eq!(
+        committed.committed_at_unix_ms,
+        prepared.committed_at_unix_ms
+    );
+    assert_eq!(committed.logical_etag, prepared.logical_etag);
+    assert_eq!(committed.content_object, prepared.content_object);
+    assert_eq!(committed.state, ManifestState::Committed);
+}
+
+#[tokio::test]
+async fn interrupted_preparation_is_replaced_by_a_different_write() {
+    use crate::catalog::catalog_key;
+
+    let (service, primary, secondary) = service_fixture_parts();
+    let logical_blob = blob("/container/abandoned-preparation");
+    let abandoned = spool_body(Body::from("abandoned"), 4)
+        .await
+        .expect("abandoned");
+    // Interrupt after the preparation and before any catalogue publication.
+    primary.fail_on_prefix(&catalog_key(&logical_blob));
+    secondary.fail_on_prefix(&catalog_key(&logical_blob));
+    assert!(
+        service
+            .put_blob(
+                &logical_blob,
+                &principal(),
+                "abandoned",
+                &abandoned,
+                LogicalCondition::None,
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        state_document(&primary, &logical_blob)
+            .prepared()
+            .expect("interrupted preparation")
+            .write_id,
+        "abandoned"
+    );
+
+    primary.clear_failure();
+    secondary.clear_failure();
+    let winner = spool_body(Body::from("winner"), 4).await.expect("winner");
+    service
+        .put_blob(
+            &logical_blob,
+            &principal(),
+            "winner",
+            &winner,
+            LogicalCondition::None,
+        )
+        .await
+        .expect("second write");
+    for backend in [&primary, &secondary] {
+        let state = state_document(backend, &logical_blob);
+        assert!(state.prepared().is_none());
+        let current = state.current().expect("committed generation");
+        assert_eq!(current.write_id, "winner");
+        assert_eq!(current.logical_version, 1);
+    }
+}
+
+#[tokio::test]
+async fn the_commit_transition_is_conditional_on_the_prepared_state() {
+    let primary = Arc::new(MemoryBackend::new("storage-a"));
+    let secondary = Arc::new(MemoryBackend::new("storage-b"));
+    let coordinator = coordinator(primary.clone(), secondary.clone());
+    let logical_blob = blob("/container/conditional-transition");
+    let content = spool_body(Body::from("content"), 4).await.expect("content");
+    commit(
+        &coordinator,
+        "/container/conditional-transition",
+        "write-1",
+        &content,
+        LogicalCondition::None,
+    )
+    .await
+    .expect("commit");
+    let state_key = format!("heads/{}.json", logical_blob.path_hash());
+    let published = primary.object(&state_key).expect("published state");
+
+    // A transition that presents a stale entity tag cannot replace the merged
+    // document, so a concurrent writer cannot skip the prepared state.
+    assert!(matches!(
+        publish_blob_state(
+            primary.as_ref(),
+            secondary.as_ref(),
+            &state_key,
+            &published.bytes,
+            PutCondition::IfAbsent,
+            PutCondition::IfAbsent,
+            &ControlToken::new("control-token".to_owned()),
+        )
+        .await,
+        Err(CommitError::ConditionFailed)
+    ));
+}
+
+#[test]
+fn commit_state_rejects_a_prepared_generation_that_does_not_extend_the_current_one() {
+    use crate::manifest::{BLOB_COMMIT_STATE_API_VERSION, blob_path_hash};
+
+    let canonical = blob("/container/structure").canonical().to_owned();
+    let current = CommitManifest {
+        blob: canonical.clone(),
+        caller: principal().identity(),
+        write_id: "write-1".to_owned(),
+        logical_version: 1,
+        logical_etag: "\"om-v1-0000000000000000\"".to_owned(),
+        previous_logical_etag: None,
+        ring_version: 1,
+        content_length: 1,
+        content_sha256: sha256_bytes(b"a"),
+        content_container: "container".to_owned(),
+        content_object: ".overmesh/objects/x/y".to_owned(),
+        block_manifest_object: "objects/x/versions/w/d/block-manifest.json".to_owned(),
+        block_manifest_sha256: sha256_bytes(b"b"),
+        version_object_prefix: Some("objects/x/versions/w/d".to_owned()),
+        committed_at_unix_ms: 1,
+        deleted_at_unix_ms: None,
+        state: ManifestState::Committed,
+        prepared_replicas: vec!["storage-a".to_owned(), "storage-b".to_owned()],
+        signing_key_id: "test-blob-key-01".to_owned(),
+    };
+    let mut prepared = current.clone();
+    prepared.state = ManifestState::Prepared;
+    prepared.prepared_replicas = Vec::new();
+    prepared.logical_version = 3;
+    prepared.previous_logical_etag = Some(current.logical_etag.clone());
+
+    let state = BlobCommitState::new(
+        &canonical,
+        1,
+        Some(current.clone()),
+        Some(prepared.clone()),
+        "test-blob-key-01",
+    );
+    assert!(validate_blob_commit_state(&state).is_err());
+
+    prepared.logical_version = 2;
+    let state = BlobCommitState::new(
+        &canonical,
+        1,
+        Some(current.clone()),
+        Some(prepared.clone()),
+        "test-blob-key-01",
+    );
+    validate_blob_commit_state(&state).expect("a successor preparation is valid");
+
+    let mut mis_keyed = state.clone();
+    mis_keyed.path_hash = blob_path_hash("/other/container/blob");
+    assert!(validate_blob_commit_state(&mis_keyed).is_err());
+
+    let mut wrong_api = state.clone();
+    wrong_api.api_version = format!("{BLOB_COMMIT_STATE_API_VERSION}-next");
+    assert!(validate_blob_commit_state(&wrong_api).is_err());
+
+    let mut wrong_format = state.clone();
+    wrong_format.format_version = 2;
+    assert!(validate_blob_commit_state(&wrong_format).is_err());
+
+    let empty = BlobCommitState::new(&canonical, 1, None, None, "test-blob-key-01");
+    assert!(validate_blob_commit_state(&empty).is_err());
+}
+
+#[tokio::test]
+async fn a_replayed_generation_is_rejected_by_the_durable_history() {
     let primary = Arc::new(MemoryBackend::new("storage-a"));
     let secondary = Arc::new(MemoryBackend::new("storage-b"));
     let coordinator = coordinator(primary.clone(), secondary.clone());
     let logical_blob = blob("/container/high-water-rollback");
     let first = spool_body(Body::from("first"), 4).await.expect("first");
     let second = spool_body(Body::from("second"), 4).await.expect("second");
+    let third = spool_body(Body::from("third"), 4).await.expect("third");
     commit(
         &coordinator,
         "/container/high-water-rollback",
@@ -4166,9 +5424,7 @@ async fn high_water_publication_never_replaces_a_higher_version_by_etag() {
     .await
     .expect("first commit");
     let head_key = format!("heads/{}.json", logical_blob.path_hash());
-    let first_head = primary.object(&head_key).expect("first head");
-    let first_signed =
-        SignedDocument::<CommitManifest>::from_bytes(&first_head.bytes).expect("first signed");
+    let first_state = primary.object(&head_key).expect("first state");
     commit(
         &coordinator,
         "/container/high-water-rollback",
@@ -4178,32 +5434,40 @@ async fn high_water_publication_never_replaces_a_higher_version_by_etag() {
     )
     .await
     .expect("second commit");
-    let high_water_key = CommitCoordinator::high_water_current_key(&logical_blob.path_hash());
-    let higher = primary.object(&high_water_key).expect("higher high water");
+    let current_state = primary.object(&head_key).expect("current state");
+
+    for backend in [&primary, &secondary] {
+        backend
+            .put(&head_key, first_state.bytes.clone(), PutCondition::None)
+            .expect("replayed merged commit state");
+    }
     assert!(matches!(
-        CommitCoordinator::publish_high_water(
-            primary.as_ref(),
-            secondary.as_ref(),
-            &logical_blob.path_hash(),
-            &first_signed,
-            &first_head.bytes,
-            &ControlToken::new("control-token".to_owned()),
-            coordinator.signer.as_ref(),
+        commit(
+            &coordinator,
+            "/container/high-water-rollback",
+            "write-3",
+            &third,
+            LogicalCondition::None,
         )
         .await,
         Err(CommitError::VerificationFailed)
     ));
-    assert_eq!(
-        primary.object(&high_water_key).expect("primary high").bytes,
-        higher.bytes
-    );
-    assert_eq!(
-        secondary
-            .object(&high_water_key)
-            .expect("secondary high")
-            .bytes,
-        higher.bytes
-    );
+    for backend in [&primary, &secondary] {
+        backend
+            .put(&head_key, current_state.bytes.clone(), PutCondition::None)
+            .expect("restore");
+    }
+    // The retained history proves the rollback without a duplicated high-water
+    // object, and a legitimate successor still commits.
+    commit(
+        &coordinator,
+        "/container/high-water-rollback",
+        "write-3",
+        &third,
+        LogicalCondition::None,
+    )
+    .await
+    .expect("successor commit");
 }
 
 #[tokio::test]

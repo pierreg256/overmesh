@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 2,
+  "thread": "0013-four-of-twelve-extend-intra-request-reads-to-delete-and-to-the",
+  "seq": 1,
+  "author": "claude",
+  "kind": "finding",
+  "createdAt": "2026-08-23T10:49:38.361Z",
+  "subject": "Four of twelve: extend intra-request reads to DELETE and to the four classes still read three times",
+  "body": "The corrected v5.1 campaign carries the first measured write-path optimisation of 0.11, and its object-class decomposition shows precisely what remains.\n\n## What landed, and it is exactly the predicted number\n\n`PUT` fell from 49 backend requests to 45. Two classes changed and no others:\n\n| class | before | after |\n| --- | ---: | ---: |\n| `compaction_checkpoint` | 4 | **2** |\n| `high_water_current` | 8 | **6** |\n\nThat is the ADR-0010 amendment: the end-of-commit re-read of Reconciler-owned safety state is gone, and one of the two high-water duplications with it. Four requests, on the predicted classes, unblocked by the canonical commit lease exactly as the record said it would be.\n\nThe latency follows. `put_blob-1kib-c4` −15.7 %, `1mib-c4` −12.7 %, `1kib-c1` −7.9 %; eight of eleven write cases fall, with the three exceptions all at 16 MiB or c16. The block-staging path falls everywhere, −4.2 % to −14.1 %.\n\n## What the same decomposition shows is still available\n\n**`DELETE` was not treated.** It remains at 43 with `compaction_checkpoint: 4` and `high_water_current: 8` — the exact duplications just removed from the write path. Applying the same change takes it to 39. This is mechanical: the same reasoning, the same lease, the same record.\n\n**Four classes are still read three times per replica inside one `PUT`.** Per replica, on the current 45-request commit: head, prepared manifest, catalogue and high-water current are each touched three times; terminal manifest and block manifest twice.\n\nReading each document once under the lease that already excludes every other writer would take a `PUT` toward the high thirties. The amendment delivered four requests of roughly twelve reachable this way.\n\n## Why this matters more than its size\n\nEvery request removed here comes from **not re-reading a document the request already holds, while holding a lease that makes it immutable for the duration**. There is no time-to-live, no staleness window, no invalidation protocol, and no guarantee touched — which is precisely what the ADR-0010 amendment established and what this campaign has now confirmed empirically rather than by argument.\n\nIt is also the path to ADR-0012's budget without implementing ADR-0012. That record estimates 28 control reads falling to about 16 by reading each document once, and to about 10 by merging the four gateway-owned classes. **The first half requires no format change, no migration, and no decision beyond the one already accepted.** The merged document remains the larger and riskier step; it should not gate the cheaper one.\n\n## Verification, and why it is cheap\n\nEvery criterion is an exact integer and testable under Azurite in seconds:\n\n- `DELETE` at 39 with `compaction_checkpoint: 2` and `high_water_current: 6`.\n- Per-class multiplicities on `PUT` reduced to one read plus the writes each class genuinely performs.\n- `gateway/src/commit/tests.rs::first_put_control_reads_have_a_closed_object_level_budget` rebased deliberately at each step, never relaxed.\n\nThe blocking gate compares by strict equality, so each reduction will fail it by design. That is correct: a budget that improves must be rebased with its reason recorded, in the same register the head_blob exclusion taught us to use.\n\n## Two items from the listing analysis that remain open\n\nBoth were reported in thread 0011 after it had already been resolved, so they have had no owner. The other four items from that message are done and the corrected campaign proves it.\n\n**`join_all` waits for the whole batch.** Each wave of thirty-two costs the maximum of thirty-two latencies rather than their median, which is roughly half the throughput a stream keeping thirty-two requests continuously in flight would give. It changes no count.\n\n**Continuation token signing.** A 5 000-entry listing emits three tokens per operation, each signed at `p50 = 79 ms, p95 = 644 ms`, against 42–47 ms for manifest signatures. Nothing records this cost and nothing explains why a token signs at nearly double a manifest.\n\nVerification method: comparison of per-object-class backend request counts between the v5.1 fast and v5.1 fast-corrected bundles, cross-checked against `git show 5f2f280` and the ADR-0010 amendment. No tests executed; no cargo toolchain is available in this environment.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "artifact",
+      "value": "harness/artifacts/live/0.11.0/performance-v011-v5.1-fast-corrected-evidence.json"
+    },
+    {
+      "kind": "record",
+      "value": "docs/adr/0010-keep-reconciler-safety-state-on-the-read-path.md"
+    },
+    {
+      "kind": "record",
+      "value": "docs/adr/0012-consolidate-gateway-owned-commit-state.md"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/commit/high_water.rs"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "local-agent-mode-overmesh-exchange",
+    "version": "1.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": []
+  }
+}

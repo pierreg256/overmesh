@@ -4,10 +4,7 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-use futures_util::{
-    future::{BoxFuture, join_all},
-    stream::{FuturesOrdered, StreamExt},
-};
+use futures_util::future::join_all;
 use thiserror::Error;
 use tokio::sync::Semaphore;
 
@@ -18,6 +15,7 @@ use crate::{
         catalog_containers_prefix, catalog_listing_prefix, logical_blob_from_catalog_key,
         validate_catalog_entry,
     },
+    commit::{blob_state_key, verify_state_bytes},
     continuation::{
         ContinuationBinding, ContinuationError, ContinuationScope, ContinuationState, issue, verify,
     },
@@ -253,59 +251,35 @@ impl ListingService {
             let mut key_index = 0;
             while key_index < keys.len() {
                 if request.delimiter.is_empty() {
-                    type OrderedValidation<'a> = BoxFuture<
-                        'a,
-                        (
-                            String,
-                            bool,
-                            Result<Option<(String, BlobMetadata)>, ListingError>,
-                        ),
-                    >;
-
-                    let mut validations: FuturesOrdered<OrderedValidation<'_>> =
-                        FuturesOrdered::new();
-                    let mut active_validations = 0_usize;
-                    loop {
-                        let target = if entries.len() == limit {
-                            1
-                        } else {
-                            self.validation_concurrency
-                                .min(limit.saturating_sub(entries.len()))
-                        };
-                        while key_index < keys.len() && active_validations < target {
-                            let key = keys[key_index].clone();
-                            key_index += 1;
-                            if after.as_ref().is_some_and(|cursor| key <= *cursor) {
-                                continue;
-                            }
-                            entries_considered = entries_considered.saturating_add(1);
-                            let should_validate =
-                                logical_blob_from_catalog_key(&self.logical_account, &key)
-                                    .is_ok_and(|logical_blob| {
-                                        !is_internal_blob_name(logical_blob.blob())
-                                    });
-                            if should_validate {
-                                active_validations = active_validations.saturating_add(1);
-                                let quarantined = &quarantined;
-                                let control_token = &control_token;
-                                validations.push_back(Box::pin(async move {
-                                    let result = self
-                                        .validated_catalog_blob(&key, quarantined, control_token)
-                                        .await;
-                                    (key, true, result)
-                                }));
-                            } else {
-                                validations
-                                    .push_back(Box::pin(async move { (key, false, Ok(None)) }));
-                            }
+                    let remaining = limit.saturating_sub(entries.len());
+                    let fanout = self.validation_concurrency.min(remaining.max(1));
+                    let mut candidates = Vec::with_capacity(fanout);
+                    while key_index < keys.len() && candidates.len() < fanout {
+                        let key = keys[key_index].clone();
+                        key_index += 1;
+                        if after.as_ref().is_some_and(|cursor| key <= *cursor) {
+                            continue;
                         }
-                        let Some((key, attempted, validation)) = validations.next().await else {
-                            break;
+                        entries_considered = entries_considered.saturating_add(1);
+                        let Ok(logical_blob) =
+                            logical_blob_from_catalog_key(&self.logical_account, &key)
+                        else {
+                            after = Some(key);
+                            continue;
                         };
-                        if attempted {
-                            active_validations = active_validations.saturating_sub(1);
-                            entries_validated = entries_validated.saturating_add(1);
+                        if is_internal_blob_name(logical_blob.blob()) {
+                            after = Some(key);
+                            continue;
                         }
+                        candidates.push(key);
+                    }
+                    let validations =
+                        join_all(candidates.iter().map(|key| {
+                            self.validated_catalog_blob(key, &quarantined, &control_token)
+                        }))
+                        .await;
+                    for (key, validation) in candidates.into_iter().zip(validations) {
+                        entries_validated = entries_validated.saturating_add(1);
                         let Some((name, metadata)) = validation? else {
                             after = Some(key);
                             continue;
@@ -728,31 +702,30 @@ impl ListingService {
         let _validation_permit = self.validation_limiter.acquire().await.map_err(|error| {
             ListingError::Backend(BackendError::InvalidResponse(error.to_string()))
         })?;
-        let head_key = format!("heads/{}.json", logical_blob.path_hash());
-        let (primary_catalog, secondary_catalog, primary_head, secondary_head) = tokio::try_join!(
+        let state_key = blob_state_key(&logical_blob.path_hash());
+        let (primary_catalog, secondary_catalog, primary_state, secondary_state) = tokio::try_join!(
             primary.control_get_object(object_key, token),
             secondary.control_get_object(object_key, token),
-            primary.control_get_object(&head_key, token),
-            secondary.control_get_object(&head_key, token)
+            primary.control_get_object(&state_key, token),
+            secondary.control_get_object(&state_key, token)
         )?;
         let (
             Some(primary_catalog),
             Some(secondary_catalog),
-            Some(primary_head),
-            Some(secondary_head),
+            Some(primary_state),
+            Some(secondary_state),
         ) = (
             primary_catalog,
             secondary_catalog,
-            primary_head,
-            secondary_head,
+            primary_state,
+            secondary_state,
         )
         else {
             return Ok(None);
         };
-        if primary_catalog.bytes != secondary_catalog.bytes
-            || primary_catalog.bytes != primary_head.bytes
-            || primary_catalog.bytes != secondary_head.bytes
-        {
+        // The catalogue entry is a terminal snapshot, so both replicas must hold
+        // exactly the same bytes for it.
+        if primary_catalog.bytes != secondary_catalog.bytes {
             return Ok(None);
         }
         let entry = match validate_catalog_entry(
@@ -766,11 +739,35 @@ impl ListingService {
             Ok(value) => value,
             Err(_) => return Ok(None),
         };
+        // Verify each distinct signed document once. In the steady state the
+        // catalogue and both commit-state objects contain identical bytes, so
+        // the catalogue validation above already proves all three copies. An
+        // interrupted preparation produces a distinct state document, which is
+        // still verified before its published generation is trusted.
+        let state_publishes_catalog = |bytes: &[u8]| {
+            if bytes == primary_catalog.bytes {
+                return true;
+            }
+            verify_state_bytes(bytes, &state_key, self.signer.as_ref()).is_ok_and(|published| {
+                published.payload.blob == logical_blob.canonical()
+                    && published.payload.current() == entry.head()
+            })
+        };
+        if !state_publishes_catalog(&primary_state.bytes) {
+            return Ok(None);
+        }
+        if secondary_state.bytes != primary_state.bytes
+            && !state_publishes_catalog(&secondary_state.bytes)
+        {
+            return Ok(None);
+        }
         let path_hash = entry.logical_blob.path_hash();
         if quarantined.contains(&path_hash) {
             return Ok(None);
         }
-        let head = entry.signed_head.payload;
+        let Some(head) = entry.head().cloned() else {
+            return Ok(None);
+        };
         if head.state != ManifestState::Committed {
             return Ok(None);
         }

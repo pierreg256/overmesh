@@ -13,6 +13,10 @@ and retained evidence bundle names. Existing signed bundles remain byte-for-byte
 unchanged; future campaign bundles also carry the release tag beside their
 campaign commit.
 
+An annotated release tag is created only after the final `Close` commit exists,
+and points at that commit. A tag created before the closure record is not moved;
+the correction is published as the next patch release.
+
 ## Canonical and raw forms
 
 The committed form is deterministically redacted by

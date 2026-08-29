@@ -25,6 +25,7 @@ use crate::{identity::CallerIdentity, request_context::current_client_request_fi
 
 const BLOCK_MANIFEST_DOMAIN: &[u8] = b"overmesh:block-manifest:v1\0";
 const COMMIT_MANIFEST_DOMAIN: &[u8] = b"overmesh:commit-manifest:v1\0";
+const BLOB_COMMIT_STATE_DOMAIN: &[u8] = b"overmesh:blob-commit-state:v1\0";
 const RECONCILIATION_RECORD_DOMAIN: &[u8] = b"overmesh:reconciliation-record:v1\0";
 const GARBAGE_COLLECTION_MARKER_DOMAIN: &[u8] = b"overmesh:garbage-collection-marker:v1\0";
 const HISTORY_COMPACTION_CHECKPOINT_DOMAIN: &[u8] = b"overmesh:history-compaction-checkpoint:v1\0";
@@ -35,6 +36,11 @@ const STAGED_BLOCK_GC_MARKER_DOMAIN: &[u8] = b"overmesh:staged-block-gc-marker:v
 const RECONCILER_CURSOR_DOMAIN: &[u8] = b"overmesh:reconciler-cursor:v1\0";
 const LOCAL_TEST_MANIFEST_KEY: [u8; 32] = [11; 32];
 pub const BLOCK_MANIFEST_PAGE_SIZE: u32 = 1024;
+
+/// ADR-0012 merges the Gateway-owned head, high-water current, prepared and
+/// terminal commit state into one signed document per blob per replica.
+pub const BLOB_COMMIT_STATE_API_VERSION: &str = "overmesh.io/blob-commit-state/v1";
+pub const BLOB_COMMIT_STATE_FORMAT_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyValidity {
@@ -280,6 +286,123 @@ pub struct CommitManifest {
     pub signing_key_id: String,
 }
 
+/// The single Gateway-owned document that describes a logical blob's committed
+/// generation, its durable high-water assertion, and any interrupted
+/// preparation. ADR-0012 replaces the separate head, high-water current,
+/// prepared manifest and terminal manifest objects with this document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BlobCommitState {
+    pub api_version: String,
+    pub format_version: u32,
+    pub blob: String,
+    pub path_hash: String,
+    pub ring_version: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<CommitManifest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prepared: Option<CommitManifest>,
+    pub signing_key_id: String,
+}
+
+impl BlobCommitState {
+    pub fn new(
+        blob: &str,
+        ring_version: u64,
+        current: Option<CommitManifest>,
+        prepared: Option<CommitManifest>,
+        signing_key_id: &str,
+    ) -> Self {
+        Self {
+            api_version: BLOB_COMMIT_STATE_API_VERSION.to_owned(),
+            format_version: BLOB_COMMIT_STATE_FORMAT_VERSION,
+            blob: blob.to_owned(),
+            path_hash: blob_path_hash(blob),
+            ring_version,
+            current,
+            prepared,
+            signing_key_id: signing_key_id.to_owned(),
+        }
+    }
+
+    /// The committed or tombstoned generation this document publishes. Absent
+    /// only while a first preparation is interrupted before any commit.
+    pub fn current(&self) -> Option<&CommitManifest> {
+        self.current.as_ref()
+    }
+
+    pub fn prepared(&self) -> Option<&CommitManifest> {
+        self.prepared.as_ref()
+    }
+
+    pub fn with_prepared(&self, prepared: Option<CommitManifest>) -> Self {
+        Self {
+            prepared,
+            ..self.clone()
+        }
+    }
+}
+
+/// The physical `path_hash` of a canonical logical blob. Kept beside the
+/// document definition so the merged state can bind its own key.
+pub fn blob_path_hash(blob: &str) -> String {
+    hex::encode(Sha256::digest(blob.as_bytes()))
+}
+
+/// Structural validation for the merged commit-state document. Signature
+/// verification is the caller's responsibility and always precedes trust.
+pub fn validate_blob_commit_state(state: &BlobCommitState) -> Result<(), ManifestError> {
+    let invalid = |reason: &str| ManifestError::InvalidStructure(reason.to_owned());
+    if state.api_version != BLOB_COMMIT_STATE_API_VERSION {
+        return Err(invalid("blob commit state api version is not supported"));
+    }
+    if state.format_version != BLOB_COMMIT_STATE_FORMAT_VERSION {
+        return Err(invalid("blob commit state format version is not supported"));
+    }
+    if state.blob.is_empty() || state.path_hash != blob_path_hash(&state.blob) {
+        return Err(invalid(
+            "blob commit state path hash does not bind its blob",
+        ));
+    }
+    if state.current.is_none() && state.prepared.is_none() {
+        return Err(invalid("blob commit state carries no generation"));
+    }
+    if let Some(current) = &state.current
+        && (current.blob != state.blob
+            || current.ring_version != state.ring_version
+            || current.logical_version == 0
+            || !matches!(
+                current.state,
+                ManifestState::Committed | ManifestState::Tombstoned
+            ))
+    {
+        return Err(invalid("blob commit state current generation is invalid"));
+    }
+    if let Some(prepared) = &state.prepared {
+        if prepared.blob != state.blob
+            || prepared.ring_version != state.ring_version
+            || prepared.state != ManifestState::Prepared
+            || !prepared.prepared_replicas.is_empty()
+        {
+            return Err(invalid("blob commit state prepared generation is invalid"));
+        }
+        let extends_current = match &state.current {
+            Some(current) => {
+                prepared.logical_version == current.logical_version.saturating_add(1)
+                    && prepared.previous_logical_etag.as_deref()
+                        == Some(current.logical_etag.as_str())
+            }
+            None => prepared.logical_version == 1 && prepared.previous_logical_etag.is_none(),
+        };
+        if !extends_current {
+            return Err(invalid(
+                "blob commit state prepared generation does not extend the current generation",
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SignedDocument<T> {
@@ -293,6 +416,7 @@ pub struct SignedDocument<T> {
 pub enum SignatureDomain {
     BlockManifest,
     CommitManifest,
+    BlobCommitState,
     ReconciliationRecord,
     GarbageCollectionMarker,
     HistoryCompactionCheckpoint,
@@ -308,6 +432,7 @@ impl SignatureDomain {
         match self {
             Self::BlockManifest => BLOCK_MANIFEST_DOMAIN,
             Self::CommitManifest => COMMIT_MANIFEST_DOMAIN,
+            Self::BlobCommitState => BLOB_COMMIT_STATE_DOMAIN,
             Self::ReconciliationRecord => RECONCILIATION_RECORD_DOMAIN,
             Self::GarbageCollectionMarker => GARBAGE_COLLECTION_MARKER_DOMAIN,
             Self::HistoryCompactionCheckpoint => HISTORY_COMPACTION_CHECKPOINT_DOMAIN,

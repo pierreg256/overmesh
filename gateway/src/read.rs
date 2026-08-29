@@ -13,7 +13,8 @@ use crate::{
     auth::AuthenticatedPrincipal,
     backend::{BackendError, SharedBackend},
     commit::{
-        CommitCoordinator, CommitError, ensure_not_quarantined, load_head, strict_current_head,
+        CommitCoordinator, CommitError, blob_state_key, ensure_not_quarantined, load_state,
+        strict_current_state,
     },
     identity::{CallerToken, ControlToken, SharedControlTokenProvider},
     manifest::{
@@ -22,7 +23,7 @@ use crate::{
         SignedDocument, logical_etag, sha256_bytes, validate_block_manifest_link,
         validate_block_manifest_page,
     },
-    request_context::{current_client_request_fingerprint, scope},
+    request_context::{SharedRequestTelemetry, current_request_telemetry, scope},
     resource::{LogicalBlobId, stable_component},
 };
 
@@ -120,7 +121,7 @@ struct ReadStreamState {
     requested_start: u64,
     requested_end: u64,
     content_length: u64,
-    client_request_fingerprint: String,
+    request_telemetry: Option<SharedRequestTelemetry>,
 }
 
 impl ReadService {
@@ -199,11 +200,11 @@ impl ReadService {
             requested_start: prepared.requested_start,
             requested_end: prepared.requested_end,
             content_length: prepared.common.metadata.content_length,
-            client_request_fingerprint: current_client_request_fingerprint(),
+            request_telemetry: current_request_telemetry(),
         };
         let body = Body::from_stream(stream::try_unfold(state, |mut state| async move {
-            let fingerprint = state.client_request_fingerprint.clone();
-            scope(fingerprint, async move {
+            let telemetry = state.request_telemetry.as_ref().map(Arc::clone);
+            let read_next = async move {
                 loop {
                     if let Some(block) = state.blocks.pop_front() {
                         let bytes = read_validated_block(&state, &block.descriptor).await?;
@@ -246,8 +247,11 @@ impl ReadService {
                             })
                         }));
                 }
-            })
-            .await
+            };
+            match telemetry {
+                Some(telemetry) => scope(telemetry, read_next).await,
+                None => read_next.await,
+            }
         }));
         Ok(BlobRead {
             metadata: prepared.common.metadata,
@@ -281,9 +285,12 @@ impl ReadService {
             .cloned()
             .ok_or(ReadError::ReplicaDrift)?;
         let path_hash = logical_blob.path_hash();
-        let head_key = format!("heads/{path_hash}.json");
-        let high_water_key = format!("high-water/{path_hash}/current.json");
-        let (_, (primary_head, secondary_head), compaction, (primary_high, secondary_high)) = tokio::try_join!(
+        let state_key = blob_state_key(&path_hash);
+        // ADR-0012 collapses the head and its high-water assertion into one
+        // document, so the read path loads one Gateway-owned object per replica.
+        // ADR-0010 keeps the Reconciler-owned quarantine and compaction state
+        // as separate replicated reads.
+        let (_, (primary_state, secondary_state), compaction) = tokio::try_join!(
             async {
                 map_quarantine(
                     ensure_not_quarantined(
@@ -298,15 +305,15 @@ impl ReadService {
             },
             async {
                 tokio::try_join!(
-                    load_head(
+                    load_state(
                         primary.as_ref(),
-                        &head_key,
+                        &state_key,
                         &control_token,
                         self.signer.as_ref()
                     ),
-                    load_head(
+                    load_state(
                         secondary.as_ref(),
-                        &head_key,
+                        &state_key,
                         &control_token,
                         self.signer.as_ref()
                     )
@@ -325,48 +332,25 @@ impl ReadService {
                 )
                 .await
                 .map_err(map_commit_error)
-            },
-            async {
-                tokio::try_join!(
-                    load_head(
-                        primary.as_ref(),
-                        &high_water_key,
-                        &control_token,
-                        self.signer.as_ref()
-                    ),
-                    load_head(
-                        secondary.as_ref(),
-                        &high_water_key,
-                        &control_token,
-                        self.signer.as_ref()
-                    )
-                )
-                .map_err(map_commit_error)
             }
         )?;
-        let head = strict_current_head(primary_head.as_ref(), secondary_head.as_ref())
+        let state = strict_current_state(primary_state.as_ref(), secondary_state.as_ref())
             .map_err(map_commit_error)?
             .ok_or(ReadError::NotFound)?;
-        if head.signed.payload.state == ManifestState::Tombstoned {
+        let head = state.current().ok_or(ReadError::NotFound)?;
+        if head.state == ManifestState::Tombstoned {
             return Err(ReadError::NotFound);
         }
         validate_committed_head(
-            &head.signed.payload,
+            head,
             logical_blob,
             self.ring.ring_version,
             primary.id(),
             secondary.id(),
         )?;
-        let high_water = strict_current_head(primary_high.as_ref(), secondary_high.as_ref())
-            .map_err(map_commit_error)?
-            .ok_or(ReadError::VerificationFailed)?;
-        if high_water.bytes != head.bytes {
-            return Err(ReadError::VerificationFailed);
-        }
         if compaction.as_ref().is_some_and(|checkpoint| {
-            head.signed.payload.logical_version
-                <= checkpoint.signed.payload.compacted_through_logical_version
-                || head.signed.payload.logical_version
+            head.logical_version <= checkpoint.signed.payload.compacted_through_logical_version
+                || head.logical_version
                     < checkpoint
                         .signed
                         .payload
@@ -374,7 +358,7 @@ impl ReadService {
         }) {
             return Err(ReadError::VerificationFailed);
         }
-        let head = head.signed.payload.clone();
+        let head = head.clone();
         Ok(PreparedCommon {
             primary,
             secondary,

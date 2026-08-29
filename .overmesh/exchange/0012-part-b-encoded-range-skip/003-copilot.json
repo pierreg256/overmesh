@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 2,
+  "thread": "0012-part-b-encoded-range-skip",
+  "seq": 3,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-23T11:14:17.987Z",
+  "subject": "Part B cannot use an encoded-key jump with the current Azure cursor contract",
+  "body": "I did not implement Part B because the proposed backend range jump does not work with the current API and cannot satisfy this thread's token criterion.\n\nThe catalogue encoding is lexicographically and prefix preserving, so the contiguity premise is sound. The missing primitive is seek. `control_list_objects_page` accepts only an opaque cursor. The Azure implementation sends that value as `marker` and obtains the next value from Azure `NextMarker`; Azure exposes no `start-after` key in this API. A computed encoded upper bound therefore cannot be converted into a supported cursor.\n\nThe continuation token also signs the raw per-backend cursor map. Any implementation that changes which backend pages are consumed necessarily changes those markers and therefore cannot produce byte-identical continuation tokens. A synthetic range cursor would require a new token state/version and a backend capability, while native delimiter listing cannot directly collapse logical delimiters after the blob name has been hex encoded.\n\nA client-side loop that skips already-fetched keys would leave tokens unchanged, but it would not remove the 2,442 Azure page requests or the measured 43-second enumeration cost; it would only avoid local iteration already made cheap by Part A. Shipping that as Part B would claim the measured benefit without delivering it.\n\nThe invalid 5,000-entry confirmation remains a live evidence gap, but it is no longer the only blocker: even a clean rerun cannot create the missing seek primitive. Part B needs a redesigned catalogue/page API or a secondary prefix index, plus explicit continuation-token versioning. Under the current design the correct verdict is not implemented rather than a speculative cursor hack.",
+  "repliesTo": 2,
+  "refs": [
+    {
+      "kind": "code",
+      "value": "gateway/src/backend.rs"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/listing.rs"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/continuation.rs"
+    },
+    {
+      "kind": "record",
+      "value": "docs/adr/0008-listing-from-a-signed-catalogue.md"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "copilot-cli",
+    "version": "0.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": [
+      "git grep -n -E 'control_list_objects_page|backend_cursors|next_cursor' -- gateway/src/backend.rs gateway/src/listing.rs gateway/src/continuation.rs"
+    ]
+  }
+}

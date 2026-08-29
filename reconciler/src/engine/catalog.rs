@@ -8,6 +8,45 @@ pub(super) enum CatalogReconciliation {
 }
 
 impl ReconcilerEngine {
+    /// The terminal commit-state bytes for the generation a head publishes.
+    /// Returns `None` when an interrupted preparation makes the head non-terminal
+    /// and no durable history entry is available to stand in for it.
+    async fn terminal_state_bytes(
+        &self,
+        logical_blob: &LogicalBlobId,
+        head_bytes: &[u8],
+        first: &dyn ReplicaBackend,
+        second: &dyn ReplicaBackend,
+        token: &ControlToken,
+    ) -> Result<Option<Vec<u8>>> {
+        let signed = parse_blob_commit_state(head_bytes, self.signer.as_ref(), "committed head")?;
+        if signed.payload.prepared().is_none() {
+            return Ok(Some(head_bytes.to_vec()));
+        }
+        let Some(current) = signed.payload.current() else {
+            return Ok(None);
+        };
+        let history_key = high_water_history_key(&logical_blob.path_hash(), current);
+        let (first_value, second_value) = tokio::try_join!(
+            first.control_get_object(&history_key, token),
+            second.control_get_object(&history_key, token)
+        )?;
+        let Some(value) = first_value.or(second_value) else {
+            warn!(
+                blob = logical_blob.canonical(),
+                "catalogue reconciliation deferred while a preparation is interrupted"
+            );
+            return Ok(None);
+        };
+        let history =
+            parse_blob_commit_state(&value.bytes, self.signer.as_ref(), "high-water history")?;
+        ensure!(
+            history.payload.prepared().is_none() && history.payload.current() == Some(current),
+            "high-water history does not publish the head generation"
+        );
+        Ok(Some(value.bytes))
+    }
+
     pub(super) async fn reconcile_catalog_current(
         &self,
         logical_blob: &LogicalBlobId,
@@ -31,6 +70,20 @@ impl ReconcilerEngine {
         ensure!(replicas.len() == 2, "catalog reconciliation requires W=2");
         let replica_ids = [replicas[0].id.as_str(), replicas[1].id.as_str()];
         let object_key = catalog_key(logical_blob);
+        // A catalogue entry is the terminal form of the merged commit-state
+        // document. While a preparation is in flight the head is not terminal,
+        // so the Reconciler reads the durable history entry rather than minting
+        // Gateway-owned state it does not own (ADR-0003, ADR-0012).
+        let Some(terminal_bytes) = self
+            .terminal_state_bytes(logical_blob, &first_head.bytes, first, second, token)
+            .await?
+        else {
+            return Ok(CatalogReconciliation::Current);
+        };
+        let first_head = ObjectValue {
+            bytes: terminal_bytes,
+            ..first_head
+        };
         let expected = validate_catalog_entry_for_logical_blob(
             logical_blob,
             &object_key,
@@ -41,7 +94,7 @@ impl ReconcilerEngine {
         )
         .context("current head is not valid catalog truth")?;
         ensure!(
-            expected.signed_head.payload.blob == logical_blob.canonical(),
+            expected.signed_state.payload.blob == logical_blob.canonical(),
             "catalog head blob mismatch"
         );
 
@@ -75,8 +128,8 @@ impl ReconcilerEngine {
                     )));
                 }
             };
-            if existing.signed_head.payload.logical_version
-                >= expected.signed_head.payload.logical_version
+            if existing.head().map(|head| head.logical_version)
+                >= expected.head().map(|head| head.logical_version)
             {
                 return Ok(CatalogReconciliation::Conflict(format!(
                     "{replica} catalog entry conflicts with or is newer than the W=2 current head"

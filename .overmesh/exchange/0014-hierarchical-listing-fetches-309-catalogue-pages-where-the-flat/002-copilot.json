@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 2,
+  "thread": "0014-hierarchical-listing-fetches-309-catalogue-pages-where-the-flat",
+  "seq": 2,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-23T13:33:21.019Z",
+  "subject": "Root cause confirmed and grouped scan amplification removed",
+  "body": "The asymmetry is real, but the proposed 19-versus-309 table mixed denominators. Per high-level listing repetition across all three backends, the certified evidence contains 42 flat catalogue-page requests and 927 hierarchical catalogue-page requests; each also has 15 quarantine listings. The catalogue-only ratio is therefore 22.1, not 16.\n\nSource review and a closed local regression identify the primary cause before `safe_upper_bound`: backend catalogue page size was derived from client-visible `maxresults`. The flat contract (`maxresults=1000`) requested 1,001 objects, while the hierarchical contract (`maxresults=10`) was raised only to the 32-object minimum. Both paths considered 5,004 keys, so hierarchical collapse repeatedly fetched 32-object Azure pages.\n\nCommit ba62eb4 decouples grouped backend scans from client output pages and requests the bounded Azure maximum of 5,000 catalogue objects for delimiter and container grouping. The page-start opaque cursors and last consumed ordering key remain unchanged in signed continuation tokens. A new 5,000-key/50-prefix local regression returns the exact 50 ordered prefixes over five ten-prefix pages with ten total catalogue-page calls across two replicas (one page per replica per client page), instead of roughly 314 calls under the former 32-object scan. The existing skewed three-backend and cross-page continuation regressions remain green.\n\nThe same commit owns the `join_all` item for flat blobs: fixed waves are replaced by a bounded `FuturesOrdered` pipeline. It never has more real validations in flight than remaining output capacity, retains the global semaphore, drains in catalogue order, and preserves `entriesConsidered`, `entriesValidated`, error order, output order, and continuation state.\n\nNo token-signing shortcut was implemented. The listing evidence has only 12 token samples per case. Instrumentation starts immediately before the same Azure Key Vault ES256 request used for manifests, after canonicalization and SHA-256, and ends when that remote request returns. Both domains send a 32-byte digest to the same key and algorithm. The observed token medians are therefore remote-service variance, not evidence of token-specific application work; caching or weakening per-token signatures would be unjustified.\n\nThe complete PR gate and retained-artifact checksum verification pass. A new signed live listing campaign is still required before claiming the predicted three-backend request count as evidence.",
+  "repliesTo": 1,
+  "refs": [
+    {
+      "kind": "commit",
+      "value": "ba62eb4"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/listing.rs"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/commit/tests.rs"
+    },
+    {
+      "kind": "record",
+      "value": "docs/adr/0008-listing-from-a-signed-catalogue.md"
+    },
+    {
+      "kind": "artifact",
+      "value": "harness/artifacts/live/0.11.0/performance-v011-v5.1-analysis.md"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "copilot-cli",
+    "version": "0.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review",
+      "tests-executed"
+    ],
+    "commands": [
+      "make test-pr",
+      "cd harness/artifacts/live/0.11.0 && shasum -a 256 -c SHA256SUMS"
+    ]
+  }
+}

@@ -132,6 +132,60 @@ record and the compaction checkpoint **once** per replica per request rather
 than once at the start and again at the end. This is not the caching ADR-0010
 forbids; see the amendment to that record.
 
+### The lease stays create-first, and lease-first is deferred
+
+Making the lease canonical raised the adjacent question 0.11.0 left open:
+whether to acquire the Azure lease **first** and create the lock object only
+when the lease attempt reports the object missing, rather than the current
+order — conditional create, then acquire.
+
+That question is now measured, and the answer is no, not on this evidence.
+
+`control_acquire_lock` issues a conditional `PUT` with `If-None-Match: *` on
+`locks/{path_hash}`, then a `PUT ?comp=lease`. A commit therefore spends three
+lock requests: create, acquire, release. The corrected v5.1 fast campaign
+decomposes them by operation and by status:
+
+| Workload | create | acquire | release | per operation |
+| --- | --- | --- | --- | ---: |
+| First `PUT` (24 runs) | `201` | `201` | `200` | 3 |
+| Established overwrite (9 runs) | `409` | `201` | `200` | 3 |
+| `DELETE` (9 runs) | `409` | `201` | `200` | 3 |
+
+**Both workloads cost three lock requests.** They differ only in the status of
+the conditional create. Every run reports `control_put_bytes/lock = 10`,
+`control_acquire_lock/lock = 10` and `control_release_lock/lock = 10` for ten
+measured operations, with `"status": "valid"` and no failures.
+
+**The `409` on an established overwrite is not a lease conflict.** It is the
+conditional create refusing to recreate a lock object that already exists,
+which is the expected steady-state result once a blob has been written once.
+A genuine lease conflict is a different outcome: `BackendError::LeaseConflict`
+from the `?comp=lease` request, surfaced as `CommitError::LockConflict`, which
+fails the operation. The campaign records ten successful acquires per run and
+zero failures, so no `409` in this evidence is a contended lease.
+
+Lease-first would not remove a request; it would **move** one. On an
+established blob the lease acquire would succeed immediately, giving two
+requests instead of three. On a first write it would fail against a missing
+object, requiring create, retry-acquire and release — four instead of three.
+The trade is `-1` on overwrite and `+1` on first write, which is only
+worthwhile under an explicit workload policy asserting that established
+overwrites dominate first writes. No such policy exists, and nothing in the
+0.11 campaigns measures the ratio.
+
+**Decision: lease-first is deferred and the create-first order is retained.**
+This closes the 0.11.1 deliverable by explicit deferral rather than by silence.
+The runtime lock order is unchanged by this record, and the merged commit-state
+document does not depend on it: the merge needs the lease to be *canonical*,
+which it already is, not to be acquired in a particular order.
+
+The corrected v5.1 fast campaign is `baselineEligible: false` and
+`campaignPurpose: "diagnostic-fast"`, so it carries no latency conclusion. The
+lock counts used here are structural integers reproduced identically across
+every run, payload and concurrency level of each family, which is what a
+request-order decision needs and all it is used for.
+
 ## Consequences
 
 ### The expected budget
@@ -200,31 +254,137 @@ If the Reconciler ever needs to publish commit state independently of the
 Gateway, the ownership assumption behind this record fails and ADR-0003 becomes
 the constraint rather than a bystander.
 
+If a workload policy is ever written that states established overwrites
+dominate first writes, lease-first becomes a one-request saving on the dominant
+path and should be reopened against that policy — with the first-write
+regression stated, not hidden. Measuring the first-write to overwrite ratio is
+the prerequisite, and no current campaign reports it.
+
 ## Implementation status
 
-The merged state document is not implemented. Its canonical-lease prerequisite
-is implemented: both Gateway and Reconciler route `locks/{path_hash}` to the
-deterministic primary whenever a head identifies a canonical logical blob,
-including anomalous heads that cannot be trusted as committed state.
+Implemented. The merged document is published at `heads/{path_hash}.json` as a
+`SignedDocument<BlobCommitState>` under signature domain
+`overmesh:blob-commit-state:v1`. It carries an API version, a format version,
+the canonical blob and its path hash, the Ring version, the current committed
+or tombstoned generation, and any interrupted preparation — signed together,
+under the Gateway identity, in the same commit. It replaces the separate head,
+high-water current, prepared manifest and terminal manifest objects. Catalogue
+entries and high-water history objects hold the terminal form of the same
+document, so the merge costs no additional signature per transition.
 
-PUT and DELETE reuse the compaction and high-water snapshot validated under
-that lease. Their closed control-read budgets are now 24 and 22 respectively.
-The other apparent repeated touches are pre-mutation loads, writes and
-post-mutation verification rather than reusable reads.
+The canonical-lease prerequisite was already implemented: both Gateway and
+Reconciler route `locks/{path_hash}` to the deterministic primary whenever a
+head identifies a canonical logical blob.
+
+Two-phase commit is now a conditional state machine on one object. The prepared
+transition is conditional on each replica's loaded entity tag; the commit
+transition is conditional on the entity tags that transition returned, so a
+concurrent writer cannot skip the prepared state. A retry that finds a
+`Prepared` generation for its own write ID reuses it, which is what the removed
+immutable prepared sidecar previously provided.
+
+A preparation that reaches only one replica leaves the same published
+generation inside two documents whose bytes differ. Neither side is
+authoritative over the other by logical version, so reconciliation converges
+both onto the terminal form of the generation they already publish — the
+durable high-water history entry — and discards the never-committed
+preparation. No Gateway-owned state is minted to do it.
+
+For the same reason an idempotent replay never republishes the loaded document:
+it publishes that terminal form to the catalogue and the history, because the
+loaded document may still carry an unrelated interrupted preparation.
+
+The high-water assertion is no longer a second object, so the rollback witness
+is the retained per-version history plus the Reconciler-owned compaction
+checkpoint that ADR-0010 keeps replicated. Every write proves, on both
+replicas, that the durable history entry for the generation it replaces exists,
+and that no durable history entry exists above it. The second check is a narrow
+prefix listing bounded to one logical version. A first write performs neither,
+because it replaces no generation.
+
+**One detection property moved.** Before this record, a `GET` or `HEAD`
+compared the head against a separately published high-water object, so a head
+replayed on both replicas without its high-water was rejected at read time.
+The merged document is internally consistent by construction, so above the
+ADR-0010 compaction floor a replayed document is now rejected by the next write
+and by the Reconciler rather than by the read. Under W=2 both objects were
+already written by the same identity in the same commit, so this removes a
+duplicate rather than an independent witness; the independent witnesses are the
+catalogue, the retained history, and the compaction floor.
+
+### Measured budget
+
+Closed object-level control-read budgets under Azurite, verified by the tests
+below:
+
+| Stage | First `PUT` | `DELETE` |
+| --- | ---: | ---: |
+| Certified 0.11.0 layout | 28 | 24 |
+| Request-scoped reuse | 24 | 22 |
+| Merged commit state | 16 | 16 |
+
+The merged first `PUT` reads two catalogue, one compaction checkpoint, one
+quarantine and one block-manifest object per replica, plus three reads of the
+merged document: one load and the two post-write verifications ADR-0013
+requires. `DELETE` additionally reads one high-water history object per replica
+and performs one narrow prefix listing per replica. Control writes fall from
+twelve to eight per first `PUT`, because the prepared, terminal and high-water
+current objects are no longer written.
+
+### Greenfield
+
+There is no migration and no dual-read path. The document carries
+`formatVersion: 1` so a later change is possible. Existing deployments holding
+data must be recreated.
 
 ## Verified by
 
+- `gateway/src/manifest.rs` — `BlobCommitState`, its signature domain and
+  `validate_blob_commit_state`
+- `gateway/src/commit.rs` — `load_state`, `publish_blob_state`,
+  `resolve_write_state` and `adopt_interrupted_preparation`
+- `gateway/src/commit/high_water.rs` — the durable-history witness and the
+  replayed-generation rejection that replace the high-water current object
 - `gateway/src/commit/tests.rs::first_put_control_reads_have_a_closed_object_level_budget`
-  — establishes the optimized 24-read budget this record further reduces
+  — the merged 16-read first-`PUT` budget
 - `gateway/src/commit/tests.rs::delete_control_reads_have_a_closed_object_level_budget`
-  — establishes the optimized 22-read DELETE budget
+  — the merged 16-read `DELETE` budget
+- `gateway/src/commit/tests.rs::a_replayed_generation_is_rejected_by_the_durable_history`
+  — rollback rejection without a duplicated high-water object
+- `gateway/src/commit/tests.rs::a_replayed_commit_state_is_rejected_by_the_next_write`
+  — where the moved read-time detection now happens
+- `gateway/src/commit/tests.rs::interrupted_preparation_is_visible_and_reused_by_the_same_write`
+  — the prepared state of the merged document
+- `reconciler/src/engine/validation.rs` — replica validation against the merged
+  document and its durable history entry
+- `reconciler/src/engine/tests/orchestration.rs::a_one_sided_preparation_is_repaired_rather_than_quarantined`
+  — an asymmetric preparation is repairable drift, not a conflict
+- `gateway/src/commit/tests.rs::put_replay_publishes_the_terminal_generation_despite_an_interrupted_preparation`
+  — replays publish the terminal generation, not the loaded document
+- `gateway/src/commit/tests.rs::listing_hides_a_commit_state_document_that_is_not_signed_overmesh_state`
+  — listing treats the merged document as truth only after verifying it
+- `reconciler/src/engine/tests/orchestration.rs::a_head_replayed_below_the_durable_history_is_quarantined`
+  — the Reconciler's replacement for the removed high-water comparison
+- `reconciler/src/engine/tests/orchestration.rs::an_interrupted_preparation_does_not_hide_the_published_generation`
+  — an interrupted preparation is a state of the document, not a fault
+- `reconciler/src/engine/tests/orchestration.rs::a_tombstone_published_before_its_history_entry_is_recoverable`
+  — the tombstone crash window the merge preserves
+- `harness/scripts/reconciler-smoke.sh` and `harness/scripts/gateway-smoke.sh` —
+  the Azurite gates that assert the merged layout end to end
 - `harness/artifacts/live/0.11.0/performance-v011-v4-evidence.json` — the
   certified baseline recording 49 backend requests per first `PUT` and 43 per
   `DELETE`
-- `gateway/src/commit/locking.rs` — the Gateway acquires the commit lease on
+- `harness/artifacts/live/0.11.0/performance-v011-v5.1-fast-corrected-evidence.json`
+  — the corrected v5.1 diagnostic campaign whose per-operation and per-status
+  lock decomposition defers lease-first
+- `gateway/src/backend.rs` — `control_acquire_lock` performs the conditional
+  create and then the lease acquire, in that order
+- `gateway/src/commit/locking.rs` — PUT and DELETE take the canonical lease on
   the deterministic primary
-- `reconciler/src/engine/orchestration.rs` — the Reconciler acquires the same
-  key on the deterministic primary in recovery and for every identifiable head
-  in `reconcile_head`
+- `gateway/src/commit/tests.rs::rejects_a_write_when_the_blob_lease_is_held`
+  — a contended lease is `CommitError::LockConflict`, not a conditional-create
+  `409`
+- `reconciler/src/engine/tests/orchestration.rs::anomalous_head_discovered_on_secondary_locks_deterministic_primary`
+  — the canonical lease this record requires
 - `docs/adr/0010-keep-reconciler-safety-state-on-the-read-path.md` — the
   Reconciler-owned reads this record deliberately leaves outside the merge

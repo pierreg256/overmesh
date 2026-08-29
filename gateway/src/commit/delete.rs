@@ -10,19 +10,19 @@ impl CommitCoordinator {
         control_token: &ControlToken,
     ) -> Result<DeleteResult, CommitError> {
         let path_hash = logical_blob.path_hash();
-        let head_key = format!("heads/{path_hash}.json");
-        let ((primary_head, secondary_head), _) = tokio::try_join!(
+        let state_key = blob_state_key(&path_hash);
+        let ((primary_state, secondary_state), _) = tokio::try_join!(
             async {
                 tokio::try_join!(
-                    load_head(
+                    load_state(
                         self.primary.as_ref(),
-                        &head_key,
+                        &state_key,
                         control_token,
                         self.signer.as_ref()
                     ),
-                    load_head(
+                    load_state(
                         self.secondary.as_ref(),
-                        &head_key,
+                        &state_key,
                         control_token,
                         self.signer.as_ref()
                     )
@@ -41,9 +41,9 @@ impl CommitCoordinator {
         )?;
         if let Some(result) = self
             .recover_partial_tombstone_publication(
-                primary_head.as_ref(),
-                secondary_head.as_ref(),
-                &head_key,
+                primary_state.as_ref(),
+                secondary_state.as_ref(),
+                &state_key,
                 logical_blob,
                 write_id,
                 control_token,
@@ -52,50 +52,68 @@ impl CommitCoordinator {
         {
             return Ok(result);
         }
-        let current = strict_current_head(primary_head.as_ref(), secondary_head.as_ref())?;
-        let validated_high_water = Self::validate_or_repair_high_water(
+        let current_state = resolve_write_state(primary_state.as_ref(), secondary_state.as_ref())?;
+        let context = Self::validate_commit_context(
             self.primary.as_ref(),
             self.secondary.as_ref(),
             &path_hash,
             logical_blob.canonical(),
             self.ring_version,
-            current,
+            current_state,
             control_token,
             self.signer.as_ref(),
         )
         .await?;
-        let Some(current) = current else {
+        let Some(current_state) = current_state else {
             return Err(CommitError::NotFound);
         };
-        if current.signed.payload.state == ManifestState::Tombstoned {
-            if current.signed.payload.write_id == write_id {
-                // Listing exposes this tombstone only after both heads contain these exact bytes.
+        let Some(current) = current_state.current() else {
+            return Err(CommitError::NotFound);
+        };
+        if current.state == ManifestState::Tombstoned {
+            if current.write_id == write_id {
+                // A replay republishes the terminal form of the published
+                // tombstone; the loaded document may still carry an unrelated
+                // interrupted preparation.
+                let terminal = context
+                    .current_terminal
+                    .as_ref()
+                    .ok_or(CommitError::VerificationFailed)?;
+                // Listing exposes this tombstone only after both replicas hold
+                // these exact merged bytes.
                 publish_catalog_current(
                     self.primary.as_ref(),
                     self.secondary.as_ref(),
                     logical_blob,
-                    &current.signed,
-                    &current.bytes,
+                    &terminal.signed,
+                    &terminal.bytes,
                     control_token,
                     self.signer.as_ref(),
                 )
                 .await?;
-                return delete_result(&current.signed.payload, true);
+                Self::publish_state_history(
+                    self.primary.as_ref(),
+                    self.secondary.as_ref(),
+                    &path_hash,
+                    current,
+                    &terminal.bytes,
+                    control_token,
+                )
+                .await?;
+                return delete_result(current, true);
             }
             return Err(CommitError::NotFound);
         }
         match logical_condition {
             LogicalCondition::None => {}
             LogicalCondition::IfMatch(expected)
-                if expected == "*" || expected == current.signed.payload.logical_etag => {}
+                if expected == "*" || expected == current.logical_etag => {}
             LogicalCondition::IfMatch(_) | LogicalCondition::IfAbsent => {
                 return Err(CommitError::ConditionFailed);
             }
         }
 
         let logical_version = current
-            .signed
-            .payload
             .logical_version
             .checked_add(1)
             .ok_or(CommitError::VerificationFailed)?;
@@ -111,15 +129,13 @@ impl CommitCoordinator {
             "objects/{path_hash}/tombstones/{}",
             stable_component(write_id)
         );
-        let prepared_manifest_key = format!("{version_prefix}/prepared.json");
-        let committed_manifest_key = format!("{version_prefix}/committed.json");
         let mut prepared_payload = CommitManifest {
             blob: logical_blob.canonical().to_owned(),
             caller: principal.identity(),
             write_id: write_id.to_owned(),
             logical_version,
             logical_etag: logical_etag.clone(),
-            previous_logical_etag: Some(current.signed.payload.logical_etag.clone()),
+            previous_logical_etag: Some(current.logical_etag.clone()),
             ring_version: self.ring_version,
             content_length: 0,
             content_sha256: tombstone_sha256,
@@ -134,103 +150,42 @@ impl CommitCoordinator {
             prepared_replicas: Vec::new(),
             signing_key_id: self.signer.key_id().to_owned(),
         };
-        let (signed_prepared, prepared_bytes) = if let Some((signed, bytes)) =
-            load_or_repair_commit_manifest(
-                self.primary.as_ref(),
-                self.secondary.as_ref(),
-                &prepared_manifest_key,
-                control_token,
-                self.signer.as_ref(),
-            )
-            .await?
-        {
-            prepared_payload.committed_at_unix_ms = signed.payload.committed_at_unix_ms;
-            prepared_payload.deleted_at_unix_ms = signed.payload.deleted_at_unix_ms;
-            if signed.payload != prepared_payload {
-                return Err(CommitError::IdempotencyConflict);
-            }
-            (signed, bytes)
-        } else {
-            let signed = SignedDocument::create(
-                prepared_payload,
-                SignatureDomain::CommitManifest,
-                self.signer.as_ref(),
-            )
-            .await?;
-            let bytes = signed.canonical_bytes()?;
-            tokio::try_join!(
-                control_put_bytes_idempotent(
-                    self.primary.as_ref(),
-                    &prepared_manifest_key,
-                    bytes.clone(),
-                    control_token
-                ),
-                control_put_bytes_idempotent(
-                    self.secondary.as_ref(),
-                    &prepared_manifest_key,
-                    bytes.clone(),
-                    control_token
-                )
-            )?;
-            (signed, bytes)
-        };
-        verify_identical_objects(
-            self.primary.as_ref(),
-            self.secondary.as_ref(),
-            &prepared_manifest_key,
-            &prepared_bytes,
-            control_token,
-        )
-        .await?;
-        let deleted_at_unix_ms = signed_prepared
-            .payload
+        adopt_interrupted_preparation(
+            primary_state.as_ref(),
+            secondary_state.as_ref(),
+            &mut prepared_payload,
+        )?;
+        let deleted_at_unix_ms = prepared_payload
             .deleted_at_unix_ms
             .ok_or(CommitError::VerificationFailed)?;
-
         let tombstone_payload = CommitManifest {
             state: ManifestState::Tombstoned,
-            prepared_replicas: vec![self.primary.id().to_owned(), self.secondary.id().to_owned()],
             committed_at_unix_ms: deleted_at_unix_ms,
-            ..signed_prepared.payload
+            prepared_replicas: vec![self.primary.id().to_owned(), self.secondary.id().to_owned()],
+            ..prepared_payload.clone()
         };
-        let (signed_tombstone, tombstone_bytes) = if let Some((signed, bytes)) =
-            load_or_repair_commit_manifest(
-                self.primary.as_ref(),
-                self.secondary.as_ref(),
-                &committed_manifest_key,
+        validate_tombstone_transition(&tombstone_payload, current)?;
+        validate_publication_floor(
+            &tombstone_payload,
+            Some(current),
+            context.compaction.as_ref(),
+        )?;
+
+        let prepared_etags = self
+            .publish_prepared_state(
+                logical_blob,
+                &state_key,
+                Some(current_state),
+                primary_state.as_ref(),
+                secondary_state.as_ref(),
+                prepared_payload,
                 control_token,
-                self.signer.as_ref(),
-            )
-            .await?
-        {
-            if signed.payload != tombstone_payload {
-                return Err(CommitError::IdempotencyConflict);
-            }
-            (signed, bytes)
-        } else {
-            let signed = SignedDocument::create(
-                tombstone_payload,
-                SignatureDomain::CommitManifest,
-                self.signer.as_ref(),
             )
             .await?;
-            let bytes = signed.canonical_bytes()?;
-            tokio::try_join!(
-                control_put_bytes_idempotent(
-                    self.primary.as_ref(),
-                    &committed_manifest_key,
-                    bytes.clone(),
-                    control_token
-                ),
-                control_put_bytes_idempotent(
-                    self.secondary.as_ref(),
-                    &committed_manifest_key,
-                    bytes.clone(),
-                    control_token
-                )
-            )?;
-            (signed, bytes)
-        };
+
+        let (signed_tombstone, tombstone_bytes) = self
+            .sign_commit_state(logical_blob, Some(tombstone_payload), None)
+            .await?;
 
         publish_catalog_current(
             self.primary.as_ref(),
@@ -243,73 +198,30 @@ impl CommitCoordinator {
         )
         .await?;
 
-        let (primary_publish, secondary_publish) = tokio::join!(
-            self.primary.control_put_bytes(
-                &head_key,
-                tombstone_bytes.clone(),
-                "application/json",
-                head_condition(primary_head.as_ref()),
-                control_token
-            ),
-            self.secondary.control_put_bytes(
-                &head_key,
-                tombstone_bytes.clone(),
-                "application/json",
-                head_condition(secondary_head.as_ref()),
-                control_token
-            )
-        );
-        match (primary_publish, secondary_publish) {
-            (Ok(_), Ok(_)) => {}
-            (Err(first), Err(second))
-                if is_condition_error(&first) && is_condition_error(&second) =>
-            {
-                return Err(CommitError::ConditionFailed);
-            }
-            (Err(error), Ok(_)) | (Ok(_), Err(error)) => {
-                warn!(error = %error, "only one replica published the tombstoned head");
-                return Err(CommitError::Ambiguous);
-            }
-            (Err(first), Err(second)) => {
-                warn!(primary_error = %first, secondary_error = %second, "both tombstone head publications failed");
-                return Err(CommitError::Backend(first));
-            }
-        }
-        verify_identical_objects(
+        publish_blob_state(
             self.primary.as_ref(),
             self.secondary.as_ref(),
-            &head_key,
+            &state_key,
+            &tombstone_bytes,
+            PutCondition::IfMatch(prepared_etags.0.ok_or(CommitError::VerificationFailed)?),
+            PutCondition::IfMatch(prepared_etags.1.ok_or(CommitError::VerificationFailed)?),
+            control_token,
+        )
+        .await?;
+
+        let tombstone = signed_tombstone
+            .payload
+            .current()
+            .ok_or(CommitError::VerificationFailed)?;
+        Self::publish_state_history(
+            self.primary.as_ref(),
+            self.secondary.as_ref(),
+            &path_hash,
+            tombstone,
             &tombstone_bytes,
             control_token,
         )
         .await?;
-        match validated_high_water {
-            Some(snapshot) => {
-                Self::publish_high_water_with_snapshot(
-                    self.primary.as_ref(),
-                    self.secondary.as_ref(),
-                    &path_hash,
-                    &signed_tombstone,
-                    &tombstone_bytes,
-                    snapshot,
-                    control_token,
-                    self.signer.as_ref(),
-                )
-                .await?;
-            }
-            None => {
-                Self::publish_high_water(
-                    self.primary.as_ref(),
-                    self.secondary.as_ref(),
-                    &path_hash,
-                    &signed_tombstone,
-                    &tombstone_bytes,
-                    control_token,
-                    self.signer.as_ref(),
-                )
-                .await?;
-            }
-        }
-        delete_result(&signed_tombstone.payload, false)
+        delete_result(tombstone, false)
     }
 }

@@ -149,8 +149,8 @@ a client.
 
 ## Implementation status
 
-- Property tests for the catalogue encoding — round-trip and order preservation
-  over random byte strings — are to be added.
+- Deterministically seeded property tests cover round-trip, lexicographic order,
+  and prefix preservation over 10,000 random byte-string pairs.
 - Generation-1 grouped listings request bounded 5,000-object backend catalogue
   pages independently of the client-visible `maxresults`. Binding the backend
   scan page to a ten-prefix client page had forced 32-object Azure pages and
@@ -193,6 +193,9 @@ ADR-0005.
   recreate cycle
 - `gateway/src/catalog.rs::ordered_keys_preserve_container_and_blob_utf8_order`
   — catalogue keys round trip and preserve UTF-8 ordering
+- `gateway/src/catalog.rs::ordered_encoding_round_trips_random_byte_strings`
+  and `ordered_encoding_preserves_random_byte_order` — generation-1 encoding
+  properties over deterministic random byte strings
 - `gateway/src/catalog.rs::listing_prefix_is_a_physical_key_prefix` — logical
   prefixes map to physical key prefixes
 - `gateway/src/commit/tests.rs::logical_listing_hides_stages_and_paginates_with_signed_markers`

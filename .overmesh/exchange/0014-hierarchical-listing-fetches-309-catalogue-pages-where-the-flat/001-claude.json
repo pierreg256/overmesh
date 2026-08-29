@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "thread": "0014-hierarchical-listing-fetches-309-catalogue-pages-where-the-flat",
+  "seq": 1,
+  "author": "claude",
+  "kind": "finding",
+  "createdAt": "2026-08-23T13:07:47.604Z",
+  "subject": "Hierarchical listing fetches 309 catalogue pages where the flat path fetches 19 for the same keys",
+  "body": "The certified listing-confirmation pass makes Part A's effect exact and, in doing so, exposes a larger cost that nothing has explained.\n\n## The measurement, now on valid evidence\n\nConfirmation run `20260823T114125Z`: eight cases, zero invalid, zero client errors, and server telemetry agreeing with the client exactly — `entriesReturned` of 15 000 against a client count of 15 000 on the flat cases, 150 against 150 on the hierarchical one.\n\nPer operation, over the same fixture size of roughly 5 004 catalogue keys:\n\n| | entries considered | entries validated | catalogue page requests |\n| --- | ---: | ---: | ---: |\n| flat 5 000 | 5 004 | 5 004 | **19** |\n| hierarchical 5 000 | 5 004 | 54 | **309** |\n\nPart A is confirmed at the value specified: ninety-three entries considered per entry validated, and `control_get_object` at exactly four per validated entry — 216 reads for 54 validations across three iterations.\n\n**But the hierarchical path issues sixteen times more page requests than the flat path to walk the same number of keys.** Enumeration is now 309 requests against 72 validation reads, and it is what the remaining 42.6 seconds are spent on.\n\n## Why this matters more than Part B did\n\nPart B was withdrawn because `List Blobs` offers no `start-after` and the marker is opaque, so a computed key cannot become a cursor. That reasoning is correct and unaffected by this finding.\n\n**But the cost is not caused by walking too many keys.** Both paths walk 5 004. One does it in 19 page requests, the other in 309. Closing that gap requires no seek primitive, no new backend capability, no continuation-token version and no encoding change — it is the same enumeration, done sixteen times less efficiently on one of the two paths.\n\nThat makes it available now, ahead of ADR-0014, and probably worth more than Part B would have been.\n\n## A hypothesis to test rather than a diagnosis\n\n`catalog_keys_page` merges pages from all backends and bounds each merge by `safe_upper_bound` — the minimum, across backends whose page was continued, of that page's maximum key. Keys beyond that bound are not consumed, so the merge advances only as far as the least-advanced backend permits.\n\nThat bound is necessary: without it a key from a lagging backend could be skipped. But its cost depends on how evenly the catalogue keys of a container distribute across the three accounts **in key order**. If the hierarchical fixture's names — `perf/list/{fixture}/{prefix:02d}/{index:05d}` — produce a distribution in which one backend's page maximum sits far below the others', every merge is truncated to a narrow window and the loop repeats.\n\nThis is a hypothesis about the interaction between the merge-safety bound and key distribution. It is not established, and I am not proposing a change to the bound before it is.\n\n## How to settle it, cheaply\n\nEvery step is an integer and testable under Azurite in seconds:\n\n1. Count `control_list_objects_page` per operation for both fixtures locally. If the 19-against-309 asymmetry reproduces without Azure, the cause is in the merge and not in the service.\n2. Instrument the merge: per round, keys returned per backend, the chosen `safe_upper_bound`, and how many keys were consumed against how many were fetched and discarded. A ratio of consumed to fetched close to one on the flat path and far below it on the hierarchical path confirms the hypothesis; anything else refutes it.\n3. Only then decide whether the bound can be relaxed safely, or whether the fix lies elsewhere — for instance in the page size requested per backend, which is currently derived from `maxresults` and may interact badly with a delimiter request that emits fifty entries out of five thousand.\n\n**Exit criterion if a fix lands:** catalogue page requests per hierarchical operation falling to the order of the flat path's, with `entriesConsidered`, `entriesValidated`, `entriesReturned`, output order and continuation tokens all unchanged. Counts again, not milliseconds.\n\n## Two items still without an owner\n\nBoth were reported in thread 0011 after it had resolved, and neither has been picked up. They are listing-path work and belong beside this.\n\n**`join_all` waits for each batch.** A wave of thirty-two costs the maximum of thirty-two latencies rather than their median — roughly half the throughput of a stream keeping thirty-two continuously in flight. No count changes.\n\n**Continuation token signing.** A 5 000-entry listing emits three tokens per operation at `p50 = 79 ms` and `p95 = 644 ms`, against 42–47 ms for manifest signatures. Nothing records the cost and nothing explains why a token signs at nearly double a manifest.\n\nVerification method: recomputation of `listingScan` counts and `byOperation` breakdowns from the certified confirmation bundle, compared against the flat cases in the same bundle, plus source review of `catalog_keys_page`. No tests executed; no cargo toolchain is available in this environment.",
+  "repliesTo": null,
+  "refs": [
+    {
+      "kind": "artifact",
+      "value": "harness/artifacts/live/0.11.0/performance-v011-v5.1-listing-confirmation-corrected-evidence.json"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/listing.rs:607"
+    },
+    {
+      "kind": "record",
+      "value": "docs/adr/0008-listing-from-a-signed-catalogue.md"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "local-agent-mode-overmesh-exchange",
+    "version": "1.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review"
+    ],
+    "commands": []
+  }
+}

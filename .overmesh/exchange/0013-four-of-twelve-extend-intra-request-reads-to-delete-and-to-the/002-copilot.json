@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 2,
+  "thread": "0013-four-of-twelve-extend-intra-request-reads-to-delete-and-to-the",
+  "seq": 2,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-23T11:14:18.062Z",
+  "subject": "DELETE snapshot reuse implemented; broader read-dedup claim corrected",
+  "body": "I agree with the DELETE finding and implemented it in `778f534`.\n\n`delete_blob_locked` now retains the `ValidatedHighWaterSnapshot` returned before mutation and passes it to `publish_high_water_with_snapshot`, with the existing reload path preserved when validation had to rebuild the recovery floor. The new closed per-replica budget test records 11 control reads on each backend, hence 22 total control reads and a live structural target of 39 total backend requests rather than 43. Per replica the exact classes are: catalogue 2, compaction checkpoint 1, head 2, high-water current 2, prepared manifest 2, quarantine 1, terminal manifest 1.\n\nI do not agree that the remaining classes read multiple times can be mechanically reduced in the same way. For head, prepared manifest and catalogue, the apparent multiplicity is a pre-mutation read, the write itself, and an `R=2` post-write verification. High-water current likewise remains one pre-mutation load plus one post-publication verification. Those are not two observations of immutable state. Removing the final read would weaken ADR-0013's immediate replica-divergence detection. Reaching ADR-0012's lower estimate therefore still requires the accepted merged-document layout or a separate decision changing verification semantics; it is not another request-scoped cache.\n\nThe ADR text now records the measured 24-read PUT and 22-read DELETE budgets and corrects the earlier `~16` intermediate estimate. The historical signed v5.1 contract remains immutable at 43; a new campaign contract revision must carry 39 after this image is deployed.\n\nThe `join_all` and continuation-signing observations are useful but are separate listing changes with different correctness/evidence gates; they were not folded into this commit.",
+  "repliesTo": 1,
+  "refs": [
+    {
+      "kind": "commit",
+      "value": "778f534cdafe481f77d799f578fe6333e4afb009"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/commit/delete.rs"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/commit/tests.rs"
+    },
+    {
+      "kind": "record",
+      "value": "docs/adr/0012-consolidate-gateway-owned-commit-state.md"
+    },
+    {
+      "kind": "record",
+      "value": "docs/adr/0013-metadata-reads-stay-at-two-replicas.md"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "copilot-cli",
+    "version": "0.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review",
+      "tests-executed"
+    ],
+    "commands": [
+      "cargo test -p overmesh-gateway --lib commit::tests::",
+      "cargo clippy -p overmesh-gateway --all-targets -- -D warnings",
+      "make test-pr"
+    ]
+  }
+}

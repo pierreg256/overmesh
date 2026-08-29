@@ -136,19 +136,19 @@ impl ReconcilerEngine {
         target: &dyn ReplicaBackend,
         token: &ControlToken,
     ) -> Result<()> {
-        if source.head.signed.payload.state == ManifestState::Committed {
+        if source.head.manifest.state == ManifestState::Committed {
             let content = source_backend
                 .service_get_data_object(
-                    &source.head.signed.payload.content_container,
-                    &source.head.signed.payload.content_object,
+                    &source.head.manifest.content_container,
+                    &source.head.manifest.content_object,
                     token,
                 )
                 .await?
                 .context("validated repair source content disappeared")?;
             put_immutable_data(
                 target,
-                &source.head.signed.payload.content_container,
-                &source.head.signed.payload.content_object,
+                &source.head.manifest.content_container,
+                &source.head.manifest.content_object,
                 content.bytes,
                 token,
             )
@@ -157,7 +157,7 @@ impl ReconcilerEngine {
         if let Some(block_manifest) = &source.block_manifest {
             put_immutable(
                 target,
-                &source.head.signed.payload.block_manifest_object,
+                &source.head.manifest.block_manifest_object,
                 block_manifest.clone(),
                 "application/json",
                 token,
@@ -167,18 +167,13 @@ impl ReconcilerEngine {
         for (object, bytes) in &source.block_pages {
             put_immutable(target, object, bytes.clone(), "application/json", token).await?;
         }
-        put_immutable(
-            target,
-            &committed_manifest_object(&source.head.signed.payload)?,
-            source.committed_manifest.clone(),
-            "application/json",
-            token,
-        )
-        .await?;
         self.repair_high_water_checkpoint(source, target, token)
             .await
     }
 
+    /// ADR-0012 leaves the per-version high-water history outside the merged
+    /// document, so repair copies the source's signed history entry and never
+    /// mints Gateway-owned commit state.
     pub(super) async fn repair_high_water_checkpoint(
         &self,
         source: &ValidatedReplica,
@@ -186,10 +181,16 @@ impl ReconcilerEngine {
         token: &ControlToken,
     ) -> Result<()> {
         let path_hash = source.head.logical_blob.path_hash();
-        let history_key = format!(
-            "high-water/{path_hash}/history/{:020}-{}.json",
-            source.head.signed.payload.logical_version,
-            stable_component(&source.head.signed.payload.write_id)
+        let history_key = high_water_history_key(&path_hash, &source.head.manifest);
+        let history = parse_blob_commit_state(
+            &source.high_water_checkpoint,
+            self.signer.as_ref(),
+            "high-water checkpoint",
+        )?;
+        ensure!(
+            history.payload.prepared().is_none()
+                && history.payload.current() == Some(&source.head.manifest),
+            "high-water checkpoint does not publish the repaired generation"
         );
         put_immutable(
             target,
@@ -199,41 +200,6 @@ impl ReconcilerEngine {
             token,
         )
         .await?;
-        let current_key = format!("high-water/{path_hash}/current.json");
-        let current = target.control_get_object(&current_key, token).await?;
-        if current
-            .as_ref()
-            .is_some_and(|value| value.bytes == source.high_water_checkpoint)
-        {
-            return Ok(());
-        }
-        if let Some(value) = current.as_ref() {
-            let signed = SignedDocument::<CommitManifest>::from_bytes(&value.bytes)
-                .context("target high-water checkpoint is invalid")?;
-            signed
-                .verify(
-                    SignatureDomain::CommitManifest,
-                    &signed.payload.signing_key_id,
-                    self.signer.as_ref(),
-                )
-                .context("target high-water checkpoint signature validation failed")?;
-            ensure!(
-                signed.payload.logical_version <= source.head.signed.payload.logical_version,
-                "repair refused to lower the target high-water checkpoint"
-            );
-        }
-        target
-            .control_put_bytes(
-                &current_key,
-                source.high_water_checkpoint.clone(),
-                "application/json",
-                match current.and_then(|value| value.etag) {
-                    Some(etag) => PutCondition::IfMatch(etag),
-                    None => PutCondition::IfAbsent,
-                },
-                token,
-            )
-            .await?;
         Ok(())
     }
 
@@ -246,19 +212,19 @@ impl ReconcilerEngine {
         head_object: &str,
         token: &ControlToken,
     ) -> Result<()> {
-        if source.head.signed.payload.state == ManifestState::Committed {
+        if source.head.manifest.state == ManifestState::Committed {
             let content = source_backend
                 .service_get_data_object(
-                    &source.head.signed.payload.content_container,
-                    &source.head.signed.payload.content_object,
+                    &source.head.manifest.content_container,
+                    &source.head.manifest.content_object,
                     token,
                 )
                 .await?
                 .context("validated recovery source content disappeared")?;
             overwrite_data_for_recovery(
                 target,
-                &source.head.signed.payload.content_container,
-                &source.head.signed.payload.content_object,
+                &source.head.manifest.content_container,
+                &source.head.manifest.content_object,
                 content.bytes,
                 token,
             )
@@ -267,7 +233,7 @@ impl ReconcilerEngine {
         if let Some(block_manifest) = &source.block_manifest {
             overwrite_for_recovery(
                 target,
-                &source.head.signed.payload.block_manifest_object,
+                &source.head.manifest.block_manifest_object,
                 block_manifest.clone(),
                 "application/json",
                 token,
@@ -278,14 +244,6 @@ impl ReconcilerEngine {
             overwrite_for_recovery(target, object, bytes.clone(), "application/json", token)
                 .await?;
         }
-        overwrite_for_recovery(
-            target,
-            &committed_manifest_object(&source.head.signed.payload)?,
-            source.committed_manifest.clone(),
-            "application/json",
-            token,
-        )
-        .await?;
         self.repair_high_water_checkpoint(source, target, token)
             .await?;
         target

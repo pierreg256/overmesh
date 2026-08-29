@@ -1,0 +1,106 @@
+# Client-observed campaign contract.
+#
+# This contract is deliberately incompatible with the isolated performance
+# contracts under the same directory. It produces evidence whose apiVersion is
+# performance.overmesh.io/client-observed/v1, which the isolated validator and
+# the comparator both refuse. It can never become a baseline, a gate, or a
+# comparison input, and it carries no request budgets, no stability metric and
+# no regression policy.
+#
+# Results describe one operator machine, on one network, on one day. Read
+# harness/artifacts/client-observed/README.md before quoting any figure.
+
+schema_version = 1
+api_version = "performance.overmesh.io/client-observed/v1"
+revision = "client-observed-v1"
+campaign_purpose = "client-observed"
+runs = 5
+target_order = ["direct", "gateway"]
+target_order_policy = "interleaved-per-operation"
+artifact_root = "harness/artifacts/client-observed"
+request_timeout_seconds = 3600
+
+[[payload]]
+id = "1mib"
+size_bytes = 1048576
+
+[[payload]]
+id = "100mib"
+size_bytes = 104857600
+
+[[directory]]
+id = "dir-500x200kib"
+file_count = 500
+file_size_bytes = 204800
+
+# ---------------------------------------------------------------------------
+# Azure CLI single-blob transfers.
+# ---------------------------------------------------------------------------
+
+[[operation]]
+id = "azure-cli-upload-1mib"
+tool = "azure-cli"
+action = "upload"
+shape = "single-blob"
+payload = "1mib"
+
+[[operation]]
+id = "azure-cli-download-1mib"
+tool = "azure-cli"
+action = "download"
+shape = "single-blob"
+payload = "1mib"
+
+[[operation]]
+id = "azure-cli-upload-100mib"
+tool = "azure-cli"
+action = "upload"
+shape = "single-blob"
+payload = "100mib"
+
+[[operation]]
+id = "azure-cli-download-100mib"
+tool = "azure-cli"
+action = "download"
+shape = "single-blob"
+payload = "100mib"
+
+# ---------------------------------------------------------------------------
+# AzCopy single-file transfers.
+# ---------------------------------------------------------------------------
+
+[[operation]]
+id = "azcopy-upload-100mib"
+tool = "azcopy"
+action = "upload"
+shape = "single-file"
+payload = "100mib"
+
+[[operation]]
+id = "azcopy-download-100mib"
+tool = "azcopy"
+action = "download"
+shape = "single-file"
+payload = "100mib"
+
+# ---------------------------------------------------------------------------
+# AzCopy recursive directory transfers.
+#
+# These report aggregate wall time and aggregate throughput only. AzCopy
+# schedules its own concurrency, so a per-blob latency taken from the outside
+# would describe the scheduler rather than either storage path.
+# ---------------------------------------------------------------------------
+
+[[operation]]
+id = "azcopy-directory-upload-500x200kib"
+tool = "azcopy"
+action = "upload"
+shape = "directory"
+directory = "dir-500x200kib"
+
+[[operation]]
+id = "azcopy-directory-download-500x200kib"
+tool = "azcopy"
+action = "download"
+shape = "directory"
+directory = "dir-500x200kib"

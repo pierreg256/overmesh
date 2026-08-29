@@ -246,6 +246,97 @@ and records the actual order in every run. Both targets use the same managed
 identity, Azure SDK versions, validation host, payload bytes, operation count,
 and concurrency.
 
+### Certified 0.11.1 current matrix
+
+`harness/performance/live-v7-certified-current-matrix.toml` is the
+baseline-eligible, 43-case contract for the 0.11.1 closure. It runs twice from
+the same dedicated `Standard_D2as_v5` validation host: first against the
+pre-optimization `v0.11.0` base at
+`5202eccff4b1e277342cf784dde285e891eb865b`, instrumented by
+`9aa9fff33c1a7d75406d6570445da503c2c3cdad`, then against the final `0.11.1`
+base at `5596a1701bec0c0132a715b28c92013c4550d150`, instrumented by
+`1cce8e6d3120370cec773e19d33c61ddb047a5dd`. Keep the harness tooling and
+contract at the closure checkout for both runs; only the deployed Gateway
+runtime changes. Checking out the old runtime would change the contract bytes
+and make the evidence incomparable.
+
+Both derived runtimes add only the request-batched evidence transport. The
+contract pins the byte-identical protocol source SHA-256
+`cfcc9bdca85ab9a0b68709c1c3cbacf65e1a23dd5a594fb707fdc2b91e9f67ff`.
+Canonical validation rejects a derived commit whose declared base differs,
+a different telemetry format or protocol hash, an incomplete batch, or a
+comparison between different protocols.
+
+The contract freezes the retained `5202ecc` baseline and the closed ADR-0012
+budgets. First `PUT` moves from 49 to 33 requests, established overwrite from
+49 to 37, and `DELETE` from 43 to 31. Structural block-sequence budgets move
+from 181 to 153 requests at 16 MiB and from 442 to 396 at 100 MiB; permitted
+duration-dependent `control_renew_lock` requests remain outside those counts.
+
+The runner records a pseudonymous host fingerprint derived from
+`OVERMESH_LIVE_PERFORMANCE_HOST_ID`; it never retains the raw value. Both
+evidence documents must carry that same fingerprint and the required SKU. The
+first run must use the `pre-optimization` role, fixed 0.11.0 commit, and
+0.11.0 project version. Only the `final` role at project version 0.11.1 may
+compare against it. A paired comparison proves the two distinct deployment
+identities, matching environment string, distinct run IDs, and the complete
+baseline/current runtime identities in signed historical evidence.
+
+Affected paths will declare paired **structural** budgets in the one signed
+contract, excluding only explicitly allowed `control_renew_lock` events. The
+baseline is accepted only at its declared pre-optimization count; the final
+run is accepted only at its exact final count. Any higher **or lower**
+structural count requires freezing a new contract before run one—lower counts
+do not pass an existing final budget. Unchanged non-listing and listing budgets
+remain exact.
+
+The 7,200-second client wall-time ceiling derives from retained execution:
+the corrected v5.1 fast campaign took 2,846.863107 seconds and its corrected
+5,000-entry confirmation took 362.995550 seconds. Doubling their combined
+3,209.858657-second execution provides room for the integrated current matrix
+and its added comparable hierarchical case without silently reducing samples.
+
+The current matrix includes both 5,000-entry hierarchical cases. The
+`max_results=10` `delimiter-page` case verifies continuation pagination over
+five pages; `max_results=1000` `comparable-page` measures the comparable
+full-result cost.
+
+With the contract bytes frozen, deploy the immutable 0.11.0 runtime and
+establish the baseline:
+
+```bash
+export OVERMESH_LIVE_PERFORMANCE_CONTRACT=harness/performance/live-v7-certified-current-matrix.toml
+export OVERMESH_LIVE_PERFORMANCE_HOST_SKU=Standard_D2as_v5
+export OVERMESH_LIVE_PERFORMANCE_HOST_ID="$(cat /sys/class/dmi/id/product_uuid)"
+export OVERMESH_LIVE_PERFORMANCE_RUNTIME_ROLE=pre-optimization
+export OVERMESH_LIVE_PERFORMANCE_COMMIT=9aa9fff33c1a7d75406d6570445da503c2c3cdad
+export OVERMESH_LIVE_PERFORMANCE_PROJECT_VERSION=0.11.0
+export OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG=v0.11.0
+export OVERMESH_LIVE_PERFORMANCE_BACKEND_TELEMETRY_FORMAT=request-batch-v1
+export OVERMESH_LIVE_PERFORMANCE_TELEMETRY_PROTOCOL_SHA256=cfcc9bdca85ab9a0b68709c1c3cbacf65e1a23dd5a594fb707fdc2b91e9f67ff
+shasum -a 256 "$OVERMESH_LIVE_PERFORMANCE_CONTRACT"
+make test-live-azure-performance
+```
+
+Verify the baseline canonical evidence and `SHA256SUMS`, retain its canonical
+evidence path, then deploy the final runtime on the unchanged host. The final
+commit must have an annotated nearest candidate or release tag accepted by
+`validate-live-performance.sh`:
+
+```bash
+export OVERMESH_LIVE_PERFORMANCE_RUNTIME_ROLE=final
+export OVERMESH_LIVE_PERFORMANCE_COMMIT=1cce8e6d3120370cec773e19d33c61ddb047a5dd
+export OVERMESH_LIVE_PERFORMANCE_PROJECT_VERSION=0.11.1
+export OVERMESH_LIVE_PERFORMANCE_RELEASE_TAG=v0.11.1-rc.1
+export OVERMESH_LIVE_PERFORMANCE_BASELINE_EVIDENCE=/path/to/pre-optimization-evidence.json
+shasum -a 256 "$OVERMESH_LIVE_PERFORMANCE_CONTRACT"
+make test-live-azure-performance
+```
+
+The final invocation validates the canonical baseline with the same contract,
+requires the same host, compares the two roles, and signs final evidence only
+when the exact final budget and historical gate both pass.
+
 The performance gate is intentionally excluded from `test-pre-pr-live` because
 it is long-running and retains signed release evidence. `make test-release`
 includes it.
@@ -354,3 +445,61 @@ response headers, not full response-body transfer. Azure Monitor exposes
 resource metrics at one-minute granularity, so they are not attributed to
 individual sub-minute cases. Raw logs and Azure resource identifiers are not
 retained.
+
+## Client-observed campaigns
+
+`make test-live-azure-client-observed` runs
+`harness/environments/azure/validate-client-observed.sh`, which executes the
+standalone contract `harness/performance/client-observed-v1.toml` through
+`harness/environments/azure/performance/client_observed_campaign.py`. It
+measures what the Azure CLI and AzCopy observe from a real operator machine,
+against the direct Storage endpoint and against the Gateway, and publishes
+`performance.overmesh.io/client-observed/v1` bundles under
+`harness/artifacts/client-observed/`.
+
+That schema is deliberately separate from the isolated performance contract.
+`validate_performance_evidence.py` and `compare_live_performance.py` both
+reject it, so a client-observed bundle can never become a baseline, a gate, or
+a comparison input. The campaign requires a non-isolated client context
+supplied through the environment, runs five repetitions, and publishes only
+observation lists with their minimum, median and maximum. It computes no p50
+spread ratio and no stability or gating metric.
+
+Each measurement publishes the exact remote paths the tools touched, its own
+measurement window, and the campaign setup window. A download reads a source
+under its published attribution prefix; the seed write that creates that
+source is excluded by window, and the bundle declares it. The runner tracks
+every prefix it writes on both targets and removes them with the same Entra
+login after the last measured operation, including after a partial failure.
+Cleanup gets its own window: the runner waits for the second to turn over so
+`cleanupWindow.startedAt` is strictly after `measurementWindow.finishedAt`,
+and the bundle publishes that window with the cleaned prefixes under
+`campaign.cleanup.excludedBy = "campaign-cleanup-window"`. The validator
+refuses any case window that reaches into it, so no collector can attribute a
+deletion to the last measured case.
+
+A campaign owns `.harness/client-observed/<run-id>/staging`, which the runner
+deletes, and `.harness/client-observed/<run-id>/artifacts`, which it never
+touches. The raw client result and the server telemetry file live in
+`artifacts`. Set `OVERMESH_CLIENT_OBSERVED_TELEMETRY` when the collector
+writes the telemetry file elsewhere.
+
+Credentials come from the environment only, and none is created here. The
+driver prefers `AZURE_CLIENT_CERTIFICATE_PATH`, then
+`AZURE_FEDERATED_TOKEN_FILE`, then `AZURE_CLIENT_SECRET`, and the bundle
+records the mode it used. AzCopy authenticates entirely from environment
+variables. The Azure CLI cannot read `--password` from standard input, so in
+`client-secret` mode the secret is visible in the `az login` argv on the
+operator host while the login runs; certificate mode passes a path instead.
+The driver points `AZURE_CONFIG_DIR` at a private
+`.harness/client-observed/<run-id>/azure-cli-config` directory — a sibling of
+the staging tree, not a child of it, because the runner deletes staging while
+the campaign is still logged in — and traps every exit path to run
+`az account clear`, `az logout` and remove it, so the operator's own
+`~/.azure` profile is untouched. The runner refuses to dispatch any command
+unless that directory exists outside staging.
+
+The campaign is excluded from `test-pre-pr-live`, `test-main` and
+`test-release`. It is an operator-initiated exercise, never a release gate.
+`harness/artifacts/client-observed/README.md` documents the protocol, the
+required environment, the mandatory disclaimer, and the retention rules.

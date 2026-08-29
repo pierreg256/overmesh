@@ -28,7 +28,7 @@ An ADR explains a choice; it does not define behaviour.
 | [0009](0009-redaction-policy-for-retained-live-evidence.md) | Redaction policy for retained live evidence | accepted | 0.9.0 → 0.9.1 | yes |
 | [0010](0010-keep-reconciler-safety-state-on-the-read-path.md) | Keep Reconciler safety state on the read path | accepted | 0.10.1 | yes |
 | [0011](0011-use-physical-content-heads-for-read-authorization.md) | Use physical content HEADs for read authorization | accepted | 0.10.1 | yes |
-| [0012](0012-consolidate-gateway-owned-commit-state.md) | Consolidate gateway-owned commit state into one document | accepted | 0.11.0 | no |
+| [0012](0012-consolidate-gateway-owned-commit-state.md) | Consolidate gateway-owned commit state into one document | accepted | 0.11.0 | yes |
 | [0013](0013-metadata-reads-stay-at-two-replicas.md) | Metadata reads stay at two replicas | accepted | 0.11.0 | yes |
 | [0014](0014-use-delimiter-safe-ordered-catalogue-keys.md) | Use delimiter-safe ordered catalogue keys | accepted | 0.12.0 | no |
 
@@ -65,13 +65,12 @@ controls until a replacement protocol defines identity ownership and freshness.
 0011 removes the redundant logical read probes from `HEAD` and `GET`; the
 caller-authorized physical content `HEAD` now also carries the Azure RBAC check.
 
-0012 is the only accepted record that is not fully implemented. It merges the
-gateway-owned head, high-water, prepared and terminal state into one document.
-Its canonical-lease prerequisite is implemented: Gateway and Reconciler route
-the lease to the deterministic primary for every canonical logical blob,
-including an anomalous head discovered on the secondary. Its amendment to
-0010 — reading Reconciler-owned safety state once per request rather than
-twice — is separable and does not require the merge.
+0012 is implemented. Gateway-owned head, high-water, prepared and terminal
+state are consolidated in the signed `BlobCommitState` document. Gateway and
+Reconciler route the lease to the deterministic primary for every canonical
+logical blob, including an anomalous head discovered on the secondary.
+Reconciler-owned safety state remains separate and is read once per request,
+as the record requires.
 
 0013 records a decision not to change anything: metadata continues to be read
 from both replicas. It exists because 0002's admissibility table permits

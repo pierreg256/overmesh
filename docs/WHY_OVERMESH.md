@@ -330,6 +330,78 @@ requires a separate decision. Scheduling entries concurrently and skipping
 descendants of an already emitted hierarchical prefix do not remove those
 checks and are the first 0.11 optimizations.
 
+### What these numbers are not
+
+> These measurements come from a three-account Overmesh validation deployment
+> used for conformance and performance testing. They describe what that
+> deployment did on a given day from a given machine. They are not a capacity
+> statement, not a performance guarantee, and not a service level objective or
+> agreement. Nothing here commits Overmesh or its operators to any level of
+> availability, latency or throughput.
+
+Every figure above comes from an isolated campaign: a dedicated benchmark VM
+in the same region as one Storage Account, a fixed SKU, a certified matrix and
+deterministic backend-request budgets. That isolation is what makes those
+numbers comparable between two commits and usable as a release gate. It is
+also what makes them unlike anything a user will experience, because no user
+runs from inside the measurement.
+
+### The client-observed campaign
+
+A separate protocol exists for the other question: what do real client tools
+do from a real machine? A client-observed campaign runs the Azure CLI and
+AzCopy from one operator laptop, on one real network, against a direct Storage
+endpoint and against the Gateway, interleaving the two targets operation by
+operation so they meet the same network conditions.
+
+The matrix is eight operation families — Azure CLI single-blob upload and
+download at 1 MiB and 100 MiB, AzCopy single-file upload and download at
+100 MiB, and AzCopy recursive directory upload and download of 500 files of
+200 KiB — each measured against both targets, for sixteen measurement
+families. Each family runs five times and publishes those five observations
+with their minimum, median and maximum. The directory families report
+aggregate wall time and aggregate throughput, never per-blob latency, because
+AzCopy schedules its own concurrency.
+
+That campaign computes no spread ratio, no percentile, no stability
+classification and no regression verdict, and it never becomes a baseline.
+Its evidence declares `apiVersion: performance.overmesh.io/client-observed/v1`,
+which the isolated validator and the comparator both refuse. A laptop behind a
+corporate proxy, a VPN concentrator and a TLS interception middlebox can show
+what a tool did; it cannot certify what the code costs. Server-side
+attribution is still mandatory: every measured operation is attributed, and
+`unattributedRequests` must be zero.
+
+Attribution is published as the paths the tools actually touched, not as a
+prefix chosen for the report. A download has to read a blob that already
+exists, so the campaign writes that source first, under the same published
+prefix, and excludes the write by declaring a setup window that must close
+before the measurement window opens. Every case publishes its own window, and
+the telemetry collector has to declare the same window and the same paths.
+The bundle says plainly that the seed write happened and which window kept it
+out of the counts, because a report that quietly measured a different path
+than the one it names would be worth less than no report.
+
+The same reasoning applies at the other end of the campaign. Deleting the
+blobs afterwards touches exactly the paths that were just measured, so the
+runner waits for the clock's second to turn over and publishes a cleanup
+window that starts strictly after the measurement window closes, along with
+the prefixes it removed and the label that excludes them. A case window that
+reached into that cleanup window is refused. Cleanup runs whether the campaign
+succeeded or failed, and a cleanup failure is reported without ever replacing
+the failure that caused it.
+
+Because the two kinds of evidence answer different questions, they are never
+placed in the same table. Client-observed results are retained separately
+under `harness/artifacts/client-observed/`, together with the client context —
+country, connection, corporate proxy, VPN, operating system and an operator
+note — that a reader needs in order to know whose day the numbers describe.
+
+No client-observed campaign has been retained yet, so no client-observed
+figure appears in this document. Once a bundle exists, its numbers will be
+cited here in their own section, with their context, and never merged into the
+isolated table above.
+
 ## 9. What Overmesh does not do
 
 **Subscription administrators are inside the trust boundary.** Anyone who can
@@ -380,7 +452,7 @@ fixed two-replica commit protocol and says so.
 
 ## 10. Status
 
-Overmesh is an advanced prototype in milestone 0.11.0 of a V1 plan that reaches
+Overmesh is an advanced prototype in milestone 0.11.1 of a V1 plan that reaches
 1.0.
 
 **Implemented and tested:** the signed Ring with rollback and predecessor
@@ -395,7 +467,7 @@ block staging APIs with their own retention and collection, reconciliation with
 repair and quarantine, and continuous RBAC posture auditing against Azure
 Resource Manager.
 
-**How it is validated:** 233 unit and integration tests, 23 declarative
+**How it is validated:** 259 unit and integration tests, 23 declarative
 scenarios against an independent reference model, three process-level suites
 and a Rust system validator running against Azurite backends behind a fault
 proxy, and a live Azure gate that verifies account posture, authorization

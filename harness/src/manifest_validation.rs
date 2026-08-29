@@ -3,15 +3,16 @@ use std::{fs, path::Path};
 use anyhow::{Context, Result, ensure};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use overmesh_gateway::manifest::{
-    BlockManifest, BlockManifestPage, CommitManifest, GarbageCollectionMarker,
+    BlobCommitState, BlockManifest, BlockManifestPage, CommitManifest, GarbageCollectionMarker,
     HistoryCompactionCheckpoint, SignedDocument, canonical_signed_payload, sha256_bytes,
+    validate_blob_commit_state,
 };
 use p256::ecdsa::{Signature, SigningKey, signature::Verifier};
 use serde::{Serialize, de::DeserializeOwned};
 
 const LOCAL_MANIFEST_KEY: [u8; 32] = [11; 32];
 const BLOCK_MANIFEST_DOMAIN: &[u8] = b"overmesh:block-manifest:v1\0";
-const COMMIT_MANIFEST_DOMAIN: &[u8] = b"overmesh:commit-manifest:v1\0";
+const BLOB_COMMIT_STATE_DOMAIN: &[u8] = b"overmesh:blob-commit-state:v1\0";
 const GARBAGE_COLLECTION_MARKER_DOMAIN: &[u8] = b"overmesh:garbage-collection-marker:v1\0";
 const HISTORY_COMPACTION_CHECKPOINT_DOMAIN: &[u8] = b"overmesh:history-compaction-checkpoint:v1\0";
 const LOCAL_KEY_ID: &str = "test-blob-key-01";
@@ -49,13 +50,26 @@ pub fn verify_local_commit_manifest(
     Ok(commit)
 }
 
+/// ADR-0012 publishes the head, high-water current, prepared and terminal
+/// commit state as one signed document. The harness validates that document and
+/// returns the committed generation it asserts.
 pub fn verify_local_commit_manifest_bytes(bytes: &[u8]) -> Result<CommitManifest> {
-    let signed = verify_signed::<CommitManifest>(bytes, COMMIT_MANIFEST_DOMAIN)?;
+    let signed = verify_signed::<BlobCommitState>(bytes, BLOB_COMMIT_STATE_DOMAIN)?;
     ensure!(
         signed.payload.signing_key_id == LOCAL_KEY_ID,
-        "commit manifest signing key id is not trusted"
+        "commit state signing key id is not trusted"
     );
-    Ok(signed.payload)
+    validate_blob_commit_state(&signed.payload)
+        .context("commit state structure validation failed")?;
+    ensure!(
+        signed.payload.prepared().is_none(),
+        "commit state retains an interrupted preparation"
+    );
+    signed
+        .payload
+        .current()
+        .cloned()
+        .context("commit state publishes no committed generation")
 }
 
 pub fn verify_local_garbage_collection_marker(path: &Path) -> Result<GarbageCollectionMarker> {

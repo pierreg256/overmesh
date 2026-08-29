@@ -2,8 +2,8 @@ use thiserror::Error;
 
 use crate::{
     manifest::{
-        CommitManifest, ManifestError, ManifestSigner, ManifestState, SignatureDomain,
-        SignedDocument, logical_etag, sha256_bytes,
+        BlobCommitState, CommitManifest, ManifestError, ManifestSigner, ManifestState,
+        SignatureDomain, SignedDocument, logical_etag, sha256_bytes, validate_blob_commit_state,
     },
     resource::{LogicalBlobId, LogicalResourceError},
 };
@@ -26,7 +26,16 @@ pub enum CatalogError {
 
 pub struct ValidatedCatalogEntry {
     pub logical_blob: LogicalBlobId,
-    pub signed_head: SignedDocument<CommitManifest>,
+    pub signed_state: SignedDocument<BlobCommitState>,
+}
+
+impl ValidatedCatalogEntry {
+    /// The committed generation the entry publishes. Catalogue entries are
+    /// terminal snapshots of the ADR-0012 commit-state document, so a validated
+    /// entry always carries one.
+    pub fn head(&self) -> Option<&CommitManifest> {
+        self.signed_state.payload.current()
+    }
 }
 
 pub fn catalog_key(logical_blob: &LogicalBlobId) -> String {
@@ -87,16 +96,29 @@ pub fn validate_catalog_entry_for_logical_blob(
     if object_key != catalog_key(logical_blob) {
         return Err(CatalogError::InvalidPath);
     }
-    let signed_head = SignedDocument::<CommitManifest>::from_bytes(bytes)?;
-    if signed_head.canonical_bytes()? != bytes {
+    let signed_state = SignedDocument::<BlobCommitState>::from_bytes(bytes)?;
+    if signed_state.canonical_bytes()? != bytes {
         return Err(CatalogError::VerificationFailed);
     }
-    signed_head.verify(
-        SignatureDomain::CommitManifest,
-        &signed_head.payload.signing_key_id,
+    signed_state.verify(
+        SignatureDomain::BlobCommitState,
+        &signed_state.payload.signing_key_id,
         signer,
     )?;
-    let head = &signed_head.payload;
+    validate_blob_commit_state(&signed_state.payload)?;
+    // A catalogue entry is a terminal snapshot: an interrupted preparation is
+    // never published to listing.
+    if signed_state.payload.prepared().is_some()
+        || signed_state.payload.blob != logical_blob.canonical()
+        || signed_state.payload.path_hash != logical_blob.path_hash()
+        || signed_state.payload.ring_version != ring_version
+    {
+        return Err(CatalogError::VerificationFailed);
+    }
+    let head = signed_state
+        .payload
+        .current()
+        .ok_or(CatalogError::VerificationFailed)?;
     if head.blob != logical_blob.canonical()
         || head.ring_version != ring_version
         || head.logical_version == 0
@@ -118,7 +140,7 @@ pub fn validate_catalog_entry_for_logical_blob(
     }
     Ok(ValidatedCatalogEntry {
         logical_blob: logical_blob.clone(),
-        signed_head,
+        signed_state,
     })
 }
 
@@ -219,7 +241,11 @@ fn validate_tombstone(head: &CommitManifest) -> Result<(), CatalogError> {
 }
 
 fn ordered_component(value: &str) -> String {
-    hex::encode(value.as_bytes())
+    ordered_bytes(value.as_bytes())
+}
+
+fn ordered_bytes(value: &[u8]) -> String {
+    hex::encode(value)
 }
 
 fn decode_ordered_component(value: &str) -> Result<String, CatalogError> {
@@ -249,6 +275,11 @@ fn valid_hex_digest(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::cmp::Ordering;
+
+    use rand::{RngCore, SeedableRng};
+    use rand_chacha::ChaCha20Rng;
+
     use super::*;
 
     #[test]
@@ -280,5 +311,45 @@ mod tests {
     fn listing_prefix_is_a_physical_key_prefix() {
         let blob = LogicalBlobId::parse("account", "/photos/dir/leaf").expect("blob");
         assert!(catalog_key(&blob).starts_with(&catalog_listing_prefix("photos", "dir/")));
+    }
+
+    #[test]
+    fn ordered_encoding_round_trips_random_byte_strings() {
+        let mut random = ChaCha20Rng::from_seed([0x5a; 32]);
+        for _ in 0..10_000 {
+            let mut bytes = vec![0; random.next_u32() as usize % 513];
+            random.fill_bytes(&mut bytes);
+            assert_eq!(
+                hex::decode(ordered_bytes(&bytes)).expect("valid ordered encoding"),
+                bytes
+            );
+        }
+    }
+
+    #[test]
+    fn ordered_encoding_preserves_random_byte_order() {
+        let mut random = ChaCha20Rng::from_seed([0xa5; 32]);
+        for _ in 0..10_000 {
+            let mut left = vec![0; random.next_u32() as usize % 257];
+            let mut right = vec![0; random.next_u32() as usize % 257];
+            random.fill_bytes(&mut left);
+            random.fill_bytes(&mut right);
+            assert_eq!(
+                left.cmp(&right),
+                ordered_bytes(&left).cmp(&ordered_bytes(&right))
+            );
+
+            let mut extension = left.clone();
+            extension.extend_from_slice(&right);
+            assert_eq!(
+                left.cmp(&extension),
+                if right.is_empty() {
+                    Ordering::Equal
+                } else {
+                    Ordering::Less
+                }
+            );
+            assert!(ordered_bytes(&extension).starts_with(&ordered_bytes(&left)));
+        }
     }
 }

@@ -134,18 +134,11 @@ impl ReconcilerEngine {
         let target_current = target.control_get_object(&head_object, token).await?;
         if let Some(target_value) = &target_current
             && let Ok(target_head) =
-                SignedDocument::<CommitManifest>::from_bytes(&target_value.bytes)
-            && target_head
-                .verify(
-                    SignatureDomain::CommitManifest,
-                    &target_head.payload.signing_key_id,
-                    self.signer.as_ref(),
-                )
-                .is_ok()
+                parse_blob_commit_state(&target_value.bytes, self.signer.as_ref(), "committed head")
+            && let Some(target_manifest) = target_head.payload.current()
         {
             ensure!(
-                target_head.payload.logical_version
-                    <= source_value.head.signed.payload.logical_version,
+                target_manifest.logical_version <= source_value.head.manifest.logical_version,
                 "administrator recovery cannot roll back a newer signed logical version"
             );
         }
@@ -311,6 +304,19 @@ impl ReconcilerEngine {
         let second_validation = self
             .validate_replica(second.as_ref(), head_object, token)
             .await;
+        // A one-sided PREPARED transition leaves the same published generation
+        // on both replicas inside documents whose bytes differ. That is
+        // repairable drift, not an unresolvable conflict.
+        let (first_validation, second_validation) = self
+            .converge_asymmetric_preparation(
+                head_object,
+                first.as_ref(),
+                first_validation,
+                second.as_ref(),
+                second_validation,
+                token,
+            )
+            .await?;
         if matches!(
             (
                 first_validation.fully_validated_head(),
@@ -369,6 +375,91 @@ impl ReconcilerEngine {
             }
         }
         Ok(report)
+    }
+
+    /// ADR-0012 makes the prepared manifest a state of the merged document, so a
+    /// preparation that reached only one replica makes the two documents differ
+    /// while both still publish the same committed generation. Neither side is
+    /// authoritative over the other by logical version, so without this step the
+    /// pair would be quarantined.
+    ///
+    /// The repair converges both replicas onto the terminal form of the
+    /// generation they already publish. Those bytes are the durable high-water
+    /// history entry, so no Gateway-owned commit state is minted here
+    /// (ADR-0003). The never-committed preparation is discarded, which is what
+    /// the next writer would do under the same canonical lease.
+    #[allow(clippy::too_many_arguments)]
+    async fn converge_asymmetric_preparation(
+        &self,
+        head_object: &str,
+        first_backend: &dyn ReplicaBackend,
+        first: ReplicaValidation,
+        second_backend: &dyn ReplicaBackend,
+        second: ReplicaValidation,
+        token: &ControlToken,
+    ) -> Result<(ReplicaValidation, ReplicaValidation)> {
+        let Some(terminal) = asymmetric_preparation_target(&first, &second) else {
+            return Ok((first, second));
+        };
+        let AsymmetricPreparation {
+            logical_blob,
+            manifest,
+            terminal_bytes,
+        } = terminal;
+        // Never publish anything that is not the signed terminal form of the
+        // generation both replicas already agree on.
+        let signed =
+            parse_blob_commit_state(&terminal_bytes, self.signer.as_ref(), "commit state")?;
+        ensure!(
+            signed.payload.prepared().is_none() && signed.payload.current() == Some(&manifest),
+            "terminal commit state does not publish the agreed generation"
+        );
+        for (backend, validation) in [(first_backend, &first), (second_backend, &second)] {
+            let Some(head) = validation.fully_validated_head() else {
+                continue;
+            };
+            if head.bytes == terminal_bytes {
+                continue;
+            }
+            replace_control_object(
+                backend,
+                head_object,
+                terminal_bytes.clone(),
+                head.backend_etag.as_deref(),
+                token,
+            )
+            .await?;
+        }
+        verify_identical_control_objects(
+            first_backend,
+            second_backend,
+            head_object,
+            &terminal_bytes,
+            token,
+        )
+        .await?;
+        self.write_audit(
+            Some(&logical_blob),
+            head_object,
+            ReconciliationClassification::Drifted,
+            ReconciliationRecordAction::Repaired,
+            "converged an asymmetric preparation onto the published generation",
+            None,
+            None,
+            token,
+        )
+        .await?;
+        warn!(
+            blob = logical_blob.canonical(),
+            "converged an asymmetric preparation onto the published generation"
+        );
+        let first = self
+            .validate_replica(first_backend, head_object, token)
+            .await;
+        let second = self
+            .validate_replica(second_backend, head_object, token)
+            .await;
+        Ok((first, second))
     }
 
     async fn with_lease<T, F>(
@@ -548,7 +639,7 @@ impl ReconcilerEngine {
             (ReplicaValidation::Valid(first), ReplicaValidation::Valid(second))
                 if first.head.bytes == second.head.bytes =>
             {
-                if first.head.signed.payload.state == ManifestState::Tombstoned {
+                if first.head.manifest.state == ManifestState::Tombstoned {
                     return self
                         .reconcile_garbage_collection(
                             head_object,
@@ -791,7 +882,37 @@ impl ReconcilerEngine {
 }
 
 pub(super) fn authoritative_over(newer: &ValidatedHead, older: &ValidatedHead) -> bool {
-    newer.signed.payload.logical_version == older.signed.payload.logical_version + 1
-        && newer.signed.payload.previous_logical_etag.as_deref()
-            == Some(&older.signed.payload.logical_etag)
+    newer.manifest.logical_version == older.manifest.logical_version + 1
+        && newer.manifest.previous_logical_etag.as_deref() == Some(&older.manifest.logical_etag)
+}
+
+struct AsymmetricPreparation {
+    logical_blob: LogicalBlobId,
+    manifest: CommitManifest,
+    terminal_bytes: Vec<u8>,
+}
+
+/// Detects two replicas that publish the same committed generation inside
+/// documents whose bytes differ, which only an interrupted preparation can
+/// produce once both documents have been signature-validated.
+fn asymmetric_preparation_target(
+    first: &ReplicaValidation,
+    second: &ReplicaValidation,
+) -> Option<AsymmetricPreparation> {
+    let first_head = first.fully_validated_head()?;
+    let second_head = second.fully_validated_head()?;
+    if first_head.bytes == second_head.bytes || first_head.manifest != second_head.manifest {
+        return None;
+    }
+    // The high-water checkpoint of a fully validated replica is always the
+    // terminal form of the generation its head publishes.
+    let terminal_bytes = first
+        .terminal_commit_state()
+        .or_else(|| second.terminal_commit_state())?
+        .to_vec();
+    Some(AsymmetricPreparation {
+        logical_blob: first_head.logical_blob.clone(),
+        manifest: first_head.manifest.clone(),
+        terminal_bytes,
+    })
 }

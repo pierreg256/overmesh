@@ -574,14 +574,24 @@ Overmesh MUST compare:
 
 An older valid object MUST NOT replace a newer committed head.
 
+The gateway-owned head, high-water current assertion, prepared state, and
+terminal commit state are published as one signed document per blob per
+replica at `heads/{pathHash}.json`. The document carries an API version, a
+format version, the canonical blob identity and its path hash, the Ring
+version, the current `COMMITTED` or `TOMBSTONED` generation, and any
+interrupted `PREPARED` generation. All of it is signed together, under the
+gateway managed identity, in the same commit. Both replicas MUST hold
+byte-identical documents on read.
+
 Each committed logical version MUST also produce an immutable signed
-high-water history object plus a fixed-name signed current checkpoint. The
-checkpoint MAY reuse the exact signed committed manifest bytes. Gateways and
-reconcilers MUST read the fixed checkpoint in O(1) backend operations and MUST
-reject a head older than the valid checkpoint visible on either replica.
-Success MUST NOT be returned until the history object and current checkpoint
-are durable on both replicas. Publication and one-sided checkpoint repair MUST
-be safe to complete idempotently after an ambiguous outcome.
+high-water history object holding the terminal form of that document. Gateways
+and reconcilers MUST resolve it by version in O(1) backend operations. A write
+MUST prove that the history entry for the generation it is replacing exists on
+both replicas, and MUST fail closed when a durable history entry exists above
+that generation, which proves a replayed document. Success MUST NOT be
+returned until the history object is durable on both replicas. Publication and
+one-sided history repair MUST be safe to complete idempotently after an
+ambiguous outcome.
 
 The immutable history MAY be compacted only by the Reconciler after physical
 collection has completed. A fixed-name, signed W=2 history-compaction
@@ -658,14 +668,16 @@ For a write, the gateway MUST:
    version plus an unpredictable server-side physical reservation;
 9. stream immutable customer content to both replicas with the caller token;
 10. calculate block and complete-content SHA-256 hashes;
-11. publish signed `PREPARED` manifests with the gateway managed identity;
+11. conditionally move the commit-state document into its `PREPARED` state on
+    both replicas, using each replica's loaded entity tag;
 12. verify both prepared replicas;
-13. generate the signed `COMMITTED` manifest with caller attribution;
-14. conditionally publish the committed head to both replicas;
-15. publish the immutable high-water history object and conditionally replace
-    the fixed current checkpoint on both replicas;
-16. verify that both replicas expose the same committed head and current
-    checkpoint;
+13. generate the signed `COMMITTED` generation with caller attribution;
+14. publish and verify the current catalog entry;
+15. conditionally move the commit-state document to its committed generation on
+    both replicas, using the entity tags returned by the prepared transition,
+    so a concurrent writer cannot skip the prepared state;
+16. verify that both replicas expose the same committed document, then publish
+    the immutable high-water history object on both replicas;
 17. return success.
 
 The gateway MUST NOT overwrite the previous immutable content version during
@@ -678,15 +690,21 @@ The write ID is the idempotency key for retries.
 A retry with the same write ID and identical payload MUST return the existing
 outcome. A retry with the same write ID and a different payload MUST fail.
 The gateway MUST preserve caller data-plane credentials for physical content
-operations and separate control credentials for locks, manifests, heads,
-high-water records, and quarantine state.
+operations and separate control credentials for locks, block manifests,
+commit-state documents, high-water history, and quarantine state. A retry that
+finds an interrupted `PREPARED` generation for the same write ID MUST reuse it
+so the republished generation is identical.
 
 ### 11.5 Partial Failure
 
-Partial writes remain invisible unless a valid committed head references them.
+Partial writes remain invisible unless a valid committed generation references
+them.
 
-The reconciler may remove abandoned `PREPARED` objects after a configured
-retention period.
+An interrupted preparation stays visible as the `PREPARED` state of the
+commit-state document. The absence of the overwrite is the interruption signal;
+the next write for the same blob either reuses it or replaces it under the same
+conditional transition. The reconciler may remove the abandoned immutable
+version namespace after a configured retention period.
 
 If a signed committed manifest exists on only one replica, the operation is not
 healthy. The reconciler may repair it only after validating that:
@@ -716,14 +734,17 @@ The tombstone uses its own immutable version namespace and MUST be committed to
 both replicas using the same W=2 protocol:
 
 1. acquire the same per-blob lease used by `PUT`;
-2. validate quarantine, both heads, and both current high-water checkpoints;
+2. validate quarantine, both commit-state documents, the compaction floor, and
+   the durable history of the generation being replaced;
 3. execute an exact-path blob-delete authorization probe on both replicas with
    the caller token;
-4. publish and verify the signed prepared tombstone on both replicas;
-5. publish the signed committed tombstone sidecar on both replicas;
-6. conditionally replace both heads;
-7. publish immutable high-water history and replace both current checkpoints;
-8. verify identical tombstone heads and checkpoints before returning `202`.
+4. conditionally move both commit-state documents into their `PREPARED`
+   tombstone state and verify them;
+5. publish and verify the current catalog entry;
+6. conditionally move both documents to the committed tombstone using the
+   entity tags returned by the prepared transition;
+7. verify identical tombstone documents on both replicas;
+8. publish the immutable high-water history entry before returning `202`.
 
 The authorization probe MUST use `DELETE` against a syntactically valid but
 nonexistent snapshot at the exact logical path. It MUST NOT target the current
@@ -750,8 +771,9 @@ is never collectible.
 Before any physical delete, the Reconciler MUST validate identical retained
 history on both replicas, including signatures, blob and Ring binding, unique
 contiguous versions, state transitions, `previousLogicalEtag` lineage,
-monotonic timestamps, exact current head and high-water correspondence, and
-every candidate content and version-metadata namespace. A compacted prefix is
+monotonic timestamps, exact correspondence between the published commit-state
+document and its durable history entry, and every candidate content and
+version-metadata namespace. A compacted prefix is
 accepted only when a valid W=2 compaction checkpoint anchors it. The first
 retained successor MUST be exactly one logical version above the floor and
 MUST link to the checkpoint logical ETag. Rollback, gaps above the floor,
@@ -762,8 +784,10 @@ Incremental physical collection is recorded by chained signed immutable
 garbage-collection watermarks on both replicas. A valid one-sided watermark
 publication is repaired by copying its exact bytes; invalid or conflicting
 watermarks fail closed. Superseded tombstone sidecars are collectible as
-version metadata, but the active head, active sidecar, current high-water
-checkpoint, and active high-water history entry are never collectible.
+version metadata, but the active commit-state document and its high-water
+history entry are never collectible. A tombstone's version namespace holds no
+metadata at all, because the prepared and terminal manifests are states of the
+commit-state document.
 
 After a GC watermark is identical on both replicas, the Reconciler MAY publish
 `high-water/{pathHash}/compaction/current.json`. The signed checkpoint MUST
@@ -861,8 +885,9 @@ have permanent-delete or immutability-superuser permission.
 ### 13.4 Logical Listing and Continuation
 
 `List Blobs` uses a logical W=2 catalog in the isolated control namespace.
-Each mutable catalog object contains the exact canonical bytes of the current
-signed `COMMITTED` or `TOMBSTONED` head. Catalog object keys encode canonical
+Each mutable catalog object contains the exact canonical bytes of the terminal
+signed commit-state document for the current `COMMITTED` or `TOMBSTONED`
+generation. Catalog object keys encode canonical
 container and blob UTF-8 bytes with an order-preserving path-safe encoding, so
 backend lexical order is logical container/blob order. Listing MUST read only
 the bounded catalog pages required to produce `maxresults` and continuation;
@@ -870,13 +895,15 @@ it MUST NOT discover listing truth by scanning `heads/`, history, customer
 data paths, or staged namespaces.
 
 Before exposure, the selected catalog bytes MUST be identical on the active
-RF=2 replicas and MUST validate as a canonical signed commit manifest. The
-catalog key, signed blob/container path, logical version and ETag, state,
-Ring version and selected replicas MUST agree. The same exact bytes MUST be
-present on both selected replicas. Before processing entries, listing MUST
+RF=2 replicas and MUST validate as a canonical signed commit-state document in
+terminal form. The catalog key, signed blob/container path, path hash, logical
+version and ETag, state, Ring version and selected replicas MUST agree, and the
+generation the entry publishes MUST equal the generation both commit-state
+documents publish. An interrupted preparation changes the document but not the
+generation it publishes, so it does not hide a committed blob from listing. Before processing entries, listing MUST
 load the union of quarantine keys from every configured backend and MUST skip
-every matching path hash. Per-item current-head, high-water, committed-sidecar,
-and compaction reads are prohibited on the listing hot path; complete freshness
+every matching path hash. Per-item high-water history and compaction reads
+are prohibited on the listing hot path; complete freshness
 and anti-replay validation remains normative for HEAD, GET, and Reconciler
 processing. Signature failure, key/path mismatch, Ring mismatch, quarantine,
 one-sided catalog publication, and non-`COMMITTED` state are skipped.
@@ -903,7 +930,7 @@ heads, and any missing, drifted, tampered, or quarantined candidate.
 
 After a successful Azure container-list authorization, blob enumeration MUST
 NOT issue per-blob caller read probes unless the exact Azure DataAction
-requires one. Internal signature, head, high-water, compaction, sidecar, and
+requires one. Internal signature, commit-state, high-water, compaction, and
 quarantine validation uses typed control operations under the gateway
 identity and MUST NOT silently require a stronger caller role than direct
 Azure `List Blobs`.
@@ -970,8 +997,8 @@ immutable upload. The live capability gate pins allowed and denied Put Block
 behavior for every supported Storage API version.
 
 `Put Block List` accepts ordered `Latest`, `Committed`, and `Uncommitted`
-elements. Under the per-blob lease it validates quarantine, head/high-water
-state, compaction floors, stage generation/base state, committed block pages,
+elements. Under the per-blob lease it validates quarantine, commit-state
+documents, compaction floors, stage generation/base state, committed block pages,
 both physical replicas, hashes, order, limits, conditions, and caller access.
 It assembles selected blocks through bounded disk spooling and then executes
 the normal paged-integrity PREPARED/COMMITTED W=2 publication. The same write

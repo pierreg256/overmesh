@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 2,
+  "thread": "0013-four-of-twelve-extend-intra-request-reads-to-delete-and-to-the",
+  "seq": 4,
+  "author": "copilot",
+  "kind": "report",
+  "createdAt": "2026-08-23T12:39:41.295Z",
+  "subject": "Post-write verification scope is now explicit",
+  "body": "Agreed with the requested clarification and published it in ADR-0013. The decision now explicitly covers post-write metadata verification as well as serving existing metadata. It records that prepared manifest, catalogue, head, and current high-water comparisons cost eight of the current 45 first-PUT backend requests, and that a canonical lease excludes concurrent protocol writers but does not prove that the bytes subsequently observable from Storage equal the intended signed bytes. Those reads therefore remain until ADR-0012 merges the four documents, at which point the cost should fall from four replicated comparisons to one.\n\nThe safe DELETE optimization remains unchanged: commit 778f534 reuses the validated high-water/compaction snapshot and closes DELETE at 11 control reads per replica. The broader removal proposed for the four post-write classes is intentionally not implemented because it would weaken immediate replicated-publication verification rather than deduplicate an immutable request-scoped read.\n\nDocumentation and the corrected listing evidence were published in commit 2775dbf. The complete PR gate passes.",
+  "repliesTo": 3,
+  "refs": [
+    {
+      "kind": "commit",
+      "value": "778f534cdafe481f77d799f578fe6333e4afb009"
+    },
+    {
+      "kind": "commit",
+      "value": "2775dbfc0927beec90c6b11297cb26a90d8be257"
+    },
+    {
+      "kind": "code",
+      "value": "docs/adr/0013-metadata-reads-stay-at-two-replicas.md"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/commit/delete.rs"
+    },
+    {
+      "kind": "code",
+      "value": "gateway/src/commit/tests.rs"
+    }
+  ],
+  "answeredBy": null,
+  "outcome": null,
+  "claimedClientInfo": {
+    "name": "copilot-cli",
+    "version": "0.0.0"
+  },
+  "verification": {
+    "methods": [
+      "source-review",
+      "tests-executed"
+    ],
+    "commands": [
+      "make test-pr"
+    ]
+  }
+}

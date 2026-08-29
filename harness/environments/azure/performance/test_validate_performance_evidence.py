@@ -14,6 +14,7 @@ from validate_performance_evidence import (
     validate_document,
     validate_v2_request_coverage,
 )
+from compare_live_performance import build_comparison
 
 
 def telemetry(count: int, client_requests: int) -> dict:
@@ -40,7 +41,565 @@ def telemetry(count: int, client_requests: int) -> dict:
     }
 
 
+def certified_current_matrix_document(
+    contract,
+    runtime_role: str,
+) -> dict:
+    cases = []
+    for case_index, benchmark_case in enumerate(contract.cases):
+        is_listing = benchmark_case.operation.startswith("list_")
+        for target in ("direct", "gateway"):
+            runs = []
+            for repeat, p50 in enumerate((100.0, 101.0, 102.0), 1):
+                iterations = benchmark_case.measured_iterations
+                latencies = [p50] * iterations
+                run = {
+                    "repeat": repeat,
+                    "targetOrder": list(
+                        target_order_for_case(
+                            contract,
+                            repeat - 1,
+                            case_index,
+                        )
+                    ),
+                    "iterations": iterations,
+                    "metrics": {
+                        **latency_metrics(latencies),
+                        "successCount": iterations,
+                        "errorCount": 0,
+                    },
+                    "latenciesMs": latencies,
+                }
+                run["targetOrderPosition"] = (
+                    run["targetOrder"].index(target) + 1
+                )
+                if is_listing:
+                    fixture = benchmark_case.fixture
+                    assert fixture is not None
+                    returned_per_operation = (
+                        fixture.prefixes
+                        if benchmark_case.operation
+                        == "list_blobs_hierarchical"
+                        else fixture.container_count
+                        if benchmark_case.operation == "list_containers"
+                        else fixture.blob_count
+                    )
+                    entries_returned = returned_per_operation * iterations
+                    run["entriesReturned"] = entries_returned
+                    if target == "gateway":
+                        entries_considered = (
+                            fixture.blob_count * iterations
+                            if fixture.kind == "blobs"
+                            else entries_returned
+                        )
+                        backend_count = 4 * entries_returned
+                        run["serverTelemetry"] = telemetry(
+                            backend_count,
+                            iterations,
+                        )
+                        run["listingBudget"] = {
+                            "entriesConsidered": entries_considered,
+                            "entriesValidated": entries_returned,
+                            "entriesReturned": entries_returned,
+                            "backendRequests": backend_count,
+                            "requestsPerEntryValidated": 4.0,
+                            "validationConcurrency": 32,
+                        }
+                elif target == "gateway":
+                    expected_budget = benchmark_case.backend_request_budget_for(
+                        runtime_role
+                    )
+                    variable_operations = list(
+                        benchmark_case.allowed_variable_backend_operations
+                    )
+                    variable_requests = 0
+                    run["serverTelemetry"] = telemetry(
+                        expected_budget * iterations + variable_requests,
+                        iterations,
+                    )
+                    if variable_operations:
+                        run["backendRequestBudget"] = {
+                            "structuralRequestsPerOperation": expected_budget,
+                            "allowedVariableOperations": variable_operations,
+                            "variableRequestsByOperation": {
+                                operation: variable_requests
+                                for operation in variable_operations
+                            },
+                        }
+                runs.append(run)
+            total_iterations = (
+                benchmark_case.measured_iterations
+                * contract.campaign_repeats
+            )
+            pooled_latencies = [
+                sample
+                for run in runs
+                for sample in run["latenciesMs"]
+            ]
+            result = {
+                "id": benchmark_case.id,
+                "target": target,
+                "operation": benchmark_case.operation,
+                "iterations": total_iterations,
+                "metrics": {
+                    **latency_metrics(pooled_latencies),
+                    "operationsPerSecond": 1.0,
+                    "successCount": total_iterations,
+                    "errorCount": 0,
+                },
+                "runs": runs,
+                "repeatability": {
+                    "runs": contract.campaign_repeats,
+                    "p50MsPerRun": [100.0, 101.0, 102.0],
+                    "medianP50Ms": 101.0,
+                    "p50SpreadRatio": 1.02,
+                    "p50Classification": "blocking",
+                },
+                "validity": {
+                    "status": "valid",
+                    "mandatory": True,
+                    "expectedRuns": contract.campaign_repeats,
+                    "completedRuns": contract.campaign_repeats,
+                    "failures": [],
+                },
+            }
+            if not is_listing:
+                result["expectedBackendRequestsPerOperation"] = (
+                    benchmark_case.backend_request_budget_for(runtime_role)
+                )
+                if (
+                    benchmark_case.baseline_backend_requests_per_operation
+                    is not None
+                ):
+                    result["baselineBackendRequestsPerOperation"] = (
+                        benchmark_case.baseline_backend_requests_per_operation
+                    )
+                    result["finalBackendRequestsPerOperation"] = (
+                        benchmark_case.backend_requests_per_operation
+                    )
+            if benchmark_case.allowed_variable_backend_operations:
+                result["allowedVariableBackendOperations"] = list(
+                    benchmark_case.allowed_variable_backend_operations
+                )
+            if benchmark_case.fixture is not None:
+                result["fixture"] = benchmark_case.fixture.id
+                result["fixtureManifestSha256"] = (
+                    benchmark_case.fixture.manifest_sha256
+                )
+                result["entriesReturned"] = sum(
+                    run["entriesReturned"] for run in runs
+                )
+            if target == "gateway":
+                if is_listing:
+                    entries_returned = sum(
+                        run["listingBudget"]["entriesReturned"]
+                        for run in runs
+                    )
+                    entries_validated = sum(
+                        run["listingBudget"]["entriesValidated"]
+                        for run in runs
+                    )
+                    result["serverTelemetry"] = telemetry(
+                        4 * entries_validated,
+                        total_iterations,
+                    )
+                    result["listingBudget"] = {
+                        "entriesConsidered": sum(
+                            run["listingBudget"]["entriesConsidered"]
+                            for run in runs
+                        ),
+                        "entriesValidated": entries_validated,
+                        "entriesReturned": entries_returned,
+                        "backendRequests": 4 * entries_validated,
+                        "requestsPerEntryValidated": 4.0,
+                        "validationConcurrency": 32,
+                    }
+                    result["repeatability"][
+                        "requestsPerEntryValidatedPerRun"
+                    ] = [4.0] * contract.campaign_repeats
+                else:
+                    result["serverTelemetry"] = telemetry(
+                        sum(
+                            run["serverTelemetry"]["backendRequests"]["count"]
+                            for run in runs
+                        ),
+                        total_iterations,
+                    )
+                    result["repeatability"][
+                        "requestsPerOperationPerRun"
+                    ] = [
+                        run["serverTelemetry"]["backendRequests"]["count"]
+                        // benchmark_case.measured_iterations
+                        for run in runs
+                    ]
+                    if benchmark_case.operation in {
+                        "get_blob",
+                        "get_range",
+                        "head_blob",
+                    }:
+                        result["readPathPoolPolicy"] = "repeat-strided"
+                        result["placementCoverage"] = {
+                            "distinctPaths": 24,
+                            "distinctPlacementPairs": 3,
+                            "byBackend": result["serverTelemetry"][
+                                "backendRequests"
+                            ]["byBackend"],
+                        }
+            cases.append(result)
+
+    campaign_commit = (
+        contract.certification.pre_optimization_commit
+        if runtime_role == "pre-optimization"
+        else contract.certification.final_commit
+    )
+    campaign_version = (
+        contract.certification.pre_optimization_project_version
+        if runtime_role == "pre-optimization"
+        else contract.certification.final_project_version
+    )
+    campaign_deployment = f"deployment-{runtime_role}"
+    case_ids = [case.id for case in contract.cases]
+    document = {
+        "apiVersion": "performance.overmesh.io/v1",
+        "campaign": {
+            "runId": f"run-{runtime_role}",
+            "isolatedEnvironment": True,
+            "releaseTag": "v0.11.0"
+            if runtime_role == "pre-optimization"
+            else "v0.11.1-rc.1",
+            "runtimeRole": runtime_role,
+            "commit": campaign_commit,
+            "projectVersion": campaign_version,
+            "benchmarkHost": {
+                "sku": "Standard_D2as_v5",
+                "fingerprint": "host-0123456789abcdef",
+            },
+            "deployment": campaign_deployment,
+            "environment": "isolated-performance",
+            "clientExecution": {
+                "wallSecondsExcludingFixtures": 2_200.0,
+                "budgetSeconds": 7_200,
+                "status": "passed",
+            },
+            "fixtureSetup": {
+                "wallSeconds": 1.0,
+                "backendRequests": {"count": 1},
+                "fixtures": [
+                    {
+                        "id": fixture.id,
+                        "manifestSha256": fixture.manifest_sha256,
+                        "manifestScope": "canonical-target-independent",
+                        "targetNamespaces": {
+                            target: (
+                                f"{fixture.prefix}/{target}"
+                                if fixture.kind == "blobs"
+                                else f"{target}/fixture.bin"
+                            )
+                            for target in ("direct", "gateway")
+                        },
+                    }
+                    for fixture in contract.fixtures
+                ],
+            },
+        },
+        "contract": {
+            "sha256": "certified-contract",
+            "schemaVersion": 5,
+            "revision": contract.revision,
+            "campaignPurpose": contract.campaign_purpose,
+            "baselineEligible": contract.baseline_eligible,
+            "clientWallTimeBudgetSeconds": (
+                contract.client_wall_time_budget_seconds
+            ),
+            "latencyEvidence": contract.latency_evidence,
+            "p50GatePolicy": contract.p50_gate_policy,
+            "targetOrderPolicy": contract.target_order_policy,
+            "p50ComparisonStatistic": contract.p50_comparison_statistic,
+            "certification": contract.certification.document(),
+            "nonRegression": contract.non_regression.document(),
+        },
+        "cases": cases,
+        "comparisons": [
+            {
+                "case": case_id,
+                "gatewayToDirectLatencyRatio": {
+                    "p50Ms": 1.0,
+                    "p90Ms": 1.0,
+                    "p95Ms": 1.0,
+                },
+                "gatewayToDirectThroughputRatio": 1.0,
+            }
+            for case_id in case_ids
+        ],
+        "resolution": {
+            "readP50SpreadRatioMax": 1.02,
+            "writeP50SpreadRatioMax": 1.02,
+            "listingP50SpreadRatioMax": 1.02,
+            "worstCase": contract.cases[0].id,
+            "directP50SpreadRatioMax": 1.02,
+            "directWorstCase": contract.cases[0].id,
+            "measurementScope": "within-campaign",
+        },
+        "campaignTelemetry": {
+            "containerApp": {
+                "resourceCount": 2,
+                "cpuCores": {"samples": 1, "resources": 2},
+                "memoryBytes": {"samples": 1, "resources": 2},
+                "replicas": {"samples": 1, "resources": 2},
+            }
+        },
+        "toolVersions": {
+            "azureCli": "1",
+            "logAnalyticsExtension": "1",
+        },
+    }
+    if contract.certification.backend_telemetry_format is not None:
+        document["campaign"].update(
+            {
+                "runtimeBaseCommit": (
+                    contract.certification.pre_optimization_base_commit
+                    if runtime_role == "pre-optimization"
+                    else contract.certification.final_base_commit
+                ),
+                "backendTelemetryFormat": (
+                    contract.certification.backend_telemetry_format
+                ),
+                "telemetryProtocolSha256": (
+                    contract.certification.telemetry_protocol_sha256
+                ),
+            }
+        )
+    return document
+
+
+def pairing_identity(document: dict) -> dict:
+    campaign = document["campaign"]
+    return {
+        "runtimeRole": campaign["runtimeRole"],
+        "projectVersion": campaign["projectVersion"],
+        "benchmarkHost": campaign["benchmarkHost"],
+        "deployment": campaign["deployment"],
+        "commit": campaign["commit"],
+        "runId": campaign["runId"],
+        "environment": campaign["environment"],
+        **(
+            {
+                "runtimeBaseCommit": campaign["runtimeBaseCommit"],
+                "backendTelemetryFormat": campaign[
+                    "backendTelemetryFormat"
+                ],
+                "telemetryProtocolSha256": campaign[
+                    "telemetryProtocolSha256"
+                ],
+            }
+            if "backendTelemetryFormat" in campaign
+            else {}
+        ),
+    }
+
+
+def baseline_historical_comparison(contract, document: dict) -> dict:
+    identity = pairing_identity(document)
+    return {
+        "status": "baseline-established",
+        "baseline": identity,
+        "current": identity,
+        "nonRegression": {
+            "policy": contract.non_regression.document(),
+            "gateStatus": "baseline-established",
+            "blockingRegressions": [],
+            "p50LatencyGateCoverage": {
+                "eligibleCases": len(contract.cases),
+                "totalCases": len(contract.cases),
+                "signalCases": [],
+            },
+        },
+    }
+
+
 class ValidatePerformanceEvidenceTests(unittest.TestCase):
+    def test_v7_validates_instrumented_runtime_provenance(self) -> None:
+        contract = load_contract(
+            Path(
+                "harness/performance/"
+                "live-v7-certified-current-matrix.toml"
+            )
+        )
+        baseline = certified_current_matrix_document(
+            contract,
+            "pre-optimization",
+        )
+        baseline["historicalComparison"] = baseline_historical_comparison(
+            contract,
+            baseline,
+        )
+        validate_document(baseline, contract, canonical=False)
+
+        final = certified_current_matrix_document(contract, "final")
+        final["historicalComparison"] = build_comparison(final, baseline)
+        validate_document(final, contract, canonical=False)
+        self.assertEqual(
+            final["historicalComparison"]["baseline"][
+                "telemetryProtocolSha256"
+            ],
+            final["historicalComparison"]["current"][
+                "telemetryProtocolSha256"
+            ],
+        )
+
+        final["campaign"]["runtimeBaseCommit"] = "0" * 40
+        with self.assertRaisesRegex(ValueError, "runtime base commit"):
+            validate_document(final, contract, canonical=False)
+
+    def test_v7_rejects_telemetry_protocol_mismatch(self) -> None:
+        contract = load_contract(
+            Path(
+                "harness/performance/"
+                "live-v7-certified-current-matrix.toml"
+            )
+        )
+        baseline = certified_current_matrix_document(
+            contract,
+            "pre-optimization",
+        )
+        final = certified_current_matrix_document(contract, "final")
+        final["campaign"]["telemetryProtocolSha256"] = "0" * 64
+
+        with self.assertRaisesRegex(ValueError, "same telemetry protocol"):
+            build_comparison(final, baseline)
+
+    def test_v7_rejects_tampered_baseline_pairing_provenance(self) -> None:
+        contract = load_contract(
+            Path(
+                "harness/performance/"
+                "live-v7-certified-current-matrix.toml"
+            )
+        )
+        baseline = certified_current_matrix_document(
+            contract,
+            "pre-optimization",
+        )
+        final = certified_current_matrix_document(contract, "final")
+        final["historicalComparison"] = build_comparison(final, baseline)
+        final["historicalComparison"]["baseline"][
+            "runtimeBaseCommit"
+        ] = "0" * 40
+
+        with self.assertRaisesRegex(ValueError, "base commit is invalid"):
+            validate_document(final, contract, canonical=False)
+
+        final["historicalComparison"] = build_comparison(final, baseline)
+        final["historicalComparison"]["baseline"][
+            "backendTelemetryFormat"
+        ] = "bogus"
+        with self.assertRaisesRegex(ValueError, "telemetry provenance"):
+            validate_document(final, contract, canonical=False)
+
+    def test_v6_validates_baseline_and_final_with_paired_budgets(self) -> None:
+        contract = load_contract(
+            Path(
+                "harness/performance/"
+                "live-v6-certified-current-matrix.toml"
+            )
+        )
+        baseline = certified_current_matrix_document(
+            contract,
+            "pre-optimization",
+        )
+        baseline["historicalComparison"] = baseline_historical_comparison(
+            contract,
+            baseline,
+        )
+        validate_document(baseline, contract, canonical=False)
+
+        final = certified_current_matrix_document(contract, "final")
+        final["historicalComparison"] = build_comparison(final, baseline)
+        validate_document(final, contract, canonical=False)
+        self.assertEqual(
+            set(final["historicalComparison"]["baseline"]),
+            {
+                "runtimeRole",
+                "projectVersion",
+                "benchmarkHost",
+                "deployment",
+                "commit",
+                "runId",
+                "environment",
+            },
+        )
+        self.assertEqual(
+            final["historicalComparison"]["current"],
+            pairing_identity(final),
+        )
+
+    def test_v6_rejects_tampered_signed_pairing_proof(self) -> None:
+        contract = load_contract(
+            Path(
+                "harness/performance/"
+                "live-v6-certified-current-matrix.toml"
+            )
+        )
+        baseline = certified_current_matrix_document(
+            contract,
+            "pre-optimization",
+        )
+        baseline["historicalComparison"] = baseline_historical_comparison(
+            contract,
+            baseline,
+        )
+        final = certified_current_matrix_document(contract, "final")
+        final["historicalComparison"] = build_comparison(final, baseline)
+        final["historicalComparison"]["baseline"]["deployment"] = (
+            final["campaign"]["deployment"]
+        )
+        with self.assertRaisesRegex(ValueError, "pairing proof is invalid"):
+            validate_document(final, contract, canonical=False)
+
+        final = certified_current_matrix_document(contract, "final")
+        final["historicalComparison"] = build_comparison(final, baseline)
+        final["historicalComparison"]["current"]["runId"] = "other-run"
+        with self.assertRaisesRegex(
+            ValueError,
+            "pairing proof does not match the campaign",
+        ):
+            validate_document(final, contract, canonical=False)
+
+    def test_v6_rejects_final_role_with_baseline_budget_or_wrong_host(self) -> None:
+        contract = load_contract(
+            Path(
+                "harness/performance/"
+                "live-v6-certified-current-matrix.toml"
+            )
+        )
+        baseline = certified_current_matrix_document(
+            contract,
+            "pre-optimization",
+        )
+        baseline["historicalComparison"] = baseline_historical_comparison(
+            contract,
+            baseline,
+        )
+        final = certified_current_matrix_document(contract, "final")
+        final["historicalComparison"] = build_comparison(final, baseline)
+        final_case = next(
+            case
+            for case in final["cases"]
+            if case["id"] == "put_blob-1kib-c1"
+            and case["target"] == "gateway"
+        )
+        final_case["expectedBackendRequestsPerOperation"] = 45
+        with self.assertRaisesRegex(
+            ValueError,
+            "runtime request budget",
+        ):
+            validate_document(final, contract, canonical=False)
+
+        final = certified_current_matrix_document(contract, "final")
+        final["historicalComparison"] = build_comparison(final, baseline)
+        final["campaign"]["benchmarkHost"]["sku"] = "Standard_D4as_v5"
+        with self.assertRaisesRegex(ValueError, "benchmark host SKU"):
+            validate_document(final, contract, canonical=False)
+
     def test_listing_confirmation_skips_block_staging_cost_check(self) -> None:
         contract = load_contract(
             Path(

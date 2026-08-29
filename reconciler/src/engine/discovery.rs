@@ -90,7 +90,7 @@ impl ReconcilerEngine {
             let Some(value) = backend.control_get_object(head_object, token).await? else {
                 continue;
             };
-            let Ok(head) = SignedDocument::<CommitManifest>::from_bytes(&value.bytes) else {
+            let Ok(head) = SignedDocument::<BlobCommitState>::from_bytes(&value.bytes) else {
                 continue;
             };
             let Ok(logical_blob) = parse_signed_logical_blob(&head.payload.blob, "committed head")
@@ -110,11 +110,12 @@ impl ReconcilerEngine {
             }
             if head
                 .verify(
-                    SignatureDomain::CommitManifest,
+                    SignatureDomain::BlobCommitState,
                     &head.payload.signing_key_id,
                     self.signer.as_ref(),
                 )
                 .is_err()
+                || validate_blob_commit_state(&head.payload).is_err()
                 || head.payload.ring_version != self.ring.ring_version
             {
                 continue;

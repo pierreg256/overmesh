@@ -461,27 +461,6 @@ pub async fn validate_system(config: &SystemValidationConfig) -> Result<()> {
             && tombstone.deleted_at_unix_ms.is_some(),
         "signed tombstone does not describe the deleted generation"
     );
-    let high_water_object = format!("high-water/{path_hash}/current.json");
-    let high_water_a = backend_get(
-        &client,
-        &config.backend_a_url,
-        "overmesh-system",
-        &high_water_object,
-        &control_token,
-    )
-    .await?;
-    let high_water_b = backend_get(
-        &client,
-        &config.backend_b_url,
-        "overmesh-system",
-        &high_water_object,
-        &control_token,
-    )
-    .await?;
-    ensure!(
-        high_water_a == tombstone_a && high_water_b == tombstone_a,
-        "durable high-water checkpoint does not match the tombstone"
-    );
     let tombstone_history_object = format!(
         "high-water/{path_hash}/history/{:020}-{}.json",
         tombstone.logical_version,

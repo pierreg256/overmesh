@@ -1,47 +1,98 @@
 use super::*;
 
+/// A merged commit-state document that one replica published and the other did
+/// not. ADR-0012 keeps the crash window of the two-phase commit, but the window
+/// now spans one object instead of four.
+struct PartialPublication<'a> {
+    committed: &'a LoadedState,
+    lagging: Option<&'a LoadedState>,
+    missing_backend: &'a dyn ReplicaBackend,
+}
+
 impl CommitCoordinator {
+    fn detect_partial_publication<'a>(
+        &'a self,
+        primary_state: Option<&'a LoadedState>,
+        secondary_state: Option<&'a LoadedState>,
+        write_id: &str,
+    ) -> Option<PartialPublication<'a>> {
+        let extends = |committed: &LoadedState, lagging: &LoadedState| {
+            let Some(committed) = committed.current() else {
+                return false;
+            };
+            if committed.write_id != write_id {
+                return false;
+            }
+            match lagging.current() {
+                // A replica that publishes no generation lags a first commit.
+                None => committed.logical_version == 1 && committed.previous_logical_etag.is_none(),
+                Some(lagging) => {
+                    committed.previous_logical_etag.as_deref() == Some(&lagging.logical_etag)
+                        && committed.logical_version == lagging.logical_version.saturating_add(1)
+                }
+            }
+        };
+        match (primary_state, secondary_state) {
+            (Some(committed), None) if committed.current().is_some() => Some(PartialPublication {
+                committed,
+                lagging: None,
+                missing_backend: self.secondary.as_ref(),
+            }),
+            (None, Some(committed)) if committed.current().is_some() => Some(PartialPublication {
+                committed,
+                lagging: None,
+                missing_backend: self.primary.as_ref(),
+            }),
+            (Some(committed), Some(lagging)) if extends(committed, lagging) => {
+                Some(PartialPublication {
+                    committed,
+                    lagging: Some(lagging),
+                    missing_backend: self.secondary.as_ref(),
+                })
+            }
+            (Some(lagging), Some(committed)) if extends(committed, lagging) => {
+                Some(PartialPublication {
+                    committed,
+                    lagging: Some(lagging),
+                    missing_backend: self.primary.as_ref(),
+                })
+            }
+            _ => None,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(in crate::commit) async fn recover_partial_publication(
         &self,
-        primary_head: Option<&LoadedHead>,
-        secondary_head: Option<&LoadedHead>,
-        head_key: &str,
+        primary_state: Option<&LoadedState>,
+        secondary_state: Option<&LoadedState>,
+        state_key: &str,
         logical_blob: &LogicalBlobId,
         principal: &AuthenticatedPrincipal,
         write_id: &str,
         content: &SpoolContent,
         control_token: &ControlToken,
     ) -> Result<Option<CommitResult>, CommitError> {
-        let (committed, lagging, missing_backend) = match (primary_head, secondary_head) {
-            (Some(committed), None) => (committed, None, self.secondary.as_ref()),
-            (None, Some(committed)) => (committed, None, self.primary.as_ref()),
-            (Some(committed), Some(lagging))
-                if committed.signed.payload.write_id == write_id
-                    && committed.signed.payload.previous_logical_etag.as_deref()
-                        == Some(&lagging.signed.payload.logical_etag)
-                    && committed.signed.payload.logical_version
-                        == lagging.signed.payload.logical_version.saturating_add(1) =>
-            {
-                (committed, Some(lagging), self.secondary.as_ref())
-            }
-            (Some(lagging), Some(committed))
-                if committed.signed.payload.write_id == write_id
-                    && committed.signed.payload.previous_logical_etag.as_deref()
-                        == Some(&lagging.signed.payload.logical_etag)
-                    && committed.signed.payload.logical_version
-                        == lagging.signed.payload.logical_version.saturating_add(1) =>
-            {
-                (committed, Some(lagging), self.primary.as_ref())
-            }
-            _ => return Ok(None),
+        let Some(partial) =
+            self.detect_partial_publication(primary_state, secondary_state, write_id)
+        else {
+            return Ok(None);
         };
-        if committed.signed.payload.write_id != write_id {
+        let committed = partial
+            .committed
+            .current()
+            .ok_or(CommitError::VerificationFailed)?;
+        if committed.write_id != write_id {
             return Err(CommitError::ReplicaDrift);
         }
-        if committed.signed.payload.content_sha256 != content.content_sha256 {
+        if committed.state != ManifestState::Committed {
+            return Err(CommitError::VerificationFailed);
+        }
+        if committed.content_sha256 != content.content_sha256 {
             return Err(CommitError::IdempotencyConflict);
         }
+        // A recovered publication must never be a rollback, and the recovered
+        // document is now its own high-water assertion.
         Self::validate_recovery_candidate(
             self.primary.as_ref(),
             self.secondary.as_ref(),
@@ -49,30 +100,18 @@ impl CommitCoordinator {
             logical_blob.canonical(),
             self.ring_version,
             committed,
+            partial.lagging.and_then(LoadedState::current),
             control_token,
             self.signer.as_ref(),
         )
         .await?;
-        self.authorize_replay(principal, &committed.signed.payload)
-            .await?;
-        let committed_key = format!(
-            "{}/committed.json",
-            commit_manifest_object_prefix(&committed.signed.payload)?
-        );
-        verify_identical_objects(
-            self.primary.as_ref(),
-            self.secondary.as_ref(),
-            &committed_key,
-            &committed.bytes,
-            control_token,
-        )
-        .await?;
+        self.authorize_replay(principal, committed).await?;
         publish_catalog_current(
             self.primary.as_ref(),
             self.secondary.as_ref(),
             logical_blob,
-            &committed.signed,
-            &committed.bytes,
+            &partial.committed.signed,
+            &partial.committed.bytes,
             control_token,
             self.signer.as_ref(),
         )
@@ -80,25 +119,26 @@ impl CommitCoordinator {
         tokio::try_join!(
             caller_put_file_idempotent(
                 self.primary.as_ref(),
-                &committed.signed.payload.content_container,
-                &committed.signed.payload.content_object,
+                &committed.content_container,
+                &committed.content_object,
                 content,
                 &principal.access_token
             ),
             caller_put_file_idempotent(
                 self.secondary.as_ref(),
-                &committed.signed.payload.content_container,
-                &committed.signed.payload.content_object,
+                &committed.content_container,
+                &committed.content_object,
                 content,
                 &principal.access_token
             )
         )?;
-        match missing_backend
+        match partial
+            .missing_backend
             .control_put_bytes(
-                head_key,
-                committed.bytes.clone(),
+                state_key,
+                partial.committed.bytes.clone(),
                 "application/json",
-                head_condition(lagging),
+                state_condition(partial.lagging),
                 control_token,
             )
             .await
@@ -112,25 +152,23 @@ impl CommitCoordinator {
         verify_identical_objects(
             self.primary.as_ref(),
             self.secondary.as_ref(),
-            head_key,
-            &committed.bytes,
+            state_key,
+            &partial.committed.bytes,
             control_token,
         )
         .await?;
-        let path_hash = logical_blob.path_hash();
-        Self::publish_high_water(
+        Self::publish_state_history(
             self.primary.as_ref(),
             self.secondary.as_ref(),
-            &path_hash,
-            &committed.signed,
-            &committed.bytes,
+            &logical_blob.path_hash(),
+            committed,
+            &partial.committed.bytes,
             control_token,
-            self.signer.as_ref(),
         )
         .await?;
         Ok(Some(CommitResult {
-            logical_version: committed.signed.payload.logical_version,
-            logical_etag: committed.signed.payload.logical_etag.clone(),
+            logical_version: committed.logical_version,
+            logical_etag: committed.logical_etag.clone(),
             write_id: write_id.to_owned(),
             idempotent_replay: true,
         }))
@@ -138,88 +176,95 @@ impl CommitCoordinator {
 
     pub(in crate::commit) async fn recover_partial_tombstone_publication(
         &self,
-        primary_head: Option<&LoadedHead>,
-        secondary_head: Option<&LoadedHead>,
-        head_key: &str,
+        primary_state: Option<&LoadedState>,
+        secondary_state: Option<&LoadedState>,
+        state_key: &str,
         logical_blob: &LogicalBlobId,
         write_id: &str,
         control_token: &ControlToken,
     ) -> Result<Option<DeleteResult>, CommitError> {
-        let (tombstone, lagging, lagging_backend) = match (primary_head, secondary_head) {
-            (Some(primary), Some(secondary))
-                if primary.bytes != secondary.bytes
-                    && primary.signed.payload.state == ManifestState::Tombstoned
-                    && primary.signed.payload.write_id == write_id =>
-            {
-                (primary, secondary, self.secondary.as_ref())
-            }
-            (Some(primary), Some(secondary))
-                if primary.bytes != secondary.bytes
-                    && secondary.signed.payload.state == ManifestState::Tombstoned
-                    && secondary.signed.payload.write_id == write_id =>
-            {
-                (secondary, primary, self.primary.as_ref())
-            }
-            _ => return Ok(None),
+        let published_tombstone = |state: &LoadedState| {
+            state.current().is_some_and(|current| {
+                current.state == ManifestState::Tombstoned && current.write_id == write_id
+            })
         };
-        validate_tombstone_transition(&tombstone.signed.payload, &lagging.signed.payload)?;
-        let committed_key = format!(
-            "{}/committed.json",
-            commit_manifest_object_prefix(&tombstone.signed.payload)?
-        );
-        let (primary_sidecar, secondary_sidecar) = tokio::try_join!(
-            self.primary
-                .control_get_object(&committed_key, control_token),
-            self.secondary
-                .control_get_object(&committed_key, control_token)
-        )?;
-        if primary_sidecar.as_ref().map(|value| value.bytes.as_slice())
-            != Some(tombstone.bytes.as_slice())
-            || secondary_sidecar
-                .as_ref()
-                .map(|value| value.bytes.as_slice())
-                != Some(tombstone.bytes.as_slice())
-        {
-            return Err(CommitError::VerificationFailed);
-        }
+        // A partial tombstone publication is a divergence of the *published
+        // generation*. ADR-0012 makes the prepared manifest a state of the same
+        // document, so two replicas can hold different bytes while publishing
+        // the same tombstone. That is an asymmetric preparation, not a partial
+        // publication: it falls through to the idempotent replay path and is
+        // converged by reconciliation.
+        let diverged =
+            |first: &LoadedState, second: &LoadedState| first.current() != second.current();
+        let (tombstone_state, lagging_state, lagging_backend) =
+            match (primary_state, secondary_state) {
+                (Some(primary), Some(secondary))
+                    if diverged(primary, secondary) && published_tombstone(primary) =>
+                {
+                    (primary, secondary, self.secondary.as_ref())
+                }
+                (Some(primary), Some(secondary))
+                    if diverged(primary, secondary) && published_tombstone(secondary) =>
+                {
+                    (secondary, primary, self.primary.as_ref())
+                }
+                _ => return Ok(None),
+            };
+        let tombstone = tombstone_state
+            .current()
+            .ok_or(CommitError::VerificationFailed)?;
+        let lagging = lagging_state
+            .current()
+            .ok_or(CommitError::VerificationFailed)?;
+        validate_tombstone_transition(tombstone, lagging)?;
+        Self::validate_recovery_candidate(
+            self.primary.as_ref(),
+            self.secondary.as_ref(),
+            &logical_blob.path_hash(),
+            logical_blob.canonical(),
+            self.ring_version,
+            tombstone,
+            Some(lagging),
+            control_token,
+            self.signer.as_ref(),
+        )
+        .await?;
         publish_catalog_current(
             self.primary.as_ref(),
             self.secondary.as_ref(),
             logical_blob,
-            &tombstone.signed,
-            &tombstone.bytes,
+            &tombstone_state.signed,
+            &tombstone_state.bytes,
             control_token,
             self.signer.as_ref(),
         )
         .await?;
         lagging_backend
             .control_put_bytes(
-                head_key,
-                tombstone.bytes.clone(),
+                state_key,
+                tombstone_state.bytes.clone(),
                 "application/json",
-                head_condition(Some(lagging)),
+                state_condition(Some(lagging_state)),
                 control_token,
             )
             .await?;
         verify_identical_objects(
             self.primary.as_ref(),
             self.secondary.as_ref(),
-            head_key,
-            &tombstone.bytes,
+            state_key,
+            &tombstone_state.bytes,
             control_token,
         )
         .await?;
-        let path_hash = logical_blob.path_hash();
-        Self::publish_high_water(
+        Self::publish_state_history(
             self.primary.as_ref(),
             self.secondary.as_ref(),
-            &path_hash,
-            &tombstone.signed,
-            &tombstone.bytes,
+            &logical_blob.path_hash(),
+            tombstone,
+            &tombstone_state.bytes,
             control_token,
-            self.signer.as_ref(),
         )
         .await?;
-        Ok(Some(delete_result(&tombstone.signed.payload, true)?))
+        Ok(Some(delete_result(tombstone, true)?))
     }
 }

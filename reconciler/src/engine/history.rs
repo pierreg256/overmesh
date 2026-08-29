@@ -225,31 +225,29 @@ impl ReconcilerEngine {
                 (None, Some(second)) => second.bytes.clone(),
                 (None, None) => bail!("listed high-water history object is missing"),
             };
-            let signed = SignedDocument::<CommitManifest>::from_bytes(&bytes)
-                .context("high-water history is not a signed commit manifest")?;
+            let signed =
+                parse_blob_commit_state(&bytes, self.signer.as_ref(), "high-water history")?;
             ensure!(
-                signed.canonical_bytes()? == bytes,
-                "high-water history is not canonically encoded"
+                signed.payload.prepared().is_none(),
+                "high-water history retains an interrupted preparation"
             );
-            signed
-                .verify(
-                    SignatureDomain::CommitManifest,
-                    &signed.payload.signing_key_id,
-                    self.signer.as_ref(),
-                )
-                .context("high-water history signature validation failed")?;
+            let manifest = signed
+                .payload
+                .current()
+                .context("high-water history publishes no generation")?
+                .clone();
             let logical_blob = validate_history_manifest(
-                &signed.payload,
+                &manifest,
                 active_logical_blob,
                 self.ring.ring_version,
                 path_hash,
                 &expected_replicas,
             )?;
             ensure!(
-                object_key == high_water_history_key(path_hash, &signed.payload),
+                object_key == high_water_history_key(path_hash, &manifest),
                 "high-water history object name does not match its signed version"
             );
-            if signed.payload.logical_version > compacted_through {
+            if manifest.logical_version > compacted_through {
                 ensure!(
                     first_value.is_some() && second_value.is_some(),
                     "retained high-water history object sets differ between replicas"
@@ -264,9 +262,9 @@ impl ReconcilerEngine {
             ensure!(
                 by_version
                     .insert(
-                        signed.payload.logical_version,
+                        manifest.logical_version,
                         ValidatedHistoryEntry {
-                            signed,
+                            manifest,
                             logical_blob,
                             bytes,
                             object_key,
@@ -282,18 +280,18 @@ impl ReconcilerEngine {
         if let Some(checkpoint) = checkpoint {
             let covered = by_version
                 .values()
-                .filter(|entry| entry.signed.payload.logical_version <= compacted_through)
+                .filter(|entry| entry.manifest.logical_version <= compacted_through)
                 .collect::<Vec<_>>();
             if !covered.is_empty() {
                 ensure!(
                     covered.last().is_some_and(|entry| {
-                        entry.signed.payload.logical_version == compacted_through
+                        entry.manifest.logical_version == compacted_through
                     }),
                     "replayed history below the compaction floor is not a pending deletion suffix"
                 );
                 for pair in covered.windows(2) {
-                    let previous = &pair[0].signed.payload;
-                    let current = &pair[1].signed.payload;
+                    let previous = &pair[0].manifest;
+                    let current = &pair[1].manifest;
                     ensure!(
                         current.logical_version == previous.logical_version.saturating_add(1)
                             && current.previous_logical_etag.as_deref()
@@ -305,11 +303,10 @@ impl ReconcilerEngine {
                 }
                 let terminal = covered.last().context("covered history is empty")?;
                 ensure!(
-                    terminal.signed.payload.state
-                        == checkpoint.signed.payload.compacted_through_state
-                        && terminal.signed.payload.logical_etag
+                    terminal.manifest.state == checkpoint.signed.payload.compacted_through_state
+                        && terminal.manifest.logical_etag
                             == checkpoint.signed.payload.compacted_through_logical_etag
-                        && terminal.signed.payload.committed_at_unix_ms
+                        && terminal.manifest.committed_at_unix_ms
                             == checkpoint
                                 .signed
                                 .payload
@@ -322,18 +319,18 @@ impl ReconcilerEngine {
         }
         let entries = by_version
             .into_values()
-            .filter(|entry| entry.signed.payload.logical_version > compacted_through)
+            .filter(|entry| entry.manifest.logical_version > compacted_through)
             .collect::<Vec<_>>();
         let expected_first = compacted_through.saturating_add(1);
         for (index, entry) in entries.iter().enumerate() {
             ensure!(
-                entry.signed.payload.logical_version == u64::try_from(index)? + expected_first,
+                entry.manifest.logical_version == u64::try_from(index)? + expected_first,
                 "high-water history versions are not contiguous"
             );
             if index == 0 {
                 if let Some(checkpoint) = checkpoint {
                     ensure!(
-                        entry.signed.payload.previous_logical_etag.as_deref()
+                        entry.manifest.previous_logical_etag.as_deref()
                             == Some(
                                 checkpoint
                                     .signed
@@ -341,29 +338,29 @@ impl ReconcilerEngine {
                                     .compacted_through_logical_etag
                                     .as_str()
                             )
-                            && entry.signed.payload.committed_at_unix_ms
+                            && entry.manifest.committed_at_unix_ms
                                 >= checkpoint
                                     .signed
                                     .payload
                                     .compacted_through_committed_at_unix_ms
                             && valid_history_transition(
                                 checkpoint.signed.payload.compacted_through_state,
-                                entry.signed.payload.state
+                                entry.manifest.state
                             ),
                         "first retained history successor is not anchored by the compaction checkpoint"
                     );
                 } else {
                     ensure!(
-                        entry.signed.payload.logical_version == 1
-                            && entry.signed.payload.state == ManifestState::Committed
-                            && entry.signed.payload.previous_logical_etag.is_none(),
+                        entry.manifest.logical_version == 1
+                            && entry.manifest.state == ManifestState::Committed
+                            && entry.manifest.previous_logical_etag.is_none(),
                         "logical version 1 must be an initial committed generation"
                     );
                 }
                 continue;
             }
-            let previous = &entries[index - 1].signed.payload;
-            let current = &entry.signed.payload;
+            let previous = &entries[index - 1].manifest;
+            let current = &entry.manifest;
             ensure!(
                 current.previous_logical_etag.as_deref() == Some(previous.logical_etag.as_str()),
                 "high-water history previousLogicalEtag lineage is invalid"
@@ -379,9 +376,9 @@ impl ReconcilerEngine {
         }
         let current = entries.last().context("high-water history is empty")?;
         ensure!(
-            current.signed.payload == *active
+            current.manifest == *active
                 && current.bytes == active_bytes
-                && current.signed.payload.logical_version == active.logical_version
+                && current.manifest.logical_version == active.logical_version
                 && head_object == head_object_key(&current.logical_blob),
             "current head does not correspond to the authoritative history high-water entry"
         );
@@ -545,11 +542,11 @@ impl ReconcilerEngine {
                 .entries
                 .iter()
                 .filter(|entry| {
-                    entry.signed.payload.logical_version > previous_through
-                        && entry.signed.payload.logical_version <= *through
-                        && entry.signed.payload.state == ManifestState::Committed
+                    entry.manifest.logical_version > previous_through
+                        && entry.manifest.logical_version <= *through
+                        && entry.manifest.state == ManifestState::Committed
                 })
-                .map(|entry| entry.signed.payload.logical_version)
+                .map(|entry| entry.manifest.logical_version)
                 .collect::<Vec<_>>();
             ensure!(
                 marker.collected_committed_versions == expected_collected,
@@ -559,8 +556,7 @@ impl ReconcilerEngine {
                 let successor = history_entry_by_version(history, version.saturating_add(1))
                     .context("garbage-collection marker exceeds available successor history")?;
                 let eligible_at = successor
-                    .signed
-                    .payload
+                    .manifest
                     .committed_at_unix_ms
                     .checked_add(marker.physical_collection_delay_ms)
                     .context("garbage-collection marker retention deadline overflow")?;
@@ -743,7 +739,7 @@ fn history_entry_by_version(
     history
         .entries
         .iter()
-        .find(|entry| entry.signed.payload.logical_version == version)
+        .find(|entry| entry.manifest.logical_version == version)
 }
 
 pub(super) fn garbage_collection_evidence(

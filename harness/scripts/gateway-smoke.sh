@@ -400,18 +400,42 @@ if curl --silent --show-error --fail \
   exit 1
 fi
 
-high_water_key="high-water/$path_hash/current.json"
+# ADR-0012 merges the head, high-water current, prepared and terminal commit
+# state into one document per blob per replica.
+removed_high_water_status=$(curl --insecure --silent --output /dev/null \
+  --write-out '%{http_code}' \
+  -H "Authorization: $authorization_header" \
+  -H 'x-ms-version: 2025-11-05' \
+  "https://127.0.0.1:12100/devstoreaccount1/overmesh-system/high-water/$path_hash/current.json")
+test "$removed_high_water_status" != "200"
+commit_state_key="heads/$path_hash.json"
 curl --insecure --fail --silent \
   -H "Authorization: $authorization_header" \
   -H 'x-ms-version: 2025-11-05' \
-  "https://127.0.0.1:12100/devstoreaccount1/overmesh-system/$high_water_key" \
-  -o .harness/high-water-a.json
+  "https://127.0.0.1:12100/devstoreaccount1/overmesh-system/$commit_state_key" \
+  -o .harness/commit-state-a.json
 curl --insecure --fail --silent \
   -H "Authorization: $authorization_header" \
   -H 'x-ms-version: 2025-11-05' \
-  "https://127.0.0.1:12101/devstoreaccount1/overmesh-system/$high_water_key" \
-  -o .harness/high-water-b.json
-cmp .harness/high-water-a.json .harness/high-water-b.json
+  "https://127.0.0.1:12101/devstoreaccount1/overmesh-system/$commit_state_key" \
+  -o .harness/commit-state-b.json
+cmp .harness/commit-state-a.json .harness/commit-state-b.json
+grep -q 'overmesh.io/blob-commit-state/v1' .harness/commit-state-a.json
+history_version=$(grep -o '"logicalVersion":[0-9]*' .harness/commit-state-a.json \
+  | head -1 | cut -d: -f2)
+history_write_id=$(grep -o '"writeId":"[^"]*"' .harness/commit-state-a.json \
+  | head -1 | cut -d'"' -f4)
+test -n "$history_version"
+test -n "$history_write_id"
+history_stable=$(printf '%s' "$history_write_id" | shasum -a 256 | awk '{print $1}')
+history_key=$(printf 'high-water/%s/history/%020d-%s.json' \
+  "$path_hash" "$history_version" "$history_stable")
+curl --insecure --fail --silent \
+  -H "Authorization: $authorization_header" \
+  -H 'x-ms-version: 2025-11-05' \
+  "https://127.0.0.1:12101/devstoreaccount1/overmesh-system/$history_key" \
+  -o .harness/commit-state-history-b.json
+cmp .harness/commit-state-a.json .harness/commit-state-history-b.json
 
 cargo run --quiet -p overmesh-harness -- fault disable b >/dev/null
 test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X PUT \

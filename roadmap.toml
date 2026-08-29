@@ -1,5 +1,5 @@
 schema_version = 1
-project_version = "0.11.0"
+project_version = "0.11.1"
 active_generation = "V1"
 
 [[milestones]]
@@ -119,7 +119,7 @@ deliverables = [
 version = "0.11.0"
 generation = "V1"
 name = "Performance optimization and regression hardening"
-status = "active"
+status = "completed"
 deliverables = [
   "Profile bottlenecks demonstrated by the repeated, placement-rotated 0.11.0 baseline.",
   "Reduce avoidable round trips, serialization, signing, buffering, and scheduling overhead without weakening invariants.",
@@ -127,6 +127,21 @@ deliverables = [
   "Add performance regression budgets to release validation where measurements are stable.",
   "Resolve ADR-0004 catalogue name-length rejection and conditional-publication defects together with ADR-0008 catalogue-encoding property tests.",
   "Evaluate lease-first locking only against an explicit first-write versus established-write workload policy."
+]
+
+[[milestones]]
+version = "0.11.1"
+generation = "V1"
+name = "Performance evidence and release closure"
+status = "active"
+deliverables = [
+  "Complete or explicitly defer every accepted 0.11 runtime decision without weakening W=2, R=2, signed-state, or Entra-only invariants.",
+  "Correct catalogue name-length rejection and conditional catalogue publication, then add randomized catalogue encoding properties.",
+  "Decide the lease-first policy from measured first-write and established-overwrite behavior.",
+  "Run a baseline-eligible current benchmark matrix before and after the final runtime on the same Standard_D2as_v5 validation host.",
+  "Retain signed fast, flat-listing, paginated-listing, and dual-page-size hierarchical-listing evidence with request budgets by object class.",
+  "Commit reviewed exchange provenance under the same redaction gate as retained release evidence.",
+  "Publish the final performance posture, release record, documented closure pull request, and annotated tag on the Close commit."
 ]
 
 [[milestones]]
@@ -143,6 +158,27 @@ deliverables = [
   "Remove replicated catalogue entries after verified tombstone publication and make the Reconciler enforce the same committed-only catalogue rule.",
   "Require flat-namespace Storage Accounts, preserve empty logical segments, enforce path-segment and derived-key limits, and publish best-case, worst-case, multibyte, and segment-cap compatibility deviations.",
   "Re-run flat, paginated, hierarchical, skewed-replica, SDK, CLI, AzCopy, and live 5,000-entry listing gates against the new format."
+]
+
+[[milestones]]
+version = "0.13.0"
+generation = "V1"
+name = "User tutorials and operational runbooks"
+status = "planned"
+deliverables = [
+  "Add only the missing tutorial and how-to documentation quadrants; link to normative specifications, compatibility reference, and decision records instead of restating them.",
+  "Provide a truthful empty-subscription deployment path for the production three-Storage-Account, two-region Container Apps, Front Door, private-networking, Key Vault, runtime-identity, and caller-identity topology before publishing the administrator tutorial.",
+  "Publish an administrator getting-started tutorial that states expected cost and elapsed time before the first command and reaches a readiness-verified deployment using the supported Bicep and immutable-image workflow.",
+  "Document every deployment prerequisite as prerequisite, exact fail-closed symptom, remediation, and governing record, including signed Ring lineage and key validity, topology-region matching, ES256 signing, scoped RBAC, Front Door behavior, recovery controls, and flat namespaces.",
+  "Publish operator runbooks for Ring rollout, Ring-key rotation, capacity planning without live Ring migration, quarantine and administrator recovery, retention and garbage collection, posture failures, reconciliation cadence, and regional unavailability.",
+  "Publish a separate developer getting-started path using DefaultAzureCredential and the Azure Storage audience, while stating the required Entra identity and container-scoped RBAC and linking all compatibility differences to COMPATIBILITY.md.",
+  "Publish symptom-to-cause-to-fix troubleshooting generated from the same prerequisite and fail-closed source map as the administrator tutorial.",
+  "Publish an honest suitability guide whose request amplification, client-observed latency, and non-SLA context are sourced through traceability assertions from certified signed evidence rather than copied into prose.",
+  "Extend doc-check with typed references for repository files, Bicep parameters and modules, script options, and stable error-message substrings, and fail when any referenced target moves or disappears.",
+  "Keep pinned versions, SKUs, API versions, image digests, costs, durations, and performance figures behind typed traceability assertions with repository or certified-evidence sources.",
+  "Add a dedicated user-documentation site section with separate administrator and developer navigation, registering every page in docs/traceability.toml.",
+  "Retain one manually executed clean-subscription acceptance record proving that an administrator can complete the tutorial using only the published instructions; review narrative prose in pull requests without provisioning three regions in CI.",
+  "Start only after 0.12.0 fixes the catalogue compatibility surface and after certified client-observed evidence exists."
 ]
 
 [[milestones]]

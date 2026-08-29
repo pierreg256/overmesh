@@ -13,6 +13,7 @@ pub mod manifest;
 mod namespace;
 pub mod read;
 mod request_context;
+mod request_telemetry;
 pub mod resource;
 pub mod ring;
 pub mod topology;
