@@ -29,7 +29,7 @@ use crate::{
     read::{BlobMetadata, ReadError, ReadService},
     request_context::{
         client_request_fingerprint, current_client_request_fingerprint, request_target_fingerprint,
-        scope,
+        request_telemetry, scope,
     },
     resource::LogicalBlobId,
     ring::SignedRing,
@@ -95,12 +95,8 @@ async fn blob_request(State(state): State<AppState>, request: Request<Body>) -> 
         method,
         "Overmesh client request received"
     );
-    scope(
-        fingerprint,
-        request_event_id,
-        blob_request_scoped(state, request),
-    )
-    .await
+    let telemetry = request_telemetry(fingerprint, request_event_id);
+    scope(telemetry, blob_request_scoped(state, request)).await
 }
 
 async fn blob_request_scoped(state: AppState, request: Request<Body>) -> Response {

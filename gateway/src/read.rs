@@ -23,7 +23,7 @@ use crate::{
         SignedDocument, logical_etag, sha256_bytes, validate_block_manifest_link,
         validate_block_manifest_page,
     },
-    request_context::{current_client_request_fingerprint, current_request_event_id, scope},
+    request_context::{SharedRequestTelemetry, current_request_telemetry, scope},
     resource::{LogicalBlobId, stable_component},
 };
 
@@ -121,8 +121,7 @@ struct ReadStreamState {
     requested_start: u64,
     requested_end: u64,
     content_length: u64,
-    client_request_fingerprint: String,
-    request_event_id: String,
+    request_telemetry: Option<SharedRequestTelemetry>,
 }
 
 impl ReadService {
@@ -201,13 +200,11 @@ impl ReadService {
             requested_start: prepared.requested_start,
             requested_end: prepared.requested_end,
             content_length: prepared.common.metadata.content_length,
-            client_request_fingerprint: current_client_request_fingerprint(),
-            request_event_id: current_request_event_id(),
+            request_telemetry: current_request_telemetry(),
         };
         let body = Body::from_stream(stream::try_unfold(state, |mut state| async move {
-            let fingerprint = state.client_request_fingerprint.clone();
-            let request_event_id = state.request_event_id.clone();
-            scope(fingerprint, request_event_id, async move {
+            let telemetry = state.request_telemetry.as_ref().map(Arc::clone);
+            let read_next = async move {
                 loop {
                     if let Some(block) = state.blocks.pop_front() {
                         let bytes = read_validated_block(&state, &block.descriptor).await?;
@@ -250,8 +247,11 @@ impl ReadService {
                             })
                         }));
                 }
-            })
-            .await
+            };
+            match telemetry {
+                Some(telemetry) => scope(telemetry, read_next).await,
+                None => read_next.await,
+            }
         }));
         Ok(BlobRead {
             metadata: prepared.common.metadata,
